@@ -1,0 +1,21 @@
+{
+  "global": {
+    "files": "./*.abap",
+    "skip": "/node_modules/"
+  },
+  "syntax": {
+    "version": "v740sp02",
+    "error": ["syntax_error"]
+  },
+  "rules": {
+    "indentation": {
+      "allow_chain_declaration": true
+    },
+    "line_length": {
+      "maximum": 120
+    },
+    "naming": {
+      "allow_underscore": true
+    }
+  }
+}

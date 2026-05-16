@@ -1,0 +1,26 @@
+{
+  "desarrollo": {
+    "system_id": "D01",
+    "host": "sap.desarrollo.empresa.com",
+    "port": 443,
+    "client": "100",
+    "username": "$USER",
+    "auth": "basic"
+  },
+  "calidad": {
+    "system_id": "Q01",
+    "host": "sap.calidad.empresa.com",
+    "port": 443,
+    "client": "200",
+    "username": "$USER",
+    "auth": "basic"
+  },
+  "produccion": {
+    "system_id": "P01",
+    "host": "sap.produccion.empresa.com",
+    "port": 443,
+    "client": "300",
+    "username": "$USER",
+    "auth": "basic"
+  }
+}

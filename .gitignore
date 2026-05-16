@@ -1,0 +1,9 @@
+# sap-nvim
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+.env
+.env.local
+sap-connections.local.json
