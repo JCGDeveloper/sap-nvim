@@ -55,11 +55,18 @@ else
   echo "   Crea uno en: $CONFIG_FILE"
   echo "   Ejemplo:"
   echo '{
-    "desarrollo": {
-      "system_id": "D01",
-      "host": "sap.example.com",
-      "client": "100",
-      "username": "$USER"
+    "current": "desarrollo",
+    "connections": {
+      "desarrollo": {
+        "ashost": "sap.example.com",
+        "sysnr": "00",
+        "client": "100",
+        "port": 443,
+        "user": "$USER",
+        "ssl": true,
+        "system_id": "D01",
+        "description": "Conexión desarrollo"
+      }
     }
   }'
 fi

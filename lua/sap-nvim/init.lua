@@ -7,7 +7,19 @@ function M.setup(opts)
   opts = opts or {}
 
   -- Configuración de conexión SAP
+  -- Prioridad: opts.connections > sap-connections.json > vacío
   local connections = opts.connections or {}
+  if not next(connections) then
+    local ok, json = pcall(function()
+      return vim.fn.json_decode(vim.fn.readfile(
+        vim.fn.expand("~/Desktop/sap-nvim/config/sap-connections.json")
+      ))
+    end)
+    if ok and json and json.connections then
+      connections = json.connections
+      vim.g.sap_nvim_current_connection = json.current or ""
+    end
+  end
   vim.g.sap_nvim_connections = connections
 
   -- Cargar módulos

@@ -1,26 +1,35 @@
 {
-  "desarrollo": {
-    "system_id": "D01",
-    "host": "sap.desarrollo.empresa.com",
-    "port": 443,
-    "client": "100",
-    "username": "$USER",
-    "auth": "basic"
-  },
-  "calidad": {
-    "system_id": "Q01",
-    "host": "sap.calidad.empresa.com",
-    "port": 443,
-    "client": "200",
-    "username": "$USER",
-    "auth": "basic"
-  },
-  "produccion": {
-    "system_id": "P01",
-    "host": "sap.produccion.empresa.com",
-    "port": 443,
-    "client": "300",
-    "username": "$USER",
-    "auth": "basic"
+  "current": "",
+  "connections": {
+    "desarrollo": {
+      "ashost": "sap.desarrollo.empresa.com",
+      "sysnr": "00",
+      "client": "100",
+      "port": 443,
+      "user": "$USER",
+      "ssl": true,
+      "system_id": "D01",
+      "description": "Conexión desarrollo"
+    },
+    "calidad": {
+      "ashost": "sap.calidad.empresa.com",
+      "sysnr": "00",
+      "client": "200",
+      "port": 443,
+      "user": "$USER",
+      "ssl": true,
+      "system_id": "Q01",
+      "description": "Conexión calidad"
+    },
+    "produccion": {
+      "ashost": "sap.produccion.empresa.com",
+      "sysnr": "00",
+      "client": "300",
+      "port": 443,
+      "user": "$USER",
+      "ssl": true,
+      "system_id": "P01",
+      "description": "Conexión producción"
+    }
   }
 }
