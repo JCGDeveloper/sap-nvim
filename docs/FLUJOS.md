@@ -43,6 +43,8 @@
 | `<leader>au` | Ejecutar pruebas unitarias |
 | `<leader>as` | Buscar objetos ABAP |
 | `<leader>ai` | Abrir terminal |
+| `<leader>asg` | Abrir SAP GUI (aplicación) |
+| `<leader>aso` | Abrir objeto actual en SAP GUI |
 | `<leader>a1-5` | Seleccionar conexión SAP |
 | `<leader>am` | Mostrar servidores MCP |
 | `<leader>at` | Mostrar herramientas MCP |

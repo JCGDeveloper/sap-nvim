@@ -49,6 +49,16 @@ function M.setup(opts)
     vim.cmd("terminal")
     vim.cmd("startinsert")
   end, { desc = "ABAP: Terminal" })
+
+  -- <leader>asg: Abrir SAP GUI (solo la app)
+  vim.keymap.set("n", "<leader>asg", function()
+    adt.open_gui()
+  end, { desc = "ABAP: Abrir SAP GUI" })
+
+  -- <leader>aso: Abrir SAP GUI con el objeto actual
+  vim.keymap.set("n", "<leader>aso", function()
+    adt.open_gui(nil)
+  end, { desc = "ABAP: Abrir objeto en SAP GUI" })
 end
 
 return M
