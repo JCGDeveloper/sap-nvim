@@ -6,24 +6,21 @@ local M = {}
 function M.setup(opts)
   opts = opts or {}
 
-  -- abaplint: servidor de lenguaje ABAP
-  -- Proporciona validación sintáctica, reglas Clean ABAP, formateo
+  -- abaplint via efm-langserver
+  -- abaplint CLI no es un servidor LSP real, necesita efm-langserver como puente
   if opts.abaplint ~= false then
-    local abaplint_opts = opts.abaplint or {}
+    local efm_opts = opts.abaplint or {}
+    local efm_config = efm_opts.config
+      or vim.fn.expand("~/Desktop/sap-nvim/config/efm-langserver.yaml")
 
     vim.lsp.config('abaplint', {
-      cmd = {
-        abaplint_opts.cmd or 'abaplint',
-        '--format',
-        'json',
-      },
+      cmd = { 'efm-langserver', '-c', efm_config },
       filetypes = { 'abap' },
-      root_markers = abaplint_opts.root_markers or {
+      root_markers = efm_opts.root_markers or {
         'abaplint.json',
-        'package.json',
         '.git',
       },
-      settings = abaplint_opts.settings or {},
+      settings = efm_opts.settings or {},
       capabilities = vim.lsp.protocol.make_client_capabilities(),
     })
 

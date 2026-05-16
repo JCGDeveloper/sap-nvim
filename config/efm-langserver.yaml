@@ -1,0 +1,22 @@
+# efm-langserver config: abaplint ABAP LSP
+# Bridges abaplint CLI output to LSP protocol for Neovim
+tools:
+  abaplint-linter: &abaplint-linter
+    lint-command: 'abaplint --format json --file ${INPUT}'
+    lint-formats:
+      - '%f(%line,%column): %message (%rule)'
+      - '%f(%line,%column): %message'
+      - '%f(%line,%column) : %message (%rule)'
+      - '%f(%line,%column) : %message'
+      - '%f(%line): %message (%rule)'
+      - '%f(%line): %message'
+    lint-category: 'warning'
+    lint-ignore-exit-code: true
+
+  abaplint-fixer: &abaplint-fixer
+    format-command: 'abaplint --fix --file ${INPUT}'
+
+languages:
+  abap:
+    - <<: *abaplint-linter
+    - <<: *abaplint-fixer
