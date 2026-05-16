@@ -268,7 +268,7 @@ end
 
 -- ─── Crear archivo con template ─────────────────────────────────────────────
 
-local function create_file(obj_type, obj_name, extra)
+local function create_file(obj_type, obj_name, extra, pkg, trans_req)
   local t = templates[obj_type]
   if not t then
     vim.notify("[sap-nvim] Tipo de objeto no válido: " .. obj_type, vim.log.levels.ERROR)
@@ -295,6 +295,10 @@ local function create_file(obj_type, obj_name, extra)
     content = t.template(obj_name)
   end
 
+  -- Añadir cabecera con paquete y transporte (como Eclipse)
+  local header = add_package_header(obj_name, pkg, trans_req)
+  content = header .. content
+
   -- Escribir archivo
   local f = io.open(filename, "w")
   if not f then
@@ -304,8 +308,32 @@ local function create_file(obj_type, obj_name, extra)
   f:write(content)
   f:close()
 
-  vim.notify(string.format("[sap-nvim] ✅ %s creado: %s", t.name, filename))
+  local msg = string.format("✅ %s creado: %s", t.name, filename)
+  if pkg and pkg ~= "$TMP" then
+    msg = msg .. " | Paquete: " .. pkg
+    if trans_req and trans_req ~= "" then
+      msg = msg .. " | Orden: " .. trans_req
+    end
+  else
+    msg = msg .. " | $TMP (local)"
+  end
+  vim.notify("[sap-nvim] " .. msg)
   vim.cmd("edit " .. filename)
+end
+
+-- ─── Cabecera de paquete y transporte ─────────────────────────────────────
+
+local function add_package_header(name, pkg, trans_req)
+  local lines = {}
+  table.insert(lines, "*&---------------------------------------------------------------------*")
+  table.insert(lines, "*& Objeto:   " .. name)
+  table.insert(lines, "*& Paquete:  " .. (pkg or "$TMP"))
+  if trans_req and trans_req ~= "" then
+    table.insert(lines, "*& Orden:    " .. trans_req)
+  end
+  table.insert(lines, "*&---------------------------------------------------------------------*")
+  table.insert(lines, "")
+  return table.concat(lines, "\n")
 end
 
 -- ─── Picker principal ────────────────────────────────────────────────────────
@@ -325,18 +353,36 @@ function M.new_object()
       if not name or name == "" then return end
       name = name:upper()
 
-      -- Para function_module, preguntar también el function group
-      if choice.key == "function_module" then
-        vim.ui.input({
-          prompt = "Function Group: ",
-          default = "ZDEMO",
-        }, function(fgroup)
-          create_file(choice.key, name, fgroup:upper())
-        end)
-        return
-      end
+      -- Preguntar paquete (como en Eclipse)
+      vim.ui.input({
+        prompt = "Paquete (dejar vacío para $TMP / local): ",
+        default = "$TMP",
+      }, function(pkg)
+        if not pkg or pkg == "" then pkg = "$TMP" end
+        pkg = pkg:upper()
 
-      create_file(choice.key, name)
+        -- Preguntar orden de transporte (si aplica)
+        vim.ui.input({
+          prompt = "Orden de transporte (vacío si no aplica): ",
+          default = "",
+        }, function(trans_req)
+          if not trans_req then trans_req = "" end
+          trans_req = trans_req:upper()
+
+          -- Para function_module, preguntar también el function group
+          if choice.key == "function_module" then
+            vim.ui.input({
+              prompt = "Function Group: ",
+              default = "ZDEMO",
+            }, function(fgroup)
+              create_file(choice.key, name, fgroup:upper(), pkg, trans_req)
+            end)
+            return
+          end
+
+          create_file(choice.key, name, nil, pkg, trans_req)
+        end)
+      end)
     end)
   end)
 end
