@@ -38,6 +38,9 @@ function M.setup(opts)
 
   -- Setup interactivo
   require("sap-nvim.core.setup").setup()
+
+  -- Asistente de nuevo objeto (Ctrl+N style)
+  require("sap-nvim.core.new").setup()
 end
 
 return M
