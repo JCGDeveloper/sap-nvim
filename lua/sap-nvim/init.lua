@@ -23,6 +23,9 @@ function M.setup(opts)
   -- Integraciones
   require("sap-nvim.integrations.mcphub").setup(opts.mcphub)
   require("sap-nvim.integrations.avante").setup(opts.avante)
+
+  -- Setup interactivo
+  require("sap-nvim.core.setup").setup()
 end
 
 return M
