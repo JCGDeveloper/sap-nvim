@@ -13,7 +13,7 @@ sap-nvim atajos:
   <leader>ah   Ayuda
   <leader>asg  Abrir SAP GUI
   <leader>aso  Abrir objeto en SAP GUI
-  <leader>af   Formatear con abaplint
+  <leader>aF   Formatear con abaplint (F mayúscula)
 
 Comandos:
   :SapConnectionsHelp  Ayuda detallada
@@ -24,8 +24,8 @@ Instalación:
     ]], "info", { title = "sap-nvim" })
   end, { desc = "ABAP: Ayuda" })
 
-  -- Formatear con abaplint
-  vim.keymap.set("n", "<leader>af", function()
+  -- Formatear con abaplint (usa Shift+F, sin conflicto)
+  vim.keymap.set("n", "<leader>aF", function()
     if vim.bo.filetype == "abap" then
       vim.lsp.buf.format({ async = true })
     end
