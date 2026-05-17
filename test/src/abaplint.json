@@ -1,6 +1,6 @@
 {
   "global": {
-    "files": "./*.abap",
+    "files": "*.abap",
     "skip": "/node_modules/"
   },
   "syntax": {

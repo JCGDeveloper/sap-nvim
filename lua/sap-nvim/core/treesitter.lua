@@ -1,14 +1,22 @@
 -- sap-nvim.core.treesitter
 -- Configuración de parsers Tree-sitter para ABAP y CDS
+-- Todo envuelto en pcall para no bloquear la carga de Neovim
 
 local M = {}
 
 function M.setup(opts)
   opts = opts or {}
 
-  local parser_config = require("nvim-treesitter.parsers").get_parser_configs()
+  -- Registrar parser ABAP
+  local ok, parser_config = pcall(function()
+    return require("nvim-treesitter.parsers").get_parser_configs()
+  end)
 
-  -- tree-sitter-abap
+  if not ok then
+    vim.notify("sap-nvim: nvim-treesitter no disponible. Instálalo con Lazy.", vim.log.levels.WARN)
+    return
+  end
+
   parser_config.abap = {
     install_info = {
       url = opts.abap_url or "https://github.com/kennyhml/tree-sitter-abap",
@@ -18,7 +26,6 @@ function M.setup(opts)
     filetype = "abap",
   }
 
-  -- tree-sitter-cds
   parser_config.cds = {
     install_info = {
       url = opts.cds_url or "https://github.com/cap-js-community/tree-sitter-cds",
@@ -28,50 +35,7 @@ function M.setup(opts)
     filetype = "cds",
   }
 
-  -- Configurar textobjects para ABAP
-  if opts.textobjects ~= false then
-    require("nvim-treesitter.configs").setup({
-      textobjects = {
-        select = {
-          enable = true,
-          lookahead = true,
-          keymaps = {
-            ["af"] = "@function.outer",
-            ["if"] = "@function.inner",
-            ["ac"] = "@class.outer",
-            ["ic"] = "@class.inner",
-            ["am"] = "@method.outer",
-            ["im"] = "@method.inner",
-          },
-        },
-        move = {
-          enable = true,
-          set_jumps = true,
-          goto_next_start = {
-            ["]m"] = "@method.outer",
-            ["]f"] = "@function.outer",
-          },
-          goto_previous_start = {
-            ["[m"] = "@method.outer",
-            ["[f"] = "@function.outer",
-          },
-        },
-      },
-    })
-  end
-
-  -- Asegurar que el parser se compile si es necesario
-  vim.api.nvim_create_autocmd("FileType", {
-    pattern = "abap",
-    callback = function()
-      -- TSInstallSync si no está instalado
-      local has_parser = pcall(vim.treesitter.get_parser, 0, "abap")
-      if not has_parser then
-        vim.cmd("TSInstallSync abap")
-      end
-    end,
-    once = true,
-  })
+  vim.notify("sap-nvim: Parsers ABAP y CDS registrados. Ejecuta :TSInstall abap", vim.log.levels.INFO)
 end
 
 return M

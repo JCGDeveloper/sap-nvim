@@ -1,63 +1,72 @@
 -- sap-nvim.core.keymaps
--- Atajos de teclado para desarrollo ABAP
+-- Atajos básicos para ABAP
 
 local M = {}
 
 function M.setup(opts)
   opts = opts or {}
 
-  local adt = require("sap-nvim.core.adt")
+  -- Ayuda
+  vim.keymap.set("n", "<leader>ah", function()
+    vim.notify([[
+sap-nvim atajos:
+  <leader>ah   Ayuda
+  <leader>asg  Abrir SAP GUI
+  <leader>aso  Abrir objeto en SAP GUI
+  <leader>af   Formatear con abaplint
 
-  -- <leader>aa: Guardar y activar objeto ABAP remoto
-  vim.keymap.set("n", "<leader>aa", function()
-    adt.activate_current()
-  end, { desc = "ABAP: Guardar y Activar" })
+Comandos:
+  :SapConnectionsHelp  Ayuda detallada
 
-  -- <leader>ac: Ejecutar ATC (ABAP Test Cockpit)
-  vim.keymap.set("n", "<leader>ac", function()
-    adt.run_atc()
-  end, { desc = "ABAP: Ejecutar ATC" })
+Instalación:
+  npm install -g @abaplint/cli  → LSP ABAP
+  :TSInstall abap               → Syntax highlighting
+    ]], "info", { title = "sap-nvim" })
+  end, { desc = "ABAP: Ayuda" })
 
-  -- <leader>au: Ejecutar pruebas unitarias
-  vim.keymap.set("n", "<leader>au", function()
-    adt.run_aunit()
-  end, { desc = "ABAP: Ejecutar AUnit" })
-
-  -- <leader>as: Buscar objetos ABAP
-  vim.keymap.set("n", "<leader>as", function()
-    vim.ui.input({ prompt = "Buscar objeto ABAP: " }, function(query)
-      if query and query ~= "" then
-        adt.search(query)
-      end
-    end)
-  end, { desc = "ABAP: Buscar objeto" })
-
-  -- <leader>a1-5: Seleccionar conexión SAP
-  if opts.connection_shortcuts ~= false then
-    for i = 1, 5 do
-      vim.keymap.set("n", ("<leader>a%s"):format(i), function()
-        local names = vim.tbl_keys(vim.g.sap_nvim_connections or {})
-        if names[i] then
-          adt.select_connection(names[i])
-        end
-      end, { desc = ("ABAP: Conexión %d"):format(i) })
+  -- Formatear con abaplint
+  vim.keymap.set("n", "<leader>af", function()
+    if vim.bo.filetype == "abap" then
+      vim.lsp.buf.format({ async = true })
     end
+  end, { desc = "ABAP: Formatear" })
+
+  -- SAP GUI integration
+  local function find_sapgui()
+    local paths = {
+      "/Applications/SAP GUI.app",
+      "/Applications/SAPGUI.app",
+    }
+    for _, p in ipairs(paths) do
+      local f = io.open(p .. "/Contents/Info.plist", "r")
+      if f then
+        f:close()
+        return p
+      end
+    end
+    return nil
   end
 
-  -- <leader>ai: Abrir terminal con sapcli
-  vim.keymap.set("n", "<leader>ai", function()
-    vim.cmd("terminal")
-    vim.cmd("startinsert")
-  end, { desc = "ABAP: Terminal" })
-
-  -- <leader>asg: Abrir SAP GUI (solo la app)
   vim.keymap.set("n", "<leader>asg", function()
-    adt.open_gui()
+    local app = find_sapgui()
+    if app then
+      vim.fn.jobstart({ "open", app })
+      vim.notify("sap-nvim: Abriendo SAP GUI...")
+    else
+      vim.notify("sap-nvim: SAP GUI no encontrado", vim.log.levels.ERROR)
+    end
   end, { desc = "ABAP: Abrir SAP GUI" })
 
-  -- <leader>aso: Abrir SAP GUI con el objeto actual
   vim.keymap.set("n", "<leader>aso", function()
-    adt.open_gui(nil)
+    local app = find_sapgui()
+    if app then
+      local obj = vim.fn.expand("%:t:r")
+      local tx = "SE80"
+      vim.fn.jobstart({ "open", app })
+      vim.notify(string.format("sap-nvim: SAP GUI abierto. Busca %s en %s", obj, tx))
+    else
+      vim.notify("sap-nvim: SAP GUI no encontrado", vim.log.levels.ERROR)
+    end
   end, { desc = "ABAP: Abrir objeto en SAP GUI" })
 end
 

@@ -1,46 +1,28 @@
 -- sap-nvim: Entry Point
--- Carga todos los módulos del plugin
+-- Carga los módulos del plugin con manejo de errores
 
 local M = {}
 
 function M.setup(opts)
   opts = opts or {}
 
-  -- Configuración de conexión SAP
-  -- Prioridad: opts.connections > sap-connections.json > vacío
-  local connections = opts.connections or {}
-  if not next(connections) then
-    local ok, json = pcall(function()
-      return vim.fn.json_decode(vim.fn.readfile(
-        vim.fn.expand("~/Desktop/sap-nvim/config/sap-connections.json")
-      ))
+  local modules = {
+    "sap-nvim.core.treesitter",
+    "sap-nvim.core.lsp",
+    "sap-nvim.core.keymaps",
+    "sap-nvim.adapters.terminal",
+  }
+
+  for _, mod in ipairs(modules) do
+    local ok, err = pcall(function()
+      require(mod).setup(opts)
     end)
-    if ok and json and json.connections then
-      connections = json.connections
-      vim.g.sap_nvim_current_connection = json.current or ""
+    if not ok then
+      vim.notify("sap-nvim: " .. mod .. " - " .. tostring(err), vim.log.levels.WARN)
     end
   end
-  vim.g.sap_nvim_connections = connections
 
-  -- Cargar módulos
-  require("sap-nvim.core.treesitter").setup(opts.treesitter)
-  require("sap-nvim.core.lsp").setup(opts.lsp)
-  require("sap-nvim.core.adt").setup({ connections = connections })
-  require("sap-nvim.core.keymaps").setup(opts.keymaps)
-
-  -- Adaptadores
-  require("sap-nvim.adapters.oil").setup(opts.oil)
-  require("sap-nvim.adapters.terminal").setup(opts.terminal)
-
-  -- Integraciones
-  require("sap-nvim.integrations.mcphub").setup(opts.mcphub)
-  require("sap-nvim.integrations.avante").setup(opts.avante)
-
-  -- Setup interactivo
-  require("sap-nvim.core.setup").setup()
-
-  -- Asistente de nuevo objeto (Ctrl+N style)
-  require("sap-nvim.core.new").setup()
+  vim.notify("sap-nvim: Cargado. <leader>ah para ayuda.", vim.log.levels.INFO)
 end
 
 return M
