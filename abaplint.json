@@ -10,102 +10,81 @@
   "dependencies": [],
   "syntax": {
     "version": "v750",
-    "errorNamespace": "^(Z|Y|LCL_|LCX_|LIF_|LTY_)",
+    "errorNamespace": "^(Z|Y|ZCLA|ZCLN|ZIF|ZFG)",
     "globalConstants": [],
     "globalMacros": []
   },
   "rules": {
-    "check_syntax": true,
-    "parser_error": true,
+
+    "parser_error":  { "exclude": [], "severity": "Error" },
+    "check_syntax":  { "exclude": [], "severity": "Error" },
+
     "cyclomatic_complexity": {
-      "exclude": [],
-      "severity": "Warning",
-      "max": 20
+      "exclude": [], "severity": "Warning", "max": 20
     },
     "method_length": {
+      "exclude": [], "severity": "Warning",
+      "statements": 100, "ignoreTestClasses": true, "errorWhenEmpty": false
+    },
+    "line_length":        { "exclude": [], "severity": "Warning", "length": 200 },
+    "sequential_blank":   { "exclude": [], "severity": "Warning", "lines": 3 },
+    "unused_variables":   { "exclude": [], "severity": "Warning", "skipNames": [], "skipAbstract": false },
+    "unreachable_code":   { "exclude": [], "severity": "Error" },
+    "uncaught_exception": { "exclude": [], "severity": "Warning" },
+    "try_without_catch":  { "exclude": [], "severity": "Warning" },
+    "unnecessary_return": { "exclude": [], "severity": "Warning" },
+    "select_add_order_by":{ "exclude": [], "severity": "Warning" },
+    "prefer_inline":      { "exclude": [], "severity": "Warning" },
+    "prefer_corresponding":{ "exclude": [], "severity": "Warning" },
+    "prefer_is_not":      { "exclude": [], "severity": "Warning" },
+    "no_aliases":         { "exclude": [], "severity": "Warning" },
+    "empty_statement":    { "exclude": [], "severity": "Warning" },
+    "exporting":          { "exclude": [], "severity": "Warning" },
+    "use_line_exists":    { "exclude": [], "severity": "Warning" },
+    "when_others_last":   { "exclude": [], "severity": "Error" },
+    "names_no_dash":      { "exclude": [], "severity": "Warning" },
+    "if_in_loop_check":   { "exclude": [], "severity": "Warning" },
+
+    "local_variable_names": {
       "exclude": [],
       "severity": "Warning",
-      "statements": 100,
-      "ignoreTestClasses": true,
-      "errorWhenEmpty": false
+      "expectedData": "^(WL_|TL_|XL_|WAL_|CL_|TYL_|TTL_|STL_|RL_|PI_|PO_|PC_|PT_|LCL_)",
+      "expectedFS":   "^<FS_[A-Z0-9_]+>$"
     },
-    "line_length": {
+
+    "class_attribute_names": {
       "exclude": [],
       "severity": "Warning",
-      "length": 200
+      "instance":   "^(WG_|T_|X_|WA_|R_|TY_|TT_|ST_)",
+      "statics":    "^(WG_|T_|X_|WA_|ST_|TY_|TT_)",
+      "constants":  "^C_"
     },
-    "sequential_blank": {
+
+    "object_naming": {
       "exclude": [],
       "severity": "Warning",
-      "lines": 3
+      "program":        "^Z",
+      "function_group": "^ZFG",
+      "class":          "^(ZCLA|ZCLN|LCL_)",
+      "exception_class":"^(ZCX_|LCX_)",
+      "interface":      "^(ZIF|LIF_)",
+      "table":          "^ZT",
+      "tableType":      "^ZTY",
+      "dataElement":    "^ZE",
+      "structure":      "^ZS",
+      "view":           "^ZV",
+      "domainName":     "^ZD",
+      "searchHelp":     "^ZA",
+      "lockObject":     "^E(Z|Y)",
+      "form":           "",
+      "method":         ""
     },
-    "unused_variables": {
+
+    "types_naming": {
       "exclude": [],
-      "severity": "Warning"
-    },
-    "unreachable_code": {
-      "exclude": [],
-      "severity": "Error"
-    },
-    "uncaught_exception": {
-      "exclude": [],
-      "severity": "Warning"
-    },
-    "try_without_catch": {
-      "exclude": [],
-      "severity": "Warning"
-    },
-    "unnecessary_return": {
-      "exclude": [],
-      "severity": "Warning"
-    },
-    "select_add_order_by": {
-      "exclude": [],
-      "severity": "Warning"
-    },
-    "prefer_inline": {
-      "exclude": [],
-      "severity": "Warning"
-    },
-    "prefer_corresponding": {
-      "exclude": [],
-      "severity": "Warning"
-    },
-    "no_aliases": {
-      "exclude": [],
-      "severity": "Warning"
-    },
-    "empty_statement": {
-      "exclude": [],
-      "severity": "Warning"
-    },
-    "exporting": {
-      "exclude": [],
-      "severity": "Warning"
-    },
-    "use_line_exists": {
-      "exclude": [],
-      "severity": "Warning"
-    },
-    "when_others_last": {
-      "exclude": [],
-      "severity": "Error"
-    },
-    "names_no_dash": {
-      "exclude": [],
-      "severity": "Warning"
-    },
-    "prefer_is_not": {
-      "exclude": [],
-      "severity": "Warning"
-    },
-    "identical_form_names": {
-      "exclude": [],
-      "severity": "Error"
-    },
-    "if_in_loop_check": {
-      "exclude": [],
-      "severity": "Warning"
+      "severity": "Warning",
+      "pattern": "^(TY_|TT_|TYL_|TTL_)"
     }
+
   }
 }
