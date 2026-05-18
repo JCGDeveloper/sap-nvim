@@ -47,6 +47,27 @@ ENDCLASS.
     end,
     sapcli = function(name) return { "sapcli", "class", "create", name } end,
   },
+  test_class = {
+    name = "Test Class (AUnit)",
+    ext = "abap",
+    desc = "Clase de test unitario FOR TESTING",
+    template = function(name)
+      local short = name:gsub("ZCL_", "")
+      return string.format([[
+CLASS ltc_%s DEFINITION FOR TESTING.
+  PRIVATE SECTION.
+    METHODS: test_%s FOR TESTING.
+ENDCLASS.
+
+CLASS ltc_%s IMPLEMENTATION.
+  METHOD test_%s.
+    cl_abap_unit_assert=>fail( 'Test no implementado' ).
+  ENDMETHOD.
+ENDCLASS.
+]], short, short:lower(), short, short:lower())
+    end,
+  },
+
   interface = {
     name = "Interface ABAP",
     ext = "intf",
@@ -58,7 +79,8 @@ INTERFACE %s PUBLIC.
 ENDINTERFACE.
 ]], name)
     end,
-    sapcli = function(name) return { "sapcli", "interface", "create", name } end,
+    sapcli = function(name) return { "sapcli", "test_class",
+    "interface", "create", name } end,
   },
   include = {
     name = "Include ABAP",
@@ -248,7 +270,8 @@ define domain %s {
 local function get_picker_items()
   local items = {}
   local order = {
-    "program", "class", "interface", "include",
+    "program", "class", "test_class",
+    "interface", "include",
     "table", "structure", "data_element", "domain",
     "cds_view", "cds_behavior",
     "function_group", "function_module",
