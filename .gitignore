@@ -1,3 +1,4 @@
+.abaplint_lint_*
 node_modules/
 __pycache__/
 *.pyc
