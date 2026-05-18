@@ -24,17 +24,11 @@ Instalación:
     ]], "info", { title = "sap-nvim" })
   end, { desc = "ABAP: Ayuda" })
 
-  -- Formatear ABAP: usa tree-sitter para indentar + abaplint para lint
-  -- Nota: abaplint --fix no formatea, solo aplica quick fixes
+  -- Formatear ABAP con formateador nativo (uppercase + indentación)
   vim.keymap.set("n", "<leader>aF", function()
     if vim.bo.filetype ~= "abap" then return end
-    vim.cmd("silent! write")
-    -- Re-indentar todo el archivo con el formateador de Neovim
-    vim.cmd("normal! gg=G''")
-    -- Convertir keywords a mayúsculas (opcional)
-    -- vim.cmd("%s/\<\w*[a-z]\w*\>\c/\=substitute(submatch(0),'\u','\U&','g')/e")
-    vim.notify("sap-nvim: Archivo re-indentado", vim.log.levels.INFO)
-  end, { desc = "ABAP: Formatear (indentar)" })
+    require("sap-nvim.core.formatter").format_file()
+  end, { desc = "ABAP: Formatear (uppercase + indentación)" })
 
   -- SAP GUI integration
   local function find_sapgui()

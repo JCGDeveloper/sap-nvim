@@ -8,6 +8,7 @@ function M.setup(opts)
 
   local modules = {
     "sap-nvim.core.treesitter",
+    "sap-nvim.core.formatter",
     "sap-nvim.core.lsp",
     "sap-nvim.core.keymaps",
     "sap-nvim.core.setup",
