@@ -75,6 +75,7 @@ sap-nvim atajos:
   <leader>aF   Formatear (uppercase + indent)
   <leader>aT   Tests unitarios (AUnit)
   <leader>aK   Quality check (ATC)
+  <leader>ai   Objetos inactivos
   <leader>ad   Debuggear (vsp)
 
   OBJETOS:

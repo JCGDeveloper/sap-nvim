@@ -218,8 +218,8 @@ function M.activate_current()
     on_exit = function(_, code)
       vim.schedule(function()
         if code == 0 then
+          vim.b[bufnr].sap_activation_status = "OK"
           vim.notify("[sap-nvim] " .. obj_name .. " activado correctamente")
-          -- Clear stale quickfix from a previous failed activation
           vim.fn.setqflist({}, "r", { title = "Activation OK: " .. obj_name })
           return
         end
@@ -231,6 +231,7 @@ function M.activate_current()
 
         local qf = M._parse_activation_errors(all, filename)
 
+        vim.b[bufnr].sap_activation_status = "ERR"
         if #qf > 0 then
           vim.fn.setqflist({}, "r")
           vim.fn.setqflist(qf, "r")
@@ -242,11 +243,39 @@ function M.activate_current()
             vim.log.levels.ERROR
           )
         else
-          -- Could not parse line numbers — show raw first error
           local raw = #all > 0 and all[1] or ("Error activando " .. obj_name)
           vim.notify("[sap-nvim] " .. raw, vim.log.levels.ERROR)
         end
       end)
+    end,
+  })
+end
+
+-- Fetch the list of inactive objects (async)
+-- callback(objects, err)
+function M.fetch_inactive_objects(callback)
+  local objects = {}
+  local stderr = {}
+
+  vim.fn.jobstart({ "sapcli", "activation", "inactiveobjects", "list" }, {
+    on_stdout = function(_, data)
+      for _, line in ipairs(data) do
+        local t = vim.trim(line)
+        if t ~= "" then table.insert(objects, t) end
+      end
+    end,
+    on_stderr = function(_, data)
+      for _, line in ipairs(data) do
+        if vim.trim(line) ~= "" then table.insert(stderr, line) end
+      end
+    end,
+    on_exit = function(_, code)
+      if code == 0 then
+        callback(objects, nil)
+      else
+        local err = #stderr > 0 and stderr[1] or "Could not fetch inactive objects"
+        callback(nil, err)
+      end
     end,
   })
 end

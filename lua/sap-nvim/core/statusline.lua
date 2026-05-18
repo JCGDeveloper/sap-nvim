@@ -75,13 +75,21 @@ function M.get_string()
   return ctx.sysid .. "/" .. ctx.client .. "/" .. ctx.user
 end
 
+-- Returns a short activation indicator for the current buffer: "[OK]", "[ERR]", or "".
+local function activation_indicator()
+  local status = vim.b.sap_activation_status
+  if status == "OK"  then return " [OK]" end
+  if status == "ERR" then return " [ERR]" end
+  return ""
+end
+
 -- lualine component — add it to lualine_x or any section:
 --   { require('sap-nvim.core.statusline').component, color = { fg = '#e8a87c' } }
 M.component = {
   function()
     local ctx = get_cached()
     if not ctx then return "" end
-    return " " .. ctx.sysid .. " · " .. ctx.client .. " · " .. ctx.user
+    return " " .. ctx.sysid .. " · " .. ctx.client .. " · " .. ctx.user .. activation_indicator()
   end,
   cond = function()
     local ft = vim.bo.filetype
@@ -101,7 +109,7 @@ local function apply_native_statusline()
     _has_lualine = pcall(require, "lualine")
   end
   if not _has_lualine then
-    local sap_part = " [SAP: " .. ctx.sysid .. "/" .. ctx.client .. "/" .. ctx.user .. "]"
+    local sap_part = " [SAP: " .. ctx.sysid .. "/" .. ctx.client .. "/" .. ctx.user .. activation_indicator() .. "]"
     vim.opt_local.statusline = "%f %m%=%y" .. sap_part .. " %l:%c "
   end
 end

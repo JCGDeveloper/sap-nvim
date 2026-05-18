@@ -58,21 +58,25 @@ local KEYWORDS = {
 local BLOCK_START = {
   "if", "do", "while", "loop", "at",
   "method", "form", "module", "function", "class", "interface",
-  "define", "try", "catch", "cleanup", "select", "when",
-  "case", "provide",
-  -- Also start variants
-  "start-of-selection",  "load-of-program",
+  "define", "try", "select", "case", "provide",
+  -- Branch continuations: also in BLOCK_END so they decrement before formatting,
+  -- then increment again → net zero change but formatted at the outer level.
+  "else", "elseif", "when", "catch", "cleanup",
+  -- Event blocks
+  "start-of-selection", "load-of-program",
   "init", "top-of-page", "end-of-page", "line-selection",
 }
 
--- Bloques que decrementan indentación
+-- Bloques que decrementan indentación (applied BEFORE formatting the line)
 local BLOCK_END = {
   "endif", "endo", "endwhile", "endloop", "endat",
   "endmethod", "endform", "endmodule", "endfunction",
   "endclass", "endinterface", "enddefine", "endtry",
   "endselect", "endcase", "endprovide",
-  -- Selection screen
   "end-of-selection",
+  -- Branch continuations: close the previous branch before opening the next one.
+  -- This prevents accumulation when WHEN/ELSE/CATCH appear multiple times.
+  "else", "elseif", "when", "catch", "cleanup",
 }
 
 -- Crear set de keywords para búsqueda rápida

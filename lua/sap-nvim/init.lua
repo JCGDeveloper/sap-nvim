@@ -20,6 +20,8 @@ function M.setup(opts)
     "sap-nvim.core.diff",
     "sap-nvim.core.whereused",
     "sap-nvim.core.checkout",
+    "sap-nvim.core.aunit",
+    "sap-nvim.core.inactive",
     "sap-nvim.integrations.completion",
     "sap-nvim.adapters.terminal",
   }
