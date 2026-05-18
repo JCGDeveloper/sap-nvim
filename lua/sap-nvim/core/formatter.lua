@@ -1,34 +1,28 @@
 -- sap-nvim.core.formatter
--- Formateador ABAP nativo en Lua
--- No requiere herramientas externas
--- Convierte keywords a mayúsculas, indentación correcta, espaciado consistente
+-- Native ABAP and CDS formatter.
+-- Dispatches automatically based on file extension.
 
 local M = {}
 
--- Keywords ABAP que deben ir en mayúsculas
--- Ordenadas por longitud descendente para matching prioritario
+-- ─── ABAP ──────────────────────────────────────────────────────────────────
+
 local KEYWORDS = {
-  -- Multi-word keywords (más específicos primero)
   "start-of-selection", "end-of-selection",
   "load-of-program", "line-selection", "user-command",
   "top-of-page", "end-of-page", "pf-status",
   "field-symbols", "select-options",
-  -- Declaración
   "report", "program", "function", "endfunction", "form", "endform",
   "module", "endmodule", "method", "endmethod", "class", "endclass",
   "interface", "endinterface", "define", "enddefine",
-  -- Control de flujo
   "if", "endif", "else", "elseif", "when", "case", "endcase",
   "do", "endo", "while", "endwhile", "loop", "endloop",
   "try", "endtry", "catch", "cleanup", "resumable",
   "select", "endselect", "at", "endat", "provide", "endprovide",
-  -- Operadores
   "and", "or", "not", "eq", "ne", "lt", "le", "gt", "ge",
   "is", "in", "between", "like", "covers",
-  -- Comandos comunes
   "data", "types", "constants",
   "parameters", "tables", "ranges",
-  "type", "like", "value", "ref", "to", "for", "importing",
+  "type", "value", "ref", "to", "for", "importing",
   "exporting", "changing", "returning", "raising",
   "write", "read", "move", "append", "insert", "delete", "modify",
   "call", "submit", "leave", "exit", "check", "stop", "reject",
@@ -37,7 +31,6 @@ local KEYWORDS = {
   "clear", "refresh", "free", "collect", "compute",
   "set", "get", "add", "subtract", "multiply", "divide",
   "raise", "resume", "retry", "continue",
-  -- Asignación
   "into", "from", "where", "having", "group", "by", "order",
   "up", "down", "first", "last", "ascending", "descending",
   "primary", "key", "unique", "sorted", "hashed", "index",
@@ -46,7 +39,6 @@ local KEYWORDS = {
   "as", "using", "client", "specified", "specifying",
   "corresponding", "exact", "pattern", "occurrence", "offset",
   "length", "initial", "space", "zero",
-  -- OO
   "public", "protected", "private", "section",
   "abstract", "final", "read-only", "redefinition",
   "super", "friend", "local", "global",
@@ -54,135 +46,144 @@ local KEYWORDS = {
   "init",
 }
 
--- Bloques que incrementan indentación
 local BLOCK_START = {
   "if", "do", "while", "loop", "at",
   "method", "form", "module", "function", "class", "interface",
   "define", "try", "select", "case", "provide",
-  -- Branch continuations: also in BLOCK_END so they decrement before formatting,
-  -- then increment again → net zero change but formatted at the outer level.
   "else", "elseif", "when", "catch", "cleanup",
-  -- Event blocks
   "start-of-selection", "load-of-program",
   "init", "top-of-page", "end-of-page", "line-selection",
 }
 
--- Bloques que decrementan indentación (applied BEFORE formatting the line)
 local BLOCK_END = {
   "endif", "endo", "endwhile", "endloop", "endat",
   "endmethod", "endform", "endmodule", "endfunction",
   "endclass", "endinterface", "enddefine", "endtry",
   "endselect", "endcase", "endprovide",
   "end-of-selection",
-  -- Branch continuations: close the previous branch before opening the next one.
-  -- This prevents accumulation when WHEN/ELSE/CATCH appear multiple times.
   "else", "elseif", "when", "catch", "cleanup",
 }
 
--- Crear set de keywords para búsqueda rápida
-local keyword_set = {}
-for _, kw in ipairs(KEYWORDS) do
-  keyword_set[kw:lower()] = true
-end
-
+local keyword_set     = {}
 local block_start_set = {}
-for _, kw in ipairs(BLOCK_START) do
-  block_start_set[kw:lower()] = true
-end
+local block_end_set   = {}
 
-local block_end_set = {}
-for _, kw in ipairs(BLOCK_END) do
-  block_end_set[kw:lower()] = true
-end
+for _, kw in ipairs(KEYWORDS)    do keyword_set[kw:lower()]     = true end
+for _, kw in ipairs(BLOCK_START) do block_start_set[kw:lower()] = true end
+for _, kw in ipairs(BLOCK_END)   do block_end_set[kw:lower()]   = true end
 
-
-
--- Distancia de Levenshtein: cuantos caracteres hay que cambiar
--- para que una palabra sea igual a otra
 local function levenshtein(a, b)
-  local len_a, len_b = #a, #b
-  local matrix = {}
-  for i = 0, len_a do
-    matrix[i] = { [0] = i }
-  end
-  for j = 0, len_b do
-    matrix[0][j] = j
-  end
-  for i = 1, len_a do
-    for j = 1, len_b do
+  local la, lb = #a, #b
+  local m = {}
+  for i = 0, la do m[i] = { [0] = i } end
+  for j = 0, lb do m[0][j] = j end
+  for i = 1, la do
+    for j = 1, lb do
       local cost = a:sub(i, i) == b:sub(j, j) and 0 or 1
-      matrix[i][j] = math.min(
-        matrix[i - 1][j] + 1,
-        matrix[i][j - 1] + 1,
-        matrix[i - 1][j - 1] + cost
-      )
+      m[i][j] = math.min(m[i-1][j]+1, m[i][j-1]+1, m[i-1][j-1]+cost)
     end
   end
-  return matrix[len_a][len_b]
+  return m[la][lb]
 end
 
--- Autocompletar palabras ABAP por prefijo unico
--- Si falla, intenta fuzzy match (corregir typos)
 local function autocomplete_word(word)
   local lower = word:lower()
-  if keyword_set[lower] then
-    return word
-  end
+  if keyword_set[lower] then return word end
 
-  -- 1. Buscar por prefijo unico
   local matches = {}
   for _, kw in ipairs(KEYWORDS) do
-    if kw:sub(1, #lower) == lower then
-      table.insert(matches, kw)
-    end
+    if kw:sub(1, #lower) == lower then table.insert(matches, kw) end
   end
-  if #matches == 1 then
-    return matches[1]:upper()
-  end
+  if #matches == 1 then return matches[1]:upper() end
 
-  -- 2. Fuzzy match: buscar la keyword mas cercana (edit distance <= 2)
-  local best_dist = 3
-  local best_kw = nil
+  local best_dist, best_kw = 3, nil
   for _, kw in ipairs(KEYWORDS) do
-    local dist = levenshtein(lower, kw)
-    if dist < best_dist then
-      best_dist = dist
-      best_kw = kw
-    end
+    local d = levenshtein(lower, kw)
+    if d < best_dist then best_dist = d; best_kw = kw end
   end
-  if best_kw then
-    -- Solo sugerir si la palabra es similar (tiene al menos 4 chars)
-    if #lower >= 4 and best_dist <= math.floor(#lower / 3) then
-      return best_kw:upper()
-    end
+  if best_kw and #lower >= 4 and best_dist <= math.floor(#lower / 3) then
+    return best_kw:upper()
   end
 
   return word
 end
 
+-- Parse a line into segments so we can skip string literal content.
+-- Each segment: { text = "...", literal = true|false }
+-- literal=true  → string literal or comment, must NOT be uppercased
+-- literal=false → code, apply keyword uppercasing
+local function tokenize(line)
+  local segs = {}
+  local i, len = 1, #line
 
--- Uppercase keywords
-local function uppercase_keywords(line)
-  -- Uppercase keywords + autocompletar por prefijo unico
-  return line:gsub("([%a_][%w_-]*)", function(word)
-    if keyword_set[word:lower()] then
-      return word:upper()
+  while i <= len do
+    local c = line:sub(i, i)
+
+    if c == "'" then
+      -- ABAP string literal; handle '' as escaped quote inside
+      local j = i + 1
+      while j <= len do
+        if line:sub(j, j) == "'" then
+          if line:sub(j+1, j+1) == "'" then j = j + 2
+          else break end
+        else j = j + 1 end
+      end
+      table.insert(segs, { text = line:sub(i, j), literal = true })
+      i = j + 1
+
+    elseif c == "`" then
+      -- Template literal (ABAP string templates |...|), treat same
+      local j = i + 1
+      while j <= len and line:sub(j, j) ~= "`" do j = j + 1 end
+      table.insert(segs, { text = line:sub(i, j), literal = true })
+      i = j + 1
+
+    elseif c == '"' then
+      -- Inline comment: rest of line is literal
+      table.insert(segs, { text = line:sub(i), literal = true })
+      break
+
+    else
+      -- Code: collect until quote or comment starts
+      local j = i
+      while j <= len do
+        local ch = line:sub(j, j)
+        if ch == "'" or ch == "`" or ch == '"' then break end
+        j = j + 1
+      end
+      if j > i then
+        table.insert(segs, { text = line:sub(i, j-1), literal = false })
+      end
+      i = j
     end
-    local completed = autocomplete_word(word)
-    if completed ~= word then
-      return completed
-    end
-    return word
-  end)
+  end
+
+  return segs
 end
 
--- Limpiar espacios extras
+local function uppercase_keywords(line)
+  local segs = tokenize(line)
+  local out = {}
+  for _, seg in ipairs(segs) do
+    if seg.literal then
+      table.insert(out, seg.text)
+    else
+      local processed = seg.text:gsub("([%a_][%w_%-]*)", function(word)
+        if keyword_set[word:lower()] then return word:upper() end
+        local completed = autocomplete_word(word)
+        if completed ~= word then return completed end
+        return word
+      end)
+      table.insert(out, processed)
+    end
+  end
+  return table.concat(out)
+end
+
 local function clean_spacing(line)
-  -- Eliminar espacios al final
   line = line:gsub("%s+$", "")
-  -- Eliminar múltiples espacios (pero mantener indentación inicial)
   local indent = line:match("^(%s*)")
-  local rest = line:match("^%s*(.*)$")
+  local rest   = line:match("^%s*(.*)$")
   if rest then
     rest = rest:gsub("%s+", " ")
     line = indent .. rest
@@ -190,105 +191,128 @@ local function clean_spacing(line)
   return line
 end
 
--- Detectar el keyword principal de una línea ABAP
 local function get_main_keyword(line)
   local content = line:match("^%s*(.*)$") or ""
-  -- Ignorar comentarios
-  if content:match("^%*") or content:match("^\"") then
-    return nil
-  end
-  -- Obtener la primera palabra
-  local first_word = content:match("^([%a_][%w_]*)")
-  if first_word then
-    return first_word:lower()
-  end
-  -- Si empieza con espacio, obtener la segunda palabra (para ELSEIF, etc)
-  local second_word = content:match("^%s+[%a_][%w_]*%s+([%a_][%w_]*)")
-  if second_word then
-    return second_word:lower()
-  end
+  if content:match("^%*") or content:match("^\"") then return nil end
+  local first = content:match("^([%a_][%w_%-]*)")
+  if first then return first:lower() end
   return nil
 end
 
--- Formatear una línea ABAP
-local function format_line(line, current_indent)
-  -- Preservar líneas en blanco
-  if line:match("^%s*$") then
-    return "", current_indent
-  end
+local function format_abap_line(line, indent)
+  if line:match("^%s*$") then return "", indent end
 
   local content = line:match("^%s*(.*)$") or ""
 
-  -- Preservar comentarios (solo ajustar indentación)
   if content:match("^%*") or content:match("^\"") then
-    return string.rep("  ", current_indent) .. content, current_indent
+    return string.rep("  ", indent) .. content, indent
   end
 
-  -- Detectar keyword principal
-  local keyword = get_main_keyword(line)
+  local kw = get_main_keyword(line)
 
-  -- Ajustar indentación por bloques
-  if keyword and block_end_set[keyword] then
-    current_indent = math.max(0, current_indent - 1)
+  if kw and block_end_set[kw] then
+    indent = math.max(0, indent - 1)
   end
 
-  -- Aplicar uppercase
   content = uppercase_keywords(content)
-  -- Limpiar spacing
   content = clean_spacing(content)
 
-  -- Construir línea indentada
-  local formatted = string.rep("  ", current_indent) .. content
+  local formatted = string.rep("  ", indent) .. content
 
-  -- Ajustar indentación para el próximo bloque
-  if keyword and block_start_set[keyword] then
-    current_indent = current_indent + 1
+  if kw and block_start_set[kw] then
+    indent = indent + 1
   end
 
-  return formatted, current_indent
+  return formatted, indent
 end
 
--- Formatear archivo ABAP completo
-function M.format_file()
+function M.format_abap()
   local bufnr = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-
   local result = {}
   local indent = 0
-  local fixes = {}  -- Lista de correcciones sugeridas
+  local warnings = {}
 
   for i, line in ipairs(lines) do
-    local formatted, new_indent = format_line(line, indent)
+    local formatted, new_indent = format_abap_line(line, indent)
     table.insert(result, formatted)
     indent = new_indent
 
-    -- Detectar REPORT sin nombre
     local content = line:match("^%s*(.-)%s*$") or ""
-    if content:upper():match("^REPORT%s*$") or content:upper():match("^REPORT%s+$") then
-      table.insert(fixes, "L" .. i .. ": REPORT sin nombre de programa")
-    end
-    -- Detectar falta de punto al final
-    if #content > 0 and not content:match("^%*|^\"") then
-      if not content:match("%.$") and not content:match("^%s*$") then
-        -- Solo ciertas sentencias ABAP requieren punto
-        local kw = get_main_keyword(line)
-        if kw and (keyword_set[kw:lower()]) then
-          table.insert(fixes, "L" .. i .. ": falta punto final en '" .. content:match("^%S+") .. "...'")
-        end
-      end
+    if content:upper():match("^REPORT%s*%.?$") then
+      table.insert(warnings, "L" .. i .. ": REPORT missing program name")
     end
   end
 
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, result)
 
-  if #fixes > 0 then
-    local msg = "ABAP: " .. #fixes .. " sugerencias:\n" .. table.concat(fixes, "\n")
-    vim.notify(msg, vim.log.levels.WARN)
+  if #warnings > 0 then
+    vim.notify("[sap-nvim] " .. table.concat(warnings, "\n"), vim.log.levels.WARN)
   else
-    vim.notify("sap-nvim: ABAP formateado correctamente", vim.log.levels.INFO)
+    vim.notify("[sap-nvim] ABAP formatted.", vim.log.levels.INFO)
   end
 end
 
-function M.setup(opts) end
+-- ─── CDS ───────────────────────────────────────────────────────────────────
+-- CDS/DDL uses brace-based indentation; annotations (@) and comments (//)
+-- are preserved. Keywords are NOT uppercased — CDS is mixed-case by convention.
+
+local function format_cds_line(line, indent)
+  if line:match("^%s*$") then return "", indent end
+
+  local content = line:match("^%s*(.-)%s*$") or ""
+
+  -- Annotations and comments: keep at current indent, no block change
+  if content:match("^@") or content:match("^//") or content:match("^/%*") then
+    return string.rep("  ", indent) .. content, indent
+  end
+
+  -- Closing brace decrements BEFORE formatting
+  local closes = content:match("^}") ~= nil
+  -- Opening brace increments AFTER formatting
+  -- A line can have both (e.g. "} {" is unusual but handle safely)
+  local opens = content:find("{") ~= nil and not closes
+
+  if closes then indent = math.max(0, indent - 1) end
+
+  -- Clean spacing but preserve content (no keyword uppercasing)
+  content = content:gsub("%s+$", ""):gsub("%s+", " ")
+  local formatted = string.rep("  ", indent) .. content
+
+  if opens then indent = indent + 1 end
+
+  return formatted, indent
+end
+
+function M.format_cds()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local result = {}
+  local indent = 0
+
+  for _, line in ipairs(lines) do
+    local formatted, new_indent = format_cds_line(line, indent)
+    table.insert(result, formatted)
+    indent = new_indent
+  end
+
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, result)
+  vim.notify("[sap-nvim] CDS formatted.", vim.log.levels.INFO)
+end
+
+-- ─── Dispatcher ────────────────────────────────────────────────────────────
+
+local CDS_EXTS = { ddls = true, dcl = true, bdef = true, ddlx = true, asddls = true, cds = true }
+
+function M.format_file()
+  local ext = vim.fn.expand("%:e"):lower()
+  if CDS_EXTS[ext] then
+    M.format_cds()
+  else
+    M.format_abap()
+  end
+end
+
+function M.setup() end
 
 return M

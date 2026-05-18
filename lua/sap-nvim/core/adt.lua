@@ -151,27 +151,41 @@ end
 -- Tries multiple line-number formats from SAP ADT responses.
 function M._parse_activation_errors(lines, filename)
   local qf = {}
+
+  -- Patterns ordered from most specific to least specific.
+  -- Each returns (lnum_string, message_string) or nil.
+  local patterns = {
+    -- "Line 42: message" / "line 42: message"
+    function(l) return l:match("[Ll]ine%s+(%d+):%s*(.+)") end,
+    -- "Row 42: message" / "row 42: message"
+    function(l) return l:match("[Rr]ow%s+(%d+):%s*(.+)") end,
+    -- "(42,3): message" or "(42): message"  ← ADT JSON format
+    function(l) return l:match("%((%d+),%d+%):%s*(.+)") end,
+    function(l) return l:match("%((%d+)%):%s*(.+)") end,
+    -- "error at line 42 column 3"
+    function(l)
+      local n = l:match("[Ee]rror%s+at%s+[Ll]ine%s+(%d+)")
+      if n then return n, l end
+    end,
+    -- "syntax error in program .* line 42"
+    function(l)
+      local n = l:match("[Ss]yntax%s+error.+[Ll]ine%s+(%d+)")
+      if n then return n, l end
+    end,
+    -- "at row 42" anywhere in the line
+    function(l)
+      local n = l:match("[Aa]t%s+[Rr]ow%s+(%d+)")
+      if n then return n, l end
+    end,
+    -- Leading number with colon: "  42: message"
+    function(l) return l:match("^%s*(%d+):%s+(.+)") end,
+  }
+
   for _, line in ipairs(lines) do
     local lnum, text
-
-    -- "Line 42: ..." / "line 42: ..."
-    lnum, text = line:match("[Ll]ine%s+(%d+):%s*(.*)")
-    if not lnum then
-      -- "Row 42: ..." / "row 42: ..."
-      lnum, text = line:match("[Rr]ow%s+(%d+):%s*(.*)")
-    end
-    if not lnum then
-      -- "  42: error message" (indent + number + colon)
-      lnum, text = line:match("^%s*(%d+):%s+(.*)")
-    end
-    if not lnum then
-      -- "(42,3) message" or "(42) message"
-      lnum, text = line:match("%((%d+)[,%d]*)%)%s*(.*)")
-    end
-    if not lnum then
-      -- "at row 42" anywhere
-      lnum = line:match("at%s+[Rr]ow%s+(%d+)")
-      if lnum then text = line end
+    for _, pat in ipairs(patterns) do
+      lnum, text = pat(line)
+      if lnum then break end
     end
 
     if lnum then
@@ -184,6 +198,7 @@ function M._parse_activation_errors(lines, filename)
       })
     end
   end
+
   return qf
 end
 

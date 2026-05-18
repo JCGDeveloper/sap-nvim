@@ -103,10 +103,10 @@ sap-nvim atajos:
   end, { desc = "ABAP: Ayuda" })
 
   -- Formatear ABAP con formateador nativo (uppercase + indentación)
+  -- Dispatcher handles ABAP vs CDS automatically by file extension
   vim.keymap.set("n", "<leader>aF", function()
-    if vim.bo.filetype ~= "abap" then return end
     require("sap-nvim.core.formatter").format_file()
-  end, { desc = "ABAP: Formatear (uppercase + indentación)" })
+  end, { desc = "ABAP/CDS: Format file" })
 
   -- SAP GUI integration
   local function find_sapgui()

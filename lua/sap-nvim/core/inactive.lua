@@ -1,5 +1,5 @@
 -- sap-nvim.core.inactive
--- Show and activate inactive ABAP objects from the system queue.
+-- Show and act on inactive ABAP objects from the system queue.
 
 local M = {}
 
@@ -21,7 +21,29 @@ local function activate_all()
         if code == 0 then
           notify("All inactive objects activated.")
         else
-          local msg = #stderr > 0 and stderr[1] or "Activation failed."
+          notify(#stderr > 0 and stderr[1] or "Activation failed.", vim.log.levels.ERROR)
+        end
+      end)
+    end,
+  })
+end
+
+local function activate_single(obj_name)
+  notify("Activating " .. obj_name .. "...")
+  local out, err = {}, {}
+  vim.fn.jobstart({ "sapcli", "activate", obj_name }, {
+    on_stdout = function(_, data)
+      for _, l in ipairs(data) do if l ~= "" then table.insert(out, l) end end
+    end,
+    on_stderr = function(_, data)
+      for _, l in ipairs(data) do if vim.trim(l) ~= "" then table.insert(err, l) end end
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        if code == 0 then
+          notify(obj_name .. " activated successfully.")
+        else
+          local msg = #err > 0 and err[1] or (#out > 0 and out[1] or "Failed to activate " .. obj_name)
           notify(msg, vim.log.levels.ERROR)
         end
       end)
@@ -32,7 +54,7 @@ end
 local function try_open_local(obj_name)
   local cwd = vim.fn.getcwd()
   local name = obj_name:lower()
-  for _, ext in ipairs({ "abap", "cls", "intf", "prog" }) do
+  for _, ext in ipairs({ "abap", "cls", "intf", "prog", "ddls", "dcl" }) do
     local path = cwd .. "/" .. name .. "." .. ext
     local f = io.open(path, "r")
     if f then
@@ -42,6 +64,27 @@ local function try_open_local(obj_name)
     end
   end
   return false
+end
+
+local function handle_single_object(obj_name)
+  vim.ui.select(
+    { "Open local file", "Activate in system", "Open + Activate" },
+    { prompt = obj_name .. " — choose action:" },
+    function(action)
+      if not action then return end
+      local open_it     = action == "Open local file"   or action == "Open + Activate"
+      local activate_it = action == "Activate in system" or action == "Open + Activate"
+
+      if open_it then
+        if not try_open_local(obj_name) then
+          notify("Local file not found for: " .. obj_name, vim.log.levels.WARN)
+        end
+      end
+      if activate_it then
+        activate_single(obj_name)
+      end
+    end
+  )
 end
 
 function M.show_inactive()
@@ -62,25 +105,24 @@ function M.show_inactive()
         return
       end
 
-      local choices = { "[Activate all (" .. #objects .. ")]" }
+      local choices = { "[Activate ALL (" .. #objects .. " objects)]" }
       for _, obj in ipairs(objects) do
         table.insert(choices, obj)
       end
 
       vim.ui.select(choices, {
-        prompt = "Inactive objects (" .. #objects .. ") — select to open, [Activate all] to activate:",
+        prompt = "Inactive objects — pick one to act on, or activate all:",
       }, function(choice)
         if not choice then return end
-        if choice:match("^%[Activate all") then
+
+        if choice:match("^%[Activate ALL") then
           activate_all()
           return
         end
-        -- sapcli output is typically "TYPE/NAME" or just "NAME"
-        local obj_name = choice:match("/(.+)$") or choice
-        obj_name = vim.trim(obj_name)
-        if not try_open_local(obj_name) then
-          notify("Local file not found for: " .. obj_name, vim.log.levels.WARN)
-        end
+
+        -- sapcli output is "TYPE/NAME" or just "NAME"
+        local obj_name = vim.trim(choice:match("/(.+)$") or choice)
+        handle_single_object(obj_name)
       end)
     end)
   end)
