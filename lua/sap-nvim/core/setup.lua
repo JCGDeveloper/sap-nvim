@@ -322,7 +322,7 @@ end
 
 -- ─── Nueva conexión ──────────────────────────────────────────────────────────
 
-local show_new_connection = function()
+show_new_connection = function()
   input_dialog("NUEVA CONEXIÓN", {
     { key = "name",     value = "desarrollo" },
     { key = "ashost",   value = "" },
@@ -372,7 +372,7 @@ end
 
 -- ─── Editar conexión ─────────────────────────────────────────────────────────
 
-local show_edit_connection = function()
+show_edit_connection = function()
   local config = parse_sapcli_config()
   local names = vim.tbl_keys(config.contexts)
 
@@ -420,7 +420,7 @@ end
 
 -- ─── Ver conexiones ──────────────────────────────────────────────────────────
 
-local show_connections = function()
+show_connections = function()
   local config = parse_sapcli_config()
   local names = vim.tbl_keys(config.contexts)
 
@@ -470,7 +470,7 @@ end
 
 -- ─── Probar conexión ─────────────────────────────────────────────────────────
 
-local show_test_connection = function()
+show_test_connection = function()
   local config = parse_sapcli_config()
   local names = vim.tbl_keys(config.contexts)
 
@@ -488,7 +488,7 @@ end
 
 -- ─── Eliminar conexión ───────────────────────────────────────────────────────
 
-local show_delete_connection = function()
+show_delete_connection = function()
   local config = parse_sapcli_config()
   local names = vim.tbl_keys(config.contexts)
 
@@ -515,7 +515,7 @@ end
 
 -- ─── Instalar/verificar sapcli ───────────────────────────────────────────────
 
-local install_sapcli = function()
+install_sapcli = function()
   local ok, path = check_sapcli()
   if ok then
     notify("✅ sapcli ya está instalado: " .. path)

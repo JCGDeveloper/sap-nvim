@@ -190,3 +190,5 @@ function M.format_file()
 end
 
 return M
+
+function M.setup(opts) end

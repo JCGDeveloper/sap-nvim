@@ -46,3 +46,5 @@ function M.debug_current()
 end
 
 return M
+
+function M.setup(opts) end
