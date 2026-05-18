@@ -7,7 +7,7 @@ function M.setup(opts)
   opts = opts or {}
 
   -- TDD: Ejecutar tests unitarios ABAP vía sapcli
-  vim.keymap.set("n", "<leader>at", function()
+  vim.keymap.set("n", "<leader>aT", function()
     local obj = vim.fn.expand("%:t:r")
     if obj == "" then
       vim.notify("sap-nvim: Guardá el archivo primero", vim.log.levels.WARN)
@@ -38,7 +38,7 @@ function M.setup(opts)
   end, { desc = "ABAP: Ejecutar tests unitarios" })
 
   -- ATC: Ejecutar ABAP Test Cockpit
-  vim.keymap.set("n", "<leader>ak", function()
+  vim.keymap.set("n", "<leader>aK", function()
     local obj = vim.fn.expand("%:t:r")
     if obj == "" then
       vim.notify("sap-nvim: Guardá el archivo primero", vim.log.levels.WARN)
@@ -74,8 +74,8 @@ sap-nvim atajos:
   <leader>ah   Ayuda
   <leader>aF   Formatear (uppercase + indent)
   <leader>ad   Debuggear ABAP (vsp)
-  <leader>at   Ejecutar tests unitarios
-  <leader>ak   Ejecutar ATC (quality check)
+  <leader>aT   Ejecutar tests unitarios
+  <leader>aK   Ejecutar ATC (quality check)
   <leader>asg  Abrir SAP GUI
   <leader>aso  Objeto en SAP GUI
   <leader>asc  Configurar conexiones
