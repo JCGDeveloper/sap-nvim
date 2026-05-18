@@ -1,4 +1,3 @@
-# sap-nvim
 node_modules/
 __pycache__/
 *.pyc
@@ -7,3 +6,15 @@ __pycache__/
 .env
 .env.local
 sap-connections.local.json
+.atl/
+skill/
+*.ABAP
+*.cls
+*.stru
+*.dtel
+*.ddls
+*.fugr
+*.func
+*.tabl
+*.dome
+*.intf
