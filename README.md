@@ -1,188 +1,315 @@
-# sap-nvim — Arquitectura Avanzada para Desarrollo ABAP en Neovim
+# sap-nvim
 
-> Integración de ADT, LSP, Tree-sitter y Protocolo de Contexto de Modelos (MCP)
-> en Entornos Corporativos Remotos
-
-## 🎯 Visión General
-
-Transformar Neovim en el entorno de desarrollo ABAP más potente del ecosistema SAP, superando las limitaciones de conectividad corporativa mediante una arquitectura basada en componentes desacoplados, protocolos abiertos y capacidades de IA agéntica.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         sap-nvim                                │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌────────────────┐  │
-│  │Tree-sitter│  │   LSP    │  │   ADT    │  │   MCP / IA     │  │
-│  │  ABAP    │  │ abaplint │  │  Remote  │  │   Agentic      │  │
-│  │  CDS     │  │  CDS LSP │  │  Filesys │  │   ARC-1        │  │
-│  └──────────┘  └──────────┘  └──────────┘  └────────────────┘  │
-│       │              │              │               │           │
-│       ▼              ▼              ▼               ▼           │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │              Neovim Core (LazyVim + Lua)                │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## 📋 Componentes Principales
-
-### 1. Análisis Sintáctico — Tree-sitter
-- **tree-sitter-abap**: Parser de ABAP (kennyhml, mkoval1)
-- **tree-sitter-cds**: Parser de Core Data Services (CAP community)
-- Soporte para sentencias encadenadas ABAP
-- Text objects para bloques lógicos (METHOD...ENDMETHOD, FORM...ENDFORM)
-
-### 2. Inteligencia de Código — LSP
-- **abaplint**: Servidor de lenguaje ABAP (TypeScript, open-source)
-- **@sap/cds-lsp**: Servidor de lenguaje CDS (npm global)
-- Validación "Clean ABAP", autocompletado, formateo
-- Navegación a definiciones, referencias, diagnosticos en tiempo real
-
-### 3. Gestión Remota — ADT API
-- **sapcli**: CLI Python para operaciones ADT
-- **abap-adt-api**: Biblioteca Node.js para sistema de archivos virtual
-- **oil.nvim**: Adaptador personalizado para navegación remota
-- Flujo: Lock → Read → Modify → Unlock → Activate
-
-### 4. IA Agéntica — MCP
-- **ARC-1**: Servidor MCP seguro para SAP ADT (marianfoo)
-- **mcp-abap-adt-api**: Servidor MCP basado en abap-adt-api (mario-andreschak)
-- **mcphub.nvim** / **avante.nvim**: Clientes MCP para Neovim
-- Operaciones autónomas: exploración, recuperación, mutación, activación
-
-## 🏗️ Arquitectura del Proyecto
-
-```
-~/Desktop/sap-nvim/
-├── README.md                    ← Este archivo
-├── docs/
-│   ├── ARQUITECTURA.md          ← Documento completo de arquitectura
-│   ├── INSTALACION.md           ← Guía de instalación paso a paso
-│   ├── CONFIGURACION.md         ← Configuración detallada
-│   ├── FLUJOS.md                ← Flujos de trabajo
-│   └── MCP-SETUP.md             ← Configuración de servidores MCP
-├── lua/
-│   └── sap-nvim/
-│       ├── init.lua             ← Entry point del plugin
-│       ├── core/
-│       │   ├── treesitter.lua   ← Configuración Tree-sitter ABAP/CDS
-│       │   ├── lsp.lua          ← Configuración LSP (abaplint, cds)
-│       │   ├── adt.lua          ← Cliente ADT API
-│       │   └── keymaps.lua      ← Atajos de teclado
-│       ├── adapters/
-│       │   ├── oil.lua          ← Adaptador oil.nvim para SAP
-│       │   └── terminal.lua     ← Integración con sapcli
-│       └── integrations/
-│           ├── mcphub.lua       ← Integración MCP Hub
-│           └── avante.lua       ← Integración Avante
-├── scripts/
-│   ├── setup-treesitter.sh      ← Script de instalación de parsers
-│   ├── setup-lsp.sh             ← Script de instalación de LSPs
-│   ├── setup-mcp.sh             ← Script de instalación de MCP servers
-│   └── sap-connect.sh           ← Script de conexión SAP
-└── config/
-    ├── abaplint.json            ← Configuración de abaplint
-    └── sap-connections.json     ← Conexiones a sistemas SAP
-```
-
-## 🚀 Estado del Proyecto
-
-| Componente | Estado | Prioridad |
-|---|---|---|
-| Tree-sitter ABAP | ✅ Investigado | Alta |
-| Tree-sitter CDS | ✅ Investigado | Alta |
-| abaplint LSP | ✅ Investigado | Alta |
-| CDS LSP | ✅ Investigado | Alta |
-| ADT API / sapcli | ✅ Investigado | Alta |
-| oil.nvim adapter | 🔬 En desarrollo | Media |
-| MCP (ARC-1) | ✅ Investigado | Alta |
-| MCP (mcp-abap-adt) | ✅ Investigado | Alta |
-| DAP (debugging) | ⏳ Pendiente | Baja |
-
-## 📚 Recursos Clave
-
-- [ARC-1: SAP ADT MCP Server](https://github.com/marianfoo/arc-1)
-- [mcp-abap-adt-api](https://github.com/mario-andreschak/mcp-abap-abap-adt-api)
-- [sapcli](https://github.com/jfilak/sapcli)
-- [abap-adt-api (NPM)](https://www.npmjs.com/package/abap-adt-api)
-- [tree-sitter-abap](https://github.com/kennyhml/tree-sitter-abap)
-- [abaplint](https://github.com/analysis-tools-dev/static-analysis)
-- [SAP ADT for VS Code (Oficial)](https://community.sap.com/t5/technology-blog-posts-by-sap/abap-development-tools-for-vs-code-everything-you-need-to-know/ba-p/14258129)
+A Neovim plugin for SAP ABAP development. Integrates with `sapcli` and `abaplint` to bring
+Eclipse/VSCode-level tooling into Neovim: real-time diagnostics, quickfix-driven activation,
+test runner, transport management, object browser, CDS support, and more.
 
 ---
 
-## ⌨️ Keymaps
+## Requirements
 
-| Keymap | Comando | Descripción |
-|--------|---------|-------------|
-| `<leader>aa` | — | Activar objeto ABAP → errores van al quickfix con jump automático |
-| `<leader>an` | `:SapNew` | Nuevo objeto ABAP con pickers de paquete y transporte desde el sistema |
-| `<leader>aw` | `:SapWhereUsed` | Where-used list del objeto actual → quickfix |
-| `<leader>aD` | `:SapDiff` | Diff buffer local vs versión activa en el sistema |
-| `<leader>aF` | — | Formatear ABAP (uppercase + indentación) |
-| `<leader>aT` | — | Ejecutar tests AUnit |
-| `<leader>aK` | — | Ejecutar ATC (quality check) |
-| `<leader>afs` | `:SapSearch` | Buscar objetos en el sistema SAP |
-| `<leader>afb` | `:SapBrowse` | Explorar contenido de un paquete |
-| `<leader>ack` | `:SapCheckout` | Descargar paquete SAP completo al filesystem local |
-| `<leader>atl` | `:SapTransports` | Listar órdenes de transporte abiertas |
-| `<leader>atc` | `:SapTransportCreate` | Crear orden de transporte |
-| `<leader>atr` | `:SapTransportRelease` | Liberar orden de transporte |
-| `<leader>asi` | `:SapStatus` | Info de la conexión activa |
-| `<leader>asc` | `:SapSetup` | Asistente de configuración de conexiones SAP |
-| `<leader>ah` | — | Ayuda completa |
+| Tool | Purpose | Install |
+|------|---------|---------|
+| [sapcli](https://github.com/jfilak/sapcli) | ADT operations (activate, checkout, AUnit, transports…) | `pip install sapcli` |
+| [abaplint](https://github.com/abaplint/abaplint) | Real-time linting and naming checks | `npm install -g @abaplint/cli` |
+| Neovim ≥ 0.9 | Plugin host | — |
+| `vim.ui.select` provider | Pickers (Telescope, fzf-lua, or built-in) | optional |
 
-## 📊 Statusline — Integración con lualine
+---
 
-El plugin expone un componente lualine listo para usar. Muestra la conexión SAP activa
-(`SID · cliente · usuario`) solo cuando el buffer activo es un archivo ABAP.
-
-### Configuración
+## Installation
 
 ```lua
-require('lualine').setup({
+-- lazy.nvim
+{
+  "JCGDeveloper/sap-nvim",
+  config = function()
+    require("sap-nvim").setup()
+  end,
+}
+```
+
+---
+
+## Features
+
+### Real-time diagnostics
+
+abaplint runs in the background while you type (600 ms debounce) and on every save.
+Results appear as inline virtual text, gutter signs, and hover floats — no extra config needed.
+
+Checks include:
+- Syntax and parser errors
+- Unused variables
+- Naming convention violations (fully configurable in `abaplint.json`)
+- Unreachable code, uncaught exceptions, missing ORDER BY
+- Cyclomatic complexity, method length, line length
+- Style: `prefer_inline`, `prefer_corresponding`, `prefer_is_not`, `use_line_exists`
+
+Diagnostics are **editor-only** — they never block activation or interact with SAP.
+
+---
+
+### Activation with jump-to-error
+
+`<leader>aa` saves the file and runs `sapcli activate`. On success it clears the quickfix list.
+On error it parses the SAP output, loads all errors into the quickfix list, and jumps directly
+to the first failing line.
+
+Supports multiple SAP error formats: `Line N:`, `Row N:`, `(N,col):`, `error at line N`, and more.
+
+After activation, the statusline shows `[OK]` or `[ERR]` for the current buffer.
+
+---
+
+### AUnit — test runner
+
+`<leader>aT` runs `sapcli aunit run class <name> --output junit4`, parses the JUnit4 XML
+response, and loads every failing test into the quickfix list with the exact line number.
+
+Summary notification: `3 test(s) failed in ZCL_FOO. See quickfix.`
+
+---
+
+### ATC — quality check
+
+`<leader>aK` runs ABAP Test Cockpit via `sapcli atc run object <name>`.
+
+---
+
+### Where-used list
+
+`<leader>aw` asks SAP for all usages of the current object and loads them into the quickfix
+list. Entries marked `[local]` if the file exists locally, `[system]` otherwise.
+
+---
+
+### Inactive objects
+
+`<leader>ai` (`:SapInactive`) fetches the inactive objects queue from the system. Picker options:
+
+- **Activate ALL** — runs `sapcli activation activate inactiveobjects`
+- **Select one** → second picker: Open local file / Activate in system / Open + Activate
+
+---
+
+### Diff local vs system
+
+`<leader>aD` (`:SapDiff`) reads the current object from SAP via `sapcli program/class/interface read`
+and opens a vertical split vimdiff. The system buffer is read-only and auto-cleaned up on close.
+
+---
+
+### New ABAP object
+
+`<leader>an` (`:SapNew`) guides you through creating a new ABAP object:
+
+1. Choose type: Program, Class, Interface, Function Group, Include, Test Class
+2. Enter name
+3. Pick package from the system (live picker via `sapcli package list`) — or type manually
+4. Pick transport order from your open orders (live picker via `sapcli cts list transport`)
+   — skipped automatically for `$TMP` packages
+
+Creates the local file with the correct header template and opens it for editing.
+
+---
+
+### Object browser and search
+
+| Keymap | Command | Description |
+|--------|---------|-------------|
+| `<leader>afs` | `:SapSearch` | Search objects in SAP by name pattern |
+| `<leader>afb` | `:SapBrowse` | Browse all objects in a package |
+
+Selecting an object from either picker tries to open it locally; if not found, offers to check it out.
+
+---
+
+### Package checkout
+
+`<leader>ack` (`:SapCheckout`) downloads a full SAP package to the local filesystem via
+`sapcli checkout package`. Prompts for package name, target directory, and recursive flag.
+Opens oil.nvim (if available) or the directory when done.
+
+---
+
+### Transport management
+
+| Keymap | Command | Description |
+|--------|---------|-------------|
+| `<leader>atl` | `:SapTransports` | List open transport orders — Enter copies ID to clipboard |
+| `<leader>atc` | `:SapTransportCreate` | Create a new transport order |
+| `<leader>atr` | `:SapTransportRelease` | Release a transport order (with confirmation) |
+
+---
+
+### Formatter
+
+`<leader>aF` formats the current file. Dispatches automatically by extension:
+
+**ABAP (`.abap`, `.cls`, `.intf`, `.prog`):**
+- Uppercase all keywords (`IF`, `DATA`, `SELECT`, …)
+- Correct block indentation (`IF/ENDIF`, `METHOD/ENDMETHOD`, `CASE/WHEN/ENDCASE`, …)
+- Autocomplete keywords by unique prefix (`sel` → `SELECT`)
+- Fuzzy-correct typos via Levenshtein distance (`SELCT` → `SELECT`)
+- String literals and inline comments are never modified
+
+**CDS/DDL (`.ddls`, `.dcl`, `.bdef`, `.cds`):**
+- Brace-based indentation (`{` / `}`)
+- Annotations (`@AbapCatalog.…`) preserved as-is
+- Comments (`//`, `/* */`) indented but not modified
+
+---
+
+### Statusline integration
+
+The plugin exposes a lualine component that shows the active SAP connection and the last
+activation result for the current buffer.
+
+```lua
+-- lualine config
+require("lualine").setup({
   sections = {
     lualine_x = {
-      -- Agrega el componente SAP antes del filetype
-      require('sap-nvim.core.statusline').component,
-      'encoding',
-      'fileformat',
-      'filetype',
+      require("sap-nvim.core.statusline").component,
+      "filetype",
     },
   },
 })
 ```
 
-El componente ya incluye:
-- **Condición**: solo visible en archivos `.abap`, `.cls`, `.intf`, etc.
-- **Color**: naranja (`#e8a87c`) en negrita para distinguirlo del resto
-- **Cache**: relee `~/.sapcli/config.yml` cada 30 segundos, no en cada redraw
+Display: ` DEV · 100 · JCGOMEZ [OK]`
+Color: orange (`#e8a87c`, bold). Only visible on ABAP buffers.
 
-### Sin lualine
+Without lualine, the plugin sets `vim.opt_local.statusline` on ABAP buffers automatically.
 
-Si no usás lualine, el plugin setea automáticamente `vim.opt_local.statusline` en
-cada buffer ABAP con el formato:
+`:SapStatus` / `<leader>asi` prints the full connection details.
+
+---
+
+### SAP GUI integration
+
+| Keymap | Description |
+|--------|-------------|
+| `<leader>asg` | Open SAP GUI |
+| `<leader>aso` | Open SAP GUI and show the relevant transaction for the current file |
+
+---
+
+### Connection setup
+
+`:SapSetup` / `<leader>asc` — interactive assistant for configuring sapcli connections.
+
+`:SapStatus` / `<leader>asi` — shows the active connection: system, client, user.
+
+---
+
+## Keymaps — full reference
+
+| Keymap | Command | Description |
+|--------|---------|-------------|
+| `<leader>aa` | — | Activate object → errors in quickfix, jump to line |
+| `<leader>aT` | `:SapAUnit` | Run AUnit tests → failures in quickfix |
+| `<leader>aK` | — | Run ATC quality check |
+| `<leader>aF` | — | Format file (ABAP uppercase+indent / CDS braces) |
+| `<leader>aw` | `:SapWhereUsed` | Where-used list → quickfix |
+| `<leader>aD` | `:SapDiff` | Diff local buffer vs active system version |
+| `<leader>ai` | `:SapInactive` | Inactive objects — open or activate individually |
+| `<leader>an` | `:SapNew` | New ABAP object with system package/transport pickers |
+| `<leader>afs` | `:SapSearch` | Search objects in SAP |
+| `<leader>afb` | `:SapBrowse` | Browse package contents |
+| `<leader>ack` | `:SapCheckout` | Checkout full package to local filesystem |
+| `<leader>atl` | `:SapTransports` | List open transport orders |
+| `<leader>atc` | `:SapTransportCreate` | Create transport order |
+| `<leader>atr` | `:SapTransportRelease` | Release transport order |
+| `<leader>asi` | `:SapStatus` | Show active SAP connection info |
+| `<leader>asc` | `:SapSetup` | Connection setup assistant |
+| `<leader>asg` | — | Open SAP GUI |
+| `<leader>aso` | — | Open current object in SAP GUI |
+| `<leader>ah` | — | Help (all keymaps) |
+
+---
+
+## Naming conventions (abaplint.json)
+
+`abaplint.json` in the project root configures real-time naming checks.
+Edit any pattern and the change takes effect on the next keystroke — no restart needed.
+
+### Variables inside methods and forms (local scope)
+
+| Type | Prefix |
+|------|--------|
+| Variable | `WL_` |
+| Internal table | `TL_` |
+| Structure / Work area | `XL_` / `WAL_` |
+| Constant | `CL_` |
+| Type | `TYL_` |
+| Type (table) | `TTL_` |
+| Static | `STL_` |
+| Range | `RL_` |
+| Field symbol | `<FS_xxx>` |
+| Importing parameter | `PI_` |
+| Exporting parameter | `PO_` |
+| Changing parameter | `PC_` |
+| Tables parameter | `PT_` |
+
+### Class attributes (global scope)
+
+| Type | Prefix |
+|------|--------|
+| Instance / static variable | `WG_` |
+| Internal table | `T_` |
+| Structure / Work area | `X_` / `WA_` |
+| Static | `ST_` |
+| Type | `TY_` / `TT_` |
+| Constant | `C_` |
+
+### Object naming
+
+| Object | Pattern | Example |
+|--------|---------|---------|
+| Program / Report | `Z` | `ZFIR_IVA_MENSUAL` |
+| Class (normal) | `ZCLA###_` | `ZCLAMM_PEDIDO` |
+| Class (abstract) | `ZCLN###_` | `ZCLN_BASE` |
+| Interface | `ZIF###_` | `ZIFMM_MINILOAD` |
+| Function group | `ZFG##_` | `ZFGFI_IVA` |
+| DDIC Table | `ZT###_` | `ZTFI_CODIGOS` |
+| DDIC Structure | `ZS###_` | `ZSFI_CODIGOS` |
+| Data element | `ZE###_` | `ZELEM_DAT` |
+| Domain | `ZD##_` | `ZD_STATUS` |
+| View | `ZV###_` | `ZVFI_CODIGOS` |
+
+---
+
+## Architecture
 
 ```
-nombre.abap [modified]       ABAP  [SAP: DEV/100/JCGOMEZ]  42:8
-```
-
-También podés consultar `vim.g.sap_nvim_status` desde cualquier plugin de statusline
-que soporte expresiones Lua:
-
-```lua
--- En cualquier statusline personalizada:
-local sap = vim.g.sap_nvim_status or ""
-```
-
-### Comando
-
-```
-:SapStatus   →  [sap-nvim] Sistema: DEV  Cliente: 100  Usuario: JCGOMEZ  Contexto: desarrollo
+sap-nvim/
+├── lua/sap-nvim/
+│   ├── init.lua              Entry point — loads all modules
+│   ├── core/
+│   │   ├── adt.lua           sapcli wrapper: activate, fetch packages/transports/objects
+│   │   ├── aunit.lua         AUnit runner + JUnit4 XML parser → quickfix
+│   │   ├── browser.lua       Object search and package browser
+│   │   ├── checkout.lua      Package checkout to local filesystem
+│   │   ├── debugger.lua      Interactive ABAP debugger (requires connection)
+│   │   ├── diff.lua          Local vs system vimdiff
+│   │   ├── formatter.lua     ABAP + CDS native formatter
+│   │   ├── inactive.lua      Inactive objects picker + activation
+│   │   ├── keymaps.lua       All keymap definitions
+│   │   ├── lsp.lua           Real-time abaplint diagnostics via vim.diagnostic
+│   │   ├── new.lua           New object wizard with system pickers
+│   │   ├── setup.lua         Connection setup assistant
+│   │   ├── statusline.lua    Lualine component + native statusline
+│   │   ├── transport.lua     Transport order management
+│   │   └── whereused.lua     Where-used list → quickfix
+│   └── integrations/
+│       └── completion.lua    ABAP snippet and keyword completion
+└── abaplint.json             Linting and naming convention config
 ```
 
 ---
 
-> **Nota:** Este proyecto es el resultado de una investigación exhaustiva sobre la viabilidad de desarrollar ABAP en Neovim, analizando los protocolos ADT REST, LSP, MCP y las herramientas open-source disponibles en la comunidad.
+## License
+
+MIT
