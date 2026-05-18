@@ -1,6 +1,6 @@
 REPORT ztest_abaplint.
 
-DATA lv_name TYPE string.
+data lv_name TYPE string.
 DATA lv_count TYPE i.
 
 lv_name = 'Mundo'.

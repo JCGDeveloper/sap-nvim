@@ -52,7 +52,7 @@ local KEYWORDS = {
 
 -- Bloques que incrementan indentación
 local BLOCK_START = {
-  "if", "elseif", "else", "do", "while", "loop", "at",
+  "if", "do", "while", "loop", "at",
   "method", "form", "module", "function", "class", "interface",
   "define", "try", "catch", "cleanup", "select", "when",
   "case", "provide",
