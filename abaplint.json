@@ -1,0 +1,136 @@
+{
+  "global": {
+    "files": [
+      "**/*.abap",
+      "**/*.cls",
+      "**/*.intf",
+      "**/*.prog",
+      "**/*.func",
+      "**/*.fugr",
+      "**/*.tabl"
+    ],
+    "exclude": [
+      "**/test/**",
+      "**/.git/**"
+    ],
+    "skipGeneratedGatewayClasses": true,
+    "skipGeneratedPersistentClasses": true,
+    "skipGeneratedFunctionGroups": true,
+    "useApackDependencies": false
+  },
+  "dependencies": [],
+  "rules": {
+    "avoid_use": {
+      "define": true,
+      "endregion": false,
+      "execSQL": false,
+      "kernelCall": false,
+      "communicationCall": false,
+      "statics": false
+    },
+    "begin_end_align": true,
+    "check_syntax": true,
+    "colon_missing_space": true,
+    "contains_tab": {
+      "exclude": []
+    },
+    "cyclomatic_complexity": {
+      "max": 20
+    },
+    "double_space": true,
+    "empty_line_in_statement": true,
+    "empty_statement": true,
+    "exporting": true,
+    "functional_writing": {
+      "exclude": []
+    },
+    "identical_form_names": true,
+    "if_in_loop_check": true,
+    "indentation": {
+      "ignoreExceptions": true,
+      "alignTryCatch": false
+    },
+    "keep_single_parameter_on_one_line": true,
+    "line_length": {
+      "length": 200
+    },
+    "local_class_naming": {
+      "local": "^LCL_",
+      "exception": "^LCX_",
+      "test": "^LTCL_",
+      "fixedUnderscore": false
+    },
+    "local_variable_names": {
+      "expectedData": "^L.",
+      "expectedFS": "^<L.>$",
+      "exclude": []
+    },
+    "method_length": {
+      "statements": 100,
+      "ignoreTestClasses": true,
+      "errorWhenEmpty": false
+    },
+    "names_no_dash": true,
+    "no_aliases": true,
+    "no_public_attributes": {
+      "ignoreTestClasses": true,
+      "allowReadOnly": true
+    },
+    "object_naming": {
+      "program": "^Z|^Y|^LZ|^LY",
+      "function_group": "^Z|^Y",
+      "class": "^ZC[LC]_|^YC[LC]_|^LCL_",
+      "exception_class": "^ZCX_|^YCX_|^LCX_",
+      "interface": "^ZIF_|^YIF_|^LIF_",
+      "form": "",
+      "method": "",
+      "table": "^Z|^Y",
+      "tableType": "^Z|^Y",
+      "dataElement": "^Z|^Y",
+      "structure": "^Z|^Y",
+      "view": "^Z|^Y",
+      "domainName": "^Z|^Y",
+      "searchHelp": "^Z|^Y",
+      "lockObject": "^E[ZY]",
+      "exclude": []
+    },
+    "parser_error": true,
+    "prefer_corresponding": {
+      "exclude": []
+    },
+    "prefer_inline": {
+      "exclude": []
+    },
+    "prefer_is_not": true,
+    "prefer_xsdbool": {
+      "exclude": []
+    },
+    "remove_partial_chained_statement": true,
+    "select_add_order_by": true,
+    "sequential_blank": {
+      "lines": 3
+    },
+    "short_case": {
+      "length": 1,
+      "exclude": []
+    },
+    "space_before_colon": true,
+    "space_before_dot": {
+      "ignoreBuilder": true
+    },
+    "start_at_tab": true,
+    "try_without_catch": true,
+    "uncaught_exception": true,
+    "unnecessary_return": true,
+    "unreachable_code": true,
+    "unused_types": {
+      "exclude": []
+    },
+    "unused_variables": {
+      "exclude": []
+    },
+    "use_line_exists": true,
+    "when_others_last": true,
+    "xml_consistency": true
+  }
+}
