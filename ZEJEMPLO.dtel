@@ -1,0 +1,10 @@
+*&---------------------------------------------------------------------*
+*& Objeto:   ZEJEMPLO
+*& Paquete:  $TMP
+*&---------------------------------------------------------------------*
+@EndUserText.label : 'Elemento de datos ZEJEMPLO'
+define data element ZEJEMPLO {
+  type char40;
+  length 40;
+  decimals 0;
+}
