@@ -13,6 +13,7 @@ function M.setup(opts)
     "sap-nvim.core.keymaps",
     "sap-nvim.core.setup",
     "sap-nvim.core.new",
+    "sap-nvim.core.debugger",
     "sap-nvim.adapters.terminal",
   }
 

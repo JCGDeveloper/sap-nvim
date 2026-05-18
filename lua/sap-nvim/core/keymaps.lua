@@ -73,7 +73,8 @@ function M.setup(opts)
 sap-nvim atajos:
   <leader>ah   Ayuda
   <leader>aF   Formatear (uppercase + indent)
-  <leader>at   Ejecutar tests unitarios (sapcli)
+  <leader>ad   Debuggear ABAP (vsp)
+  <leader>at   Ejecutar tests unitarios
   <leader>ak   Ejecutar ATC (quality check)
   <leader>asg  Abrir SAP GUI
   <leader>aso  Objeto en SAP GUI
@@ -125,6 +126,11 @@ sap-nvim atajos:
       vim.notify("sap-nvim: SAP GUI no encontrado", vim.log.levels.ERROR)
     end
   end, { desc = "ABAP: Abrir objeto en SAP GUI" })
+
+  -- Debug: Iniciar depurador ABAP interactivo (vsp)
+  vim.keymap.set("n", "<leader>ad", function()
+    require("sap-nvim.core.debugger").debug_current()
+  end, { desc = "ABAP: Debuggear" })
 end
 
 return M
