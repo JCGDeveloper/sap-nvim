@@ -76,10 +76,23 @@ sap-nvim atajos:
   <leader>ad   Debuggear ABAP (vsp)
   <leader>aT   Ejecutar tests unitarios
   <leader>aK   Ejecutar ATC (quality check)
+
+  OBJETOS:
+  <leader>an   Nuevo objeto ABAP (con pickers de paquete/transporte)
+  <leader>afs  Buscar objeto en el sistema SAP (:SapSearch)
+  <leader>afb  Explorar contenido de un paquete (:SapBrowse)
+
+  TRANSPORTES:
+  <leader>atl  Listar ordenes de transporte (:SapTransports)
+  <leader>atc  Crear orden de transporte (:SapTransportCreate)
+  <leader>atr  Liberar orden de transporte (:SapTransportRelease)
+
+  SISTEMA:
   <leader>asg  Abrir SAP GUI
   <leader>aso  Objeto en SAP GUI
-  <leader>asc  Configurar conexiones
-  <leader>an   Nuevo objeto ABAP
+  <leader>asc  Configurar conexiones SAP
+  <leader>asi  Info de conexion activa (:SapStatus)
+  <leader>aD   Diff buffer local vs SAP sistema (:SapDiff)
     ]], "info", { title = "sap-nvim" })
   end, { desc = "ABAP: Ayuda" })
 

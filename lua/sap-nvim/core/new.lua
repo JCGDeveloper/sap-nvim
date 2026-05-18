@@ -359,16 +359,135 @@ local function create_file(obj_type, obj_name, extra, pkg, trans_req)
   vim.cmd("edit " .. filename)
 end
 
+-- ─── Pickers de paquete y transporte desde el sistema ───────────────────────
+
+-- Extracts the transport ID from a sapcli cts list output line.
+-- SAP transport numbers follow the pattern: <SID>K<6digits> (e.g. DEVK900001)
+local function extract_transport_id(line)
+  return line:match("%u%u%uK%d+") or line:match("^(%S+)")
+end
+
+-- Ask for package: fetches from system when connected, falls back to input.
+-- callback(pkg_name)
+local function ask_package(callback)
+  local adt = require("sap-nvim.core.adt")
+
+  if not adt.is_configured() then
+    vim.ui.input({
+      prompt = "Paquete ($TMP para local): ",
+      default = "$TMP",
+    }, function(pkg)
+      callback((pkg ~= "" and pkg or "$TMP"):upper())
+    end)
+    return
+  end
+
+  vim.ui.input({
+    prompt = "Prefijo de paquete a buscar (ej: Z, ZMYPKG): ",
+    default = "Z",
+  }, function(prefix)
+    if not prefix then callback("$TMP") return end
+
+    if prefix:upper() == "$TMP" or prefix == "" then
+      callback("$TMP")
+      return
+    end
+
+    vim.notify("[sap-nvim] Buscando paquetes en el sistema...", vim.log.levels.INFO)
+    adt.fetch_packages(prefix:upper() .. "*", function(packages, err)
+      vim.schedule(function()
+        if not packages or #packages == 0 then
+          vim.notify("[sap-nvim] " .. (err or "Sin resultados") .. " — usando '" .. prefix:upper() .. "'", vim.log.levels.WARN)
+          callback(prefix:upper())
+          return
+        end
+
+        local items = { "$TMP  (local, sin transporte)" }
+        for _, p in ipairs(packages) do
+          table.insert(items, p)
+        end
+
+        vim.ui.select(items, {
+          prompt = "Seleccionar paquete:",
+          format_item = function(item) return item end,
+        }, function(choice)
+          if not choice then callback("$TMP") return end
+          if choice:match("^%$TMP") then callback("$TMP") return end
+          callback(choice:match("^(%S+)"))
+        end)
+      end)
+    end)
+  end)
+end
+
+-- Ask for transport order: fetches from system when connected, falls back to input.
+-- Only called when pkg ~= "$TMP".
+-- callback(transport_id)
+local function ask_transport(callback)
+  local adt = require("sap-nvim.core.adt")
+
+  if not adt.is_configured() then
+    vim.ui.input({
+      prompt = "Orden de transporte (vacío = ninguna): ",
+      default = "",
+    }, function(t)
+      callback(t and t:upper() or "")
+    end)
+    return
+  end
+
+  vim.notify("[sap-nvim] Obteniendo órdenes de transporte...", vim.log.levels.INFO)
+  adt.fetch_transport_orders(function(transports, err)
+    vim.schedule(function()
+      if not transports or #transports == 0 then
+        vim.notify("[sap-nvim] " .. (err or "Sin órdenes abiertas") .. " — ingresá manualmente", vim.log.levels.WARN)
+        vim.ui.input({
+          prompt = "Orden de transporte (vacío = ninguna): ",
+          default = "",
+        }, function(t)
+          callback(t and t:upper() or "")
+        end)
+        return
+      end
+
+      local items = { "[ Sin transporte ]", "[ Ingresar manualmente ]" }
+      for _, t in ipairs(transports) do
+        table.insert(items, t)
+      end
+
+      vim.ui.select(items, {
+        prompt = "Seleccionar orden de transporte:",
+        format_item = function(item) return item end,
+      }, function(choice)
+        if not choice or choice == "[ Sin transporte ]" then
+          callback("")
+          return
+        end
+        if choice == "[ Ingresar manualmente ]" then
+          vim.ui.input({
+            prompt = "Orden de transporte: ",
+            default = "",
+          }, function(t)
+            callback(t and t:upper() or "")
+          end)
+          return
+        end
+        local id = extract_transport_id(choice)
+        callback(id and id:upper() or "")
+      end)
+    end)
+  end)
+end
+
 -- ─── Picker principal ────────────────────────────────────────────────────────
 
 function M.new_object()
   vim.ui.select(get_picker_items(), {
-    prompt = "📦 sap-nvim: Nuevo objeto ABAP (Ctrl+N style):",
+    prompt = "sap-nvim: Nuevo objeto ABAP:",
     format_item = function(item) return item.label end,
   }, function(choice)
     if not choice then return end
 
-    -- Preguntar nombre del objeto
     vim.ui.input({
       prompt = "Nombre del objeto (" .. templates[choice.key].ext .. "): ",
       default = "Z",
@@ -376,35 +495,27 @@ function M.new_object()
       if not name or name == "" then return end
       name = name:upper()
 
-      -- Preguntar paquete (como en Eclipse)
-      vim.ui.input({
-        prompt = "Paquete (dejar vacío para $TMP / local): ",
-        default = "$TMP",
-      }, function(pkg)
-        if not pkg or pkg == "" then pkg = "$TMP" end
-        pkg = pkg:upper()
-
-        -- Preguntar orden de transporte (si aplica)
-        vim.ui.input({
-          prompt = "Orden de transporte (vacío si no aplica): ",
-          default = "",
-        }, function(trans_req)
-          if not trans_req then trans_req = "" end
-          trans_req = trans_req:upper()
-
-          -- Para function_module, preguntar también el function group
+      ask_package(function(pkg)
+        if pkg == "$TMP" then
+          -- $TMP never needs a transport order
           if choice.key == "function_module" then
-            vim.ui.input({
-              prompt = "Function Group: ",
-              default = "ZDEMO",
-            }, function(fgroup)
-              create_file(choice.key, name, fgroup:upper(), pkg, trans_req)
+            vim.ui.input({ prompt = "Function Group: ", default = "ZDEMO" }, function(fg)
+              create_file(choice.key, name, (fg or "ZDEMO"):upper(), pkg, "")
             end)
             return
           end
-
-          create_file(choice.key, name, nil, pkg, trans_req)
-        end)
+          create_file(choice.key, name, nil, pkg, "")
+        else
+          ask_transport(function(trans_req)
+            if choice.key == "function_module" then
+              vim.ui.input({ prompt = "Function Group: ", default = "ZDEMO" }, function(fg)
+                create_file(choice.key, name, (fg or "ZDEMO"):upper(), pkg, trans_req)
+              end)
+              return
+            end
+            create_file(choice.key, name, nil, pkg, trans_req)
+          end)
+        end
       end)
     end)
   end)

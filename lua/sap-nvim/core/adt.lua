@@ -11,6 +11,132 @@ function M.setup(opts)
   M.connections = opts.connections or {}
 end
 
+-- Read current sapcli context from config file
+function M.get_current_context()
+  local config_path = vim.fn.expand("~/.sapcli/config.yml")
+  local f = io.open(config_path, "r")
+  if not f then return nil end
+  local content = f:read("*a")
+  f:close()
+
+  local current = content:match("current%-context:%s*([%w_%-]+)")
+  if not current then return nil end
+
+  local in_ctx = false
+  local user = nil
+  for line in content:gmatch("[^\r\n]+") do
+    if line:match("^" .. vim.pesc(current) .. ":%s*$") then
+      in_ctx = true
+    elseif in_ctx and not line:match("^%s") then
+      break
+    elseif in_ctx then
+      local u = line:match("^%s+user:%s*(.+)$")
+      if u then user = vim.trim(u) end
+    end
+  end
+
+  return { name = current, user = user }
+end
+
+-- Returns true if sapcli has a configured current-context
+function M.is_configured()
+  return M.get_current_context() ~= nil
+end
+
+-- Fetch packages matching a prefix pattern, e.g. "Z*" (async)
+-- callback(packages, err)
+function M.fetch_packages(pattern, callback)
+  pattern = pattern or "Z*"
+  local packages = {}
+  local stderr = {}
+
+  vim.fn.jobstart({ "sapcli", "package", "list", pattern }, {
+    on_stdout = function(_, data)
+      for _, line in ipairs(data) do
+        local pkg = vim.trim(line)
+        if pkg ~= "" then table.insert(packages, pkg) end
+      end
+    end,
+    on_stderr = function(_, data)
+      for _, line in ipairs(data) do
+        if vim.trim(line) ~= "" then table.insert(stderr, line) end
+      end
+    end,
+    on_exit = function(_, code)
+      if code == 0 and #packages > 0 then
+        callback(packages, nil)
+      else
+        local err = #stderr > 0 and stderr[1] or "No packages found for: " .. pattern
+        callback(nil, err)
+      end
+    end,
+  })
+end
+
+-- Fetch open transport orders (async)
+-- callback(transports, err)  — each entry is the raw sapcli output line
+function M.fetch_transport_orders(callback)
+  local ctx = M.get_current_context()
+  local args = { "sapcli", "cts", "list", "transport" }
+  if ctx and ctx.user and ctx.user ~= "" then
+    vim.list_extend(args, { "--owner", ctx.user:upper() })
+  end
+
+  local transports = {}
+  local stderr = {}
+
+  vim.fn.jobstart(args, {
+    on_stdout = function(_, data)
+      for _, line in ipairs(data) do
+        local t = vim.trim(line)
+        if t ~= "" then table.insert(transports, t) end
+      end
+    end,
+    on_stderr = function(_, data)
+      for _, line in ipairs(data) do
+        if vim.trim(line) ~= "" then table.insert(stderr, line) end
+      end
+    end,
+    on_exit = function(_, code)
+      if code == 0 then
+        callback(transports, nil)
+      else
+        local err = #stderr > 0 and stderr[1] or "Could not fetch transport orders"
+        callback(nil, err)
+      end
+    end,
+  })
+end
+
+-- Search ABAP objects by name pattern (async)
+-- callback(results, err)
+function M.fetch_objects(query, callback)
+  local results = {}
+  local stderr = {}
+
+  vim.fn.jobstart({ "sapcli", "abap", "search", query }, {
+    on_stdout = function(_, data)
+      for _, line in ipairs(data) do
+        local t = vim.trim(line)
+        if t ~= "" then table.insert(results, t) end
+      end
+    end,
+    on_stderr = function(_, data)
+      for _, line in ipairs(data) do
+        if vim.trim(line) ~= "" then table.insert(stderr, line) end
+      end
+    end,
+    on_exit = function(_, code)
+      if code == 0 then
+        callback(results, nil)
+      else
+        local err = #stderr > 0 and stderr[1] or "Search failed for: " .. query
+        callback(nil, err)
+      end
+    end,
+  })
+end
+
 -- Seleccionar conexión activa
 function M.select_connection(name)
   if M.connections[name] then

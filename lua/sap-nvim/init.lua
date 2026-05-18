@@ -14,6 +14,10 @@ function M.setup(opts)
     "sap-nvim.core.setup",
     "sap-nvim.core.new",
     "sap-nvim.core.debugger",
+    "sap-nvim.core.transport",
+    "sap-nvim.core.browser",
+    "sap-nvim.core.statusline",
+    "sap-nvim.core.diff",
     "sap-nvim.integrations.completion",
     "sap-nvim.adapters.terminal",
   }
