@@ -173,21 +173,51 @@ end
 -- Ejecutar ATC (ABAP Test Cockpit)
 function M.run_atc()
   local object_name = vim.fn.expand("%:t:r")
-  if object_name == "" then
-    return
-  end
+  if object_name == "" then return end
 
-  vim.cmd("!sapcli atc run object " .. object_name)
+  vim.notify("[sap-nvim] Ejecutando ATC sobre " .. object_name .. "...")
+  local lines = {}
+  vim.fn.jobstart({ "sapcli", "atc", "run", "object", object_name }, {
+    on_stdout = function(_, data)
+      for _, l in ipairs(data) do
+        if l ~= "" then table.insert(lines, l) end
+      end
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        if #lines > 0 then
+          vim.notify("[sap-nvim] ATC:\n" .. table.concat(lines, "\n"))
+        end
+        local lvl = code == 0 and vim.log.levels.INFO or vim.log.levels.WARN
+        vim.notify("[sap-nvim] ATC " .. (code == 0 and "OK" or "encontro issues"), lvl)
+      end)
+    end,
+  })
 end
 
 -- Ejecutar pruebas unitarias
 function M.run_aunit()
   local object_name = vim.fn.expand("%:t:r")
-  if object_name == "" then
-    return
-  end
+  if object_name == "" then return end
 
-  vim.cmd("!sapcli aunit run class " .. object_name .. " --output junit4")
+  vim.notify("[sap-nvim] Ejecutando AUnit sobre " .. object_name .. "...")
+  local lines = {}
+  vim.fn.jobstart({ "sapcli", "aunit", "run", "class", object_name, "--output", "junit4" }, {
+    on_stdout = function(_, data)
+      for _, l in ipairs(data) do
+        if l ~= "" then table.insert(lines, l) end
+      end
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        if #lines > 0 then
+          vim.notify("[sap-nvim] AUnit:\n" .. table.concat(lines, "\n"))
+        end
+        local lvl = code == 0 and vim.log.levels.INFO or vim.log.levels.WARN
+        vim.notify("[sap-nvim] AUnit " .. (code == 0 and "OK" or "fallaron"), lvl)
+      end)
+    end,
+  })
 end
 
 -- Buscar objetos en SAP
@@ -245,28 +275,17 @@ function M.open_gui(connection_name)
     conn = M.current
   end
 
+  vim.fn.jobstart({ "open", app_path })
   if object_name ~= "" and object_name ~= "[No Name]" and transaction then
-    -- Opción 2: Abrir SAP GUI con el objeto específico
-    -- Usamos sapgui URL scheme si está disponible
-    local sid = conn and conn.system_id or ""
-    local cmd = string.format(
-      "open '%s' --args -saprouter= -conn=%s -object=%s -transaction=%s",
-      app_path, sid, object_name, transaction
-    )
-    vim.fn.jobstart({ "open", app_path })
-    vim.notify(string.format(
-      "sap-nvim: Abriendo %s en %s...",
-      object_name, transaction
-    ))
+    vim.notify(string.format("[sap-nvim] SAP GUI abierto. Buscá %s en %s.", object_name, transaction))
   else
-    -- Opción 1: Solo abrir SAP GUI
-    vim.fn.jobstart({ "open", app_path })
-    vim.notify("sap-nvim: Abriendo SAP GUI...")
+    vim.notify("[sap-nvim] SAP GUI abierto.")
   end
 end
 
 -- Mapear extensión de archivo a transacción SAP
 function M._get_transaction_for_extension(ext)
+  if not ext or ext == "" then return nil end
   local map = {
     abap = "SE80",          -- Object Navigator
     cls = "SE24",           -- Class Builder

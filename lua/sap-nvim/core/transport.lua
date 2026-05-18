@@ -108,10 +108,10 @@ function M.release_transport()
         local id = extract_id(choice)
         if not id then return end
 
-        vim.ui.select({ "Si, liberar " .. id, "Cancelar" }, {
-          prompt = "Confirmar liberacion:",
+        vim.ui.select({ "Cancelar", "Si, liberar " .. id }, {
+          prompt = "Confirmar liberacion (irreversible):",
         }, function(confirm)
-          if not confirm or confirm:match("Cancelar") then return end
+          if not confirm or not confirm:match("^Si") then return end
 
           notify("Liberando " .. id .. "...")
           vim.fn.jobstart({ "sapcli", "cts", "release", id }, {

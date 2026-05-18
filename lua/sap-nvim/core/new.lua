@@ -79,20 +79,18 @@ INTERFACE %s PUBLIC.
 ENDINTERFACE.
 ]], name)
     end,
-    sapcli = function(name) return { "sapcli", "test_class",
-    "interface", "create", name } end,
+    sapcli = function(name) return { "sapcli", "interface", "create", name } end,
   },
   include = {
     name = "Include ABAP",
     ext = "abap",
     desc = "Include de programa",
     template = function(name)
-      return string.format([[
-*&---------------------------------------------------------------------*
-*& Include %s
-*&---------------------------------------------------------------------*
-
-"], name)
+      return string.format(
+        "*&---------------------------------------------------------------------*\n"
+        .. "*& Include %s\n"
+        .. "*&---------------------------------------------------------------------*\n\n",
+        name)
     end,
     sapcli = function(name) return { "sapcli", "include", "create", name } end,
   },
@@ -320,8 +318,8 @@ local function create_file(obj_type, obj_name, extra, pkg, trans_req)
   local f = io.open(filename, "r")
   if f then
     f:close()
-    vim.notify("[sap-nvim] ⚠️ '" .. filename .. "' ya existe", vim.log.levels.WARN)
-    vim.cmd("edit " .. filename)
+    vim.notify("[sap-nvim] '" .. filename .. "' ya existe", vim.log.levels.WARN)
+    vim.cmd("edit " .. vim.fn.fnameescape(filename))
     return
   end
 
@@ -356,7 +354,7 @@ local function create_file(obj_type, obj_name, extra, pkg, trans_req)
     msg = msg .. " | $TMP (local)"
   end
   vim.notify("[sap-nvim] " .. msg)
-  vim.cmd("edit " .. filename)
+  vim.cmd("edit " .. vim.fn.fnameescape(filename))
 end
 
 -- ─── Pickers de paquete y transporte desde el sistema ───────────────────────

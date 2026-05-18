@@ -11,11 +11,13 @@ end
 
 -- Maps file extension → sapcli read command args builder
 local READERS = {
-  abap = function(name) return { "sapcli", "program", "read", name } end,
-  cls  = function(name) return { "sapcli", "class",   "read", name } end,
+  abap = function(name) return { "sapcli", "program",   "read", name } end,
+  prog = function(name) return { "sapcli", "program",   "read", name } end,
+  cls  = function(name) return { "sapcli", "class",     "read", name } end,
   intf = function(name) return { "sapcli", "interface", "read", name } end,
-  prog = function(name) return { "sapcli", "program", "read", name } end,
 }
+-- Stable sorted list for display
+local SUPPORTED_EXTS = { "abap", "cls", "intf", "prog" }
 
 local function open_diff(obj_name, system_lines)
   local cur_win  = vim.api.nvim_get_current_win()
@@ -28,8 +30,7 @@ local function open_diff(obj_name, system_lines)
   vim.bo[sys_buf].readonly    = true
   vim.bo[sys_buf].modifiable  = false
   vim.bo[sys_buf].bufhidden   = "wipe"
-  -- Naming the buffer triggers a readable label in the diff header
-  pcall(vim.api.nvim_buf_set_name, sys_buf, obj_name .. " [SAP — sistema]")
+  pcall(vim.api.nvim_buf_set_name, sys_buf, obj_name .. " [SAP sistema]")
 
   -- Open a vertical split with the system buffer on the right
   vim.cmd("vsplit")
@@ -40,17 +41,26 @@ local function open_diff(obj_name, system_lines)
   vim.api.nvim_win_call(cur_win, function() vim.cmd("diffthis") end)
   vim.api.nvim_win_call(sys_win, function() vim.cmd("diffthis") end)
 
-  -- 'q' closes the diff and the scratch buffer
-  vim.keymap.set("n", "q", function()
-    vim.cmd("diffoff!")
+  local function close_diff()
+    -- Turn off diff in both windows before closing
+    pcall(vim.api.nvim_win_call, cur_win, function() vim.cmd("diffoff") end)
+    pcall(vim.api.nvim_win_call, sys_win, function() vim.cmd("diffoff") end)
     pcall(vim.api.nvim_buf_delete, sys_buf, { force = true })
-  end, { buffer = sys_buf, nowait = true, desc = "Cerrar diff SAP" })
+  end
 
-  -- Navigate diff hunks with standard ]c / [c — no extra mapping needed.
-  notify(
-    "Diff abierto: izquierda = local · derecha = sistema SAP. "
-      .. "]c / [c para navegar. 'q' para cerrar."
-  )
+  -- 'q' on the system buffer closes the diff
+  vim.keymap.set("n", "q", close_diff, { buffer = sys_buf, nowait = true, desc = "Cerrar diff SAP" })
+
+  -- Also clean up if the scratch buffer is deleted any other way
+  vim.api.nvim_create_autocmd("BufDelete", {
+    buffer = sys_buf,
+    once = true,
+    callback = function()
+      pcall(vim.api.nvim_win_call, cur_win, function() vim.cmd("diffoff") end)
+    end,
+  })
+
+  notify("]c / [c para navegar diferencias · 'q' para cerrar el diff")
 end
 
 function M.diff_with_system()
@@ -70,8 +80,8 @@ function M.diff_with_system()
 
   local reader = READERS[ext]
   if not reader then
-    notify("Diff no soportado para archivos ." .. ext .. ". Soportados: " ..
-      table.concat(vim.tbl_keys(READERS), ", "), vim.log.levels.WARN)
+    notify("Diff no soportado para ." .. ext .. ". Soportados: " ..
+      table.concat(SUPPORTED_EXTS, ", "), vim.log.levels.WARN)
     return
   end
 
@@ -82,7 +92,8 @@ function M.diff_with_system()
   vim.fn.jobstart(reader(obj_name), {
     on_stdout = function(_, data)
       for _, line in ipairs(data) do
-        table.insert(lines, line)
+        -- jobstart always appends a trailing "" sentinel — skip it
+        if line ~= "" then table.insert(lines, line) end
       end
     end,
     on_stderr = function(_, data)

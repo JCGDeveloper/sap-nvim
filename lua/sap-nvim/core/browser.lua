@@ -34,7 +34,9 @@ local function open_or_checkout(obj_name)
         on_exit = function(_, code)
           vim.schedule(function()
             if code == 0 then
-              notify("Checkout OK: " .. obj_name)
+              notify("Checkout OK: " .. obj_name .. ". Abriendo...")
+              -- Try to open the downloaded file
+              open_or_checkout(obj_name)
             else
               notify("Checkout fallido para: " .. obj_name, vim.log.levels.ERROR)
             end
@@ -66,8 +68,8 @@ function M.search_objects(query)
           format_item = function(item) return item end,
         }, function(choice)
           if not choice then return end
-          local obj_name = choice:match("^(%S+)")
-          if obj_name then open_or_checkout(obj_name) end
+          local obj = choice:match("^(%S+)")
+          if obj and obj ~= "" then open_or_checkout(obj) end
         end)
       end)
     end)
@@ -122,8 +124,8 @@ function M.browse_package(pkg_name)
             format_item = function(item) return item end,
           }, function(choice)
             if not choice then return end
-            local obj_name = choice:match("^(%S+)")
-            if obj_name then open_or_checkout(obj_name) end
+            local obj = choice:match("^(%S+)")
+            if obj and obj ~= "" then open_or_checkout(obj) end
           end)
         end)
       end,

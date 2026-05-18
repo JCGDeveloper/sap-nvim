@@ -14,25 +14,25 @@ function M.setup(opts)
       return
     end
     vim.cmd("write")
-    vim.notify("sap-nvim: Ejecutando tests de " .. obj .. "...")
-    vim.fn.jobstart({
-      "/Users/jcgomez/.sap-nvim-venv/bin/sapcli", "aunit", "run", "class", obj
-    }, {
+    vim.notify("[sap-nvim] Ejecutando tests de " .. obj .. "...")
+    local aunit_lines = {}
+    vim.fn.jobstart({ "sapcli", "aunit", "run", "class", obj }, {
       on_stdout = function(_, data)
-        if data then
-          for _, line in ipairs(data) do
-            if line ~= "" then
-              vim.notify(line)
-            end
-          end
+        for _, line in ipairs(data) do
+          if line ~= "" then table.insert(aunit_lines, line) end
         end
       end,
       on_exit = function(_, code)
-        if code == 0 then
-          vim.notify("sap-nvim: Tests OK ✅", vim.log.levels.INFO)
-        else
-          vim.notify("sap-nvim: Tests fallaron (code " .. code .. ")", vim.log.levels.WARN)
-        end
+        vim.schedule(function()
+          if #aunit_lines > 0 then
+            vim.notify("[sap-nvim] AUnit:\n" .. table.concat(aunit_lines, "\n"))
+          end
+          if code == 0 then
+            vim.notify("[sap-nvim] Tests OK", vim.log.levels.INFO)
+          else
+            vim.notify("[sap-nvim] Tests fallaron (code " .. code .. ")", vim.log.levels.WARN)
+          end
+        end)
       end,
     })
   end, { desc = "ABAP: Ejecutar tests unitarios" })
@@ -44,25 +44,25 @@ function M.setup(opts)
       vim.notify("sap-nvim: Guardá el archivo primero", vim.log.levels.WARN)
       return
     end
-    vim.notify("sap-nvim: Ejecutando ATC sobre " .. obj .. "...")
-    vim.fn.jobstart({
-      "/Users/jcgomez/.sap-nvim-venv/bin/sapcli", "atc", "run", "object", obj
-    }, {
+    vim.notify("[sap-nvim] Ejecutando ATC sobre " .. obj .. "...")
+    local atc_lines = {}
+    vim.fn.jobstart({ "sapcli", "atc", "run", "object", obj }, {
       on_stdout = function(_, data)
-        if data then
-          for _, line in ipairs(data) do
-            if line ~= "" then
-              vim.notify(line)
-            end
-          end
+        for _, line in ipairs(data) do
+          if line ~= "" then table.insert(atc_lines, line) end
         end
       end,
       on_exit = function(_, code)
-        if code == 0 then
-          vim.notify("sap-nvim: ATC OK ✅", vim.log.levels.INFO)
-        else
-          vim.notify("sap-nvim: ATC encontró issues", vim.log.levels.WARN)
-        end
+        vim.schedule(function()
+          if #atc_lines > 0 then
+            vim.notify("[sap-nvim] ATC:\n" .. table.concat(atc_lines, "\n"))
+          end
+          if code == 0 then
+            vim.notify("[sap-nvim] ATC OK", vim.log.levels.INFO)
+          else
+            vim.notify("[sap-nvim] ATC encontro issues", vim.log.levels.WARN)
+          end
+        end)
       end,
     })
   end, { desc = "ABAP: Ejecutar ATC" })
@@ -93,7 +93,7 @@ sap-nvim atajos:
   <leader>asc  Configurar conexiones SAP
   <leader>asi  Info de conexion activa (:SapStatus)
   <leader>aD   Diff buffer local vs SAP sistema (:SapDiff)
-    ]], "info", { title = "sap-nvim" })
+    ]], vim.log.levels.INFO)
   end, { desc = "ABAP: Ayuda" })
 
   -- Formatear ABAP con formateador nativo (uppercase + indentación)

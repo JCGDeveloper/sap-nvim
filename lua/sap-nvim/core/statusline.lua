@@ -7,6 +7,7 @@ local M = {}
 
 local _cache = nil         -- { sysid, client, user } or nil
 local _last_check = 0      -- os.time() of last parse
+local _has_lualine = nil   -- cached lualine presence check
 
 local REFRESH_INTERVAL = 30  -- seconds between config re-reads
 
@@ -95,10 +96,12 @@ local function apply_native_statusline()
   if vim.bo.filetype ~= "abap" then return end
   local ctx = get_cached()
   if not ctx then return end
-  local sap_part = " [SAP: " .. ctx.sysid .. "/" .. ctx.client .. "/" .. ctx.user .. "]"
-  -- Only set if lualine is not active
-  local has_lualine = pcall(require, "lualine")
-  if not has_lualine then
+  -- Cache the lualine check — only compute once per session
+  if _has_lualine == nil then
+    _has_lualine = pcall(require, "lualine")
+  end
+  if not _has_lualine then
+    local sap_part = " [SAP: " .. ctx.sysid .. "/" .. ctx.client .. "/" .. ctx.user .. "]"
     vim.opt_local.statusline = "%f %m%=%y" .. sap_part .. " %l:%c "
   end
 end
@@ -107,14 +110,7 @@ function M.setup()
   -- Prime the cache on startup
   M.refresh()
 
-  -- Show connection on startup if configured
-  local ctx = get_cached()
-  if ctx then
-    vim.notify(
-      "[sap-nvim] Conectado a " .. ctx.sysid .. "/" .. ctx.client .. " como " .. ctx.user,
-      vim.log.levels.INFO
-    )
-  end
+  -- Connection info is visible in the statusline — no startup notification needed
 
   -- Update native statusline when entering ABAP buffers
   vim.api.nvim_create_autocmd("BufEnter", {
