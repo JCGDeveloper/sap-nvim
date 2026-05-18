@@ -73,26 +73,31 @@ function M.setup(opts)
 sap-nvim atajos:
   <leader>ah   Ayuda
   <leader>aF   Formatear (uppercase + indent)
-  <leader>ad   Debuggear ABAP (vsp)
-  <leader>aT   Ejecutar tests unitarios
-  <leader>aK   Ejecutar ATC (quality check)
+  <leader>aT   Tests unitarios (AUnit)
+  <leader>aK   Quality check (ATC)
+  <leader>ad   Debuggear (vsp)
 
   OBJETOS:
-  <leader>an   Nuevo objeto ABAP (con pickers de paquete/transporte)
-  <leader>afs  Buscar objeto en el sistema SAP (:SapSearch)
-  <leader>afb  Explorar contenido de un paquete (:SapBrowse)
+  <leader>aa   Activar objeto → errores en quickfix, jump a linea
+  <leader>an   Nuevo objeto ABAP (pickers de paquete y transporte)
+  <leader>aw   Where-used list → quickfix
+  <leader>aD   Diff local vs sistema SAP (:SapDiff)
+
+  PAQUETES / SISTEMA:
+  <leader>afs  Buscar objeto en sistema (:SapSearch)
+  <leader>afb  Explorar paquete (:SapBrowse)
+  <leader>ack  Checkout paquete completo (:SapCheckout)
 
   TRANSPORTES:
-  <leader>atl  Listar ordenes de transporte (:SapTransports)
-  <leader>atc  Crear orden de transporte (:SapTransportCreate)
-  <leader>atr  Liberar orden de transporte (:SapTransportRelease)
+  <leader>atl  Listar ordenes (:SapTransports)
+  <leader>atc  Crear orden (:SapTransportCreate)
+  <leader>atr  Liberar orden (:SapTransportRelease)
 
-  SISTEMA:
+  CONEXION:
   <leader>asg  Abrir SAP GUI
   <leader>aso  Objeto en SAP GUI
-  <leader>asc  Configurar conexiones SAP
-  <leader>asi  Info de conexion activa (:SapStatus)
-  <leader>aD   Diff buffer local vs SAP sistema (:SapDiff)
+  <leader>asc  Configurar conexiones (:SapSetup)
+  <leader>asi  Info conexion activa (:SapStatus)
     ]], vim.log.levels.INFO)
   end, { desc = "ABAP: Ayuda" })
 
@@ -139,6 +144,21 @@ sap-nvim atajos:
       vim.notify("sap-nvim: SAP GUI no encontrado", vim.log.levels.ERROR)
     end
   end, { desc = "ABAP: Abrir objeto en SAP GUI" })
+
+  -- Activar objeto ABAP (con jump-to-error en quickfix)
+  vim.keymap.set("n", "<leader>aa", function()
+    require("sap-nvim.core.adt").activate_current()
+  end, { desc = "ABAP: Activar objeto (jump-to-error)" })
+
+  -- Where-used list
+  vim.keymap.set("n", "<leader>aw", function()
+    require("sap-nvim.core.whereused").whereused()
+  end, { desc = "ABAP: Where-used list" })
+
+  -- Checkout de paquete completo
+  vim.keymap.set("n", "<leader>ack", function()
+    require("sap-nvim.core.checkout").checkout_package()
+  end, { desc = "ABAP: Checkout paquete SAP" })
 
   -- Debug: Iniciar depurador ABAP interactivo (vsp)
   vim.keymap.set("n", "<leader>ad", function()

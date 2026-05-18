@@ -113,4 +113,76 @@ Transformar Neovim en el entorno de desarrollo ABAP más potente del ecosistema 
 
 ---
 
+## ⌨️ Keymaps
+
+| Keymap | Comando | Descripción |
+|--------|---------|-------------|
+| `<leader>aa` | — | Activar objeto ABAP → errores van al quickfix con jump automático |
+| `<leader>an` | `:SapNew` | Nuevo objeto ABAP con pickers de paquete y transporte desde el sistema |
+| `<leader>aw` | `:SapWhereUsed` | Where-used list del objeto actual → quickfix |
+| `<leader>aD` | `:SapDiff` | Diff buffer local vs versión activa en el sistema |
+| `<leader>aF` | — | Formatear ABAP (uppercase + indentación) |
+| `<leader>aT` | — | Ejecutar tests AUnit |
+| `<leader>aK` | — | Ejecutar ATC (quality check) |
+| `<leader>afs` | `:SapSearch` | Buscar objetos en el sistema SAP |
+| `<leader>afb` | `:SapBrowse` | Explorar contenido de un paquete |
+| `<leader>ack` | `:SapCheckout` | Descargar paquete SAP completo al filesystem local |
+| `<leader>atl` | `:SapTransports` | Listar órdenes de transporte abiertas |
+| `<leader>atc` | `:SapTransportCreate` | Crear orden de transporte |
+| `<leader>atr` | `:SapTransportRelease` | Liberar orden de transporte |
+| `<leader>asi` | `:SapStatus` | Info de la conexión activa |
+| `<leader>asc` | `:SapSetup` | Asistente de configuración de conexiones SAP |
+| `<leader>ah` | — | Ayuda completa |
+
+## 📊 Statusline — Integración con lualine
+
+El plugin expone un componente lualine listo para usar. Muestra la conexión SAP activa
+(`SID · cliente · usuario`) solo cuando el buffer activo es un archivo ABAP.
+
+### Configuración
+
+```lua
+require('lualine').setup({
+  sections = {
+    lualine_x = {
+      -- Agrega el componente SAP antes del filetype
+      require('sap-nvim.core.statusline').component,
+      'encoding',
+      'fileformat',
+      'filetype',
+    },
+  },
+})
+```
+
+El componente ya incluye:
+- **Condición**: solo visible en archivos `.abap`, `.cls`, `.intf`, etc.
+- **Color**: naranja (`#e8a87c`) en negrita para distinguirlo del resto
+- **Cache**: relee `~/.sapcli/config.yml` cada 30 segundos, no en cada redraw
+
+### Sin lualine
+
+Si no usás lualine, el plugin setea automáticamente `vim.opt_local.statusline` en
+cada buffer ABAP con el formato:
+
+```
+nombre.abap [modified]       ABAP  [SAP: DEV/100/JCGOMEZ]  42:8
+```
+
+También podés consultar `vim.g.sap_nvim_status` desde cualquier plugin de statusline
+que soporte expresiones Lua:
+
+```lua
+-- En cualquier statusline personalizada:
+local sap = vim.g.sap_nvim_status or ""
+```
+
+### Comando
+
+```
+:SapStatus   →  [sap-nvim] Sistema: DEV  Cliente: 100  Usuario: JCGOMEZ  Contexto: desarrollo
+```
+
+---
+
 > **Nota:** Este proyecto es el resultado de una investigación exhaustiva sobre la viabilidad de desarrollar ABAP en Neovim, analizando los protocolos ADT REST, LSP, MCP y las herramientas open-source disponibles en la comunidad.

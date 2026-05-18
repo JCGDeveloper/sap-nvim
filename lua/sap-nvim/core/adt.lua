@@ -147,25 +147,106 @@ function M.select_connection(name)
   end
 end
 
--- Activar objeto ABAP actual vía sapcli
-function M.activate_current()
-  local bufnr = vim.api.nvim_get_current_buf()
-  local filename = vim.api.nvim_buf_get_name(bufnr)
-  local object_name = vim.fn.expand("%:t:r")
+-- Parse sapcli activation error output into quickfix entries.
+-- Tries multiple line-number formats from SAP ADT responses.
+function M._parse_activation_errors(lines, filename)
+  local qf = {}
+  for _, line in ipairs(lines) do
+    local lnum, text
 
-  if object_name == "" then
-    vim.notify("sap-nvim: No hay un objeto ABAP para activar", vim.log.levels.WARN)
+    -- "Line 42: ..." / "line 42: ..."
+    lnum, text = line:match("[Ll]ine%s+(%d+):%s*(.*)")
+    if not lnum then
+      -- "Row 42: ..." / "row 42: ..."
+      lnum, text = line:match("[Rr]ow%s+(%d+):%s*(.*)")
+    end
+    if not lnum then
+      -- "  42: error message" (indent + number + colon)
+      lnum, text = line:match("^%s*(%d+):%s+(.*)")
+    end
+    if not lnum then
+      -- "(42,3) message" or "(42) message"
+      lnum, text = line:match("%((%d+)[,%d]*)%)%s*(.*)")
+    end
+    if not lnum then
+      -- "at row 42" anywhere
+      lnum = line:match("at%s+[Rr]ow%s+(%d+)")
+      if lnum then text = line end
+    end
+
+    if lnum then
+      table.insert(qf, {
+        filename = filename,
+        lnum     = tonumber(lnum),
+        col      = 1,
+        text     = vim.trim(text or line),
+        type     = "E",
+      })
+    end
+  end
+  return qf
+end
+
+-- Activate the current ABAP object. On success clears quickfix.
+-- On failure parses error lines and jumps to the first one.
+function M.activate_current()
+  local bufnr      = vim.api.nvim_get_current_buf()
+  local filename   = vim.api.nvim_buf_get_name(bufnr)
+  local obj_name   = vim.fn.expand("%:t:r")
+
+  if obj_name == "" then
+    vim.notify("[sap-nvim] No hay un objeto ABAP para activar", vim.log.levels.WARN)
     return
   end
 
-  vim.cmd("write")
-  vim.fn.jobstart({ "sapcli", "activate", object_name }, {
-    on_exit = function(_, exit_code)
-      if exit_code == 0 then
-        vim.notify(("sap-nvim: %s activado correctamente"):format(object_name))
-      else
-        vim.notify(("sap-nvim: Error activando %s"):format(object_name), vim.log.levels.ERROR)
+  pcall(vim.cmd, "write")
+  vim.notify("[sap-nvim] Activando " .. obj_name .. "...")
+
+  local out, err = {}, {}
+
+  vim.fn.jobstart({ "sapcli", "activate", obj_name }, {
+    on_stdout = function(_, data)
+      for _, l in ipairs(data) do
+        if l ~= "" then table.insert(out, l) end
       end
+    end,
+    on_stderr = function(_, data)
+      for _, l in ipairs(data) do
+        if l ~= "" then table.insert(err, l) end
+      end
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        if code == 0 then
+          vim.notify("[sap-nvim] " .. obj_name .. " activado correctamente")
+          -- Clear stale quickfix from a previous failed activation
+          vim.fn.setqflist({}, "r", { title = "Activation OK: " .. obj_name })
+          return
+        end
+
+        -- Merge stdout + stderr and try to parse line numbers
+        local all = {}
+        for _, l in ipairs(out) do table.insert(all, l) end
+        for _, l in ipairs(err) do table.insert(all, l) end
+
+        local qf = M._parse_activation_errors(all, filename)
+
+        if #qf > 0 then
+          vim.fn.setqflist({}, "r")
+          vim.fn.setqflist(qf, "r")
+          vim.fn.setqflist({}, "a", { title = "Activation errors: " .. obj_name })
+          vim.cmd("copen")
+          vim.cmd("cfirst")
+          vim.notify(
+            "[sap-nvim] " .. #qf .. " error(es) en " .. obj_name .. ". Revisar quickfix.",
+            vim.log.levels.ERROR
+          )
+        else
+          -- Could not parse line numbers — show raw first error
+          local raw = #all > 0 and all[1] or ("Error activando " .. obj_name)
+          vim.notify("[sap-nvim] " .. raw, vim.log.levels.ERROR)
+        end
+      end)
     end,
   })
 end
