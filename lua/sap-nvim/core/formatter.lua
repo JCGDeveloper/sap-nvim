@@ -6,7 +6,13 @@
 local M = {}
 
 -- Keywords ABAP que deben ir en mayúsculas
+-- Ordenadas por longitud descendente para matching prioritario
 local KEYWORDS = {
+  -- Multi-word keywords (más específicos primero)
+  "start-of-selection", "end-of-selection",
+  "load-of-program", "line-selection", "user-command",
+  "top-of-page", "end-of-page", "pf-status",
+  "field-symbols", "select-options",
   -- Declaración
   "report", "program", "function", "endfunction", "form", "endform",
   "module", "endmodule", "method", "endmethod", "class", "endclass",
@@ -14,14 +20,14 @@ local KEYWORDS = {
   -- Control de flujo
   "if", "endif", "else", "elseif", "when", "case", "endcase",
   "do", "endo", "while", "endwhile", "loop", "endloop",
-  "try", "endtry", "catch", "cleanup", "catch", "resumable",
+  "try", "endtry", "catch", "cleanup", "resumable",
   "select", "endselect", "at", "endat", "provide", "endprovide",
   -- Operadores
   "and", "or", "not", "eq", "ne", "lt", "le", "gt", "ge",
   "is", "in", "between", "like", "covers",
   -- Comandos comunes
-  "data", "types", "constants", "field-symbols", "parameters",
-  "tables", "select-options", "ranges",
+  "data", "types", "constants",
+  "parameters", "tables", "ranges",
   "type", "like", "value", "ref", "to", "for", "importing",
   "exporting", "changing", "returning", "raising",
   "write", "read", "move", "append", "insert", "delete", "modify",
@@ -43,11 +49,9 @@ local KEYWORDS = {
   -- OO
   "public", "protected", "private", "section",
   "abstract", "final", "read-only", "redefinition",
-  "super", "me", "friend", "local", "global",
-  "new", "export", "import", "deferred", "load-of-program",
-  "init", "start-of-selection", "end-of-selection",
-  "at", "user-command", "line-selection", "pf-status",
-  "top-of-page", "end-of-page",
+  "super", "friend", "local", "global",
+  "new", "export", "import", "deferred",
+  "init",
 }
 
 -- Bloques que incrementan indentación
@@ -87,13 +91,40 @@ for _, kw in ipairs(BLOCK_END) do
   block_end_set[kw:lower()] = true
 end
 
+-- Autocompletar palabras ABAP por prefijo único
+-- Si "START-OF-SEL" → solo existe "START-OF-SELECTION" → completa
+local function autocomplete_word(word)
+  local lower = word:lower()
+  -- Si ya es una keyword completa, no hacer nada
+  if keyword_set[lower] then
+    return word
+  end
+
+  -- Buscar keywords que empiecen con este prefijo
+  local matches = {}
+  for _, kw in ipairs(KEYWORDS) do
+    if kw:sub(1, #lower) == lower then
+      table.insert(matches, kw)
+    end
+  end
+
+  if #matches == 1 then
+    return matches[1]:upper()
+  end
+
+  return word
+end
+
 -- Uppercase keywords en una línea
 local function uppercase_keywords(line)
-  -- Reemplazar palabras clave por su versión uppercase,
-  -- pero solo las que coinciden exactamente con keywords ABAP
-  return line:gsub("([%a_][%w_]*)", function(word)
+  -- Uppercase keywords + autocompletar por prefijo unico
+  return line:gsub("([%a_][%w_-]*)", function(word)
     if keyword_set[word:lower()] then
       return word:upper()
+    end
+    local completed = autocomplete_word(word)
+    if completed ~= word then
+      return completed
     end
     return word
   end)
