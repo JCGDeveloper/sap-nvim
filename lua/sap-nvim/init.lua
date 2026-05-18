@@ -14,6 +14,7 @@ function M.setup(opts)
     "sap-nvim.core.setup",
     "sap-nvim.core.new",
     "sap-nvim.core.debugger",
+    "sap-nvim.integrations.completion",
     "sap-nvim.adapters.terminal",
   }
 
