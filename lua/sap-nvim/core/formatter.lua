@@ -91,31 +91,73 @@ for _, kw in ipairs(BLOCK_END) do
   block_end_set[kw:lower()] = true
 end
 
--- Autocompletar palabras ABAP por prefijo único
--- Si "START-OF-SEL" → solo existe "START-OF-SELECTION" → completa
+
+
+-- Distancia de Levenshtein: cuantos caracteres hay que cambiar
+-- para que una palabra sea igual a otra
+local function levenshtein(a, b)
+  local len_a, len_b = #a, #b
+  local matrix = {}
+  for i = 0, len_a do
+    matrix[i] = { [0] = i }
+  end
+  for j = 0, len_b do
+    matrix[0][j] = j
+  end
+  for i = 1, len_a do
+    for j = 1, len_b do
+      local cost = a:sub(i, i) == b:sub(j, j) and 0 or 1
+      matrix[i][j] = math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      )
+    end
+  end
+  return matrix[len_a][len_b]
+end
+
+-- Autocompletar palabras ABAP por prefijo unico
+-- Si falla, intenta fuzzy match (corregir typos)
 local function autocomplete_word(word)
   local lower = word:lower()
-  -- Si ya es una keyword completa, no hacer nada
   if keyword_set[lower] then
     return word
   end
 
-  -- Buscar keywords que empiecen con este prefijo
+  -- 1. Buscar por prefijo unico
   local matches = {}
   for _, kw in ipairs(KEYWORDS) do
     if kw:sub(1, #lower) == lower then
       table.insert(matches, kw)
     end
   end
-
   if #matches == 1 then
     return matches[1]:upper()
+  end
+
+  -- 2. Fuzzy match: buscar la keyword mas cercana (edit distance <= 2)
+  local best_dist = 3
+  local best_kw = nil
+  for _, kw in ipairs(KEYWORDS) do
+    local dist = levenshtein(lower, kw)
+    if dist < best_dist then
+      best_dist = dist
+      best_kw = kw
+    end
+  end
+  if best_kw then
+    -- Solo sugerir si la palabra es similar (tiene al menos 4 chars)
+    if #lower >= 4 and best_dist <= math.floor(#lower / 3) then
+      return best_kw:upper()
+    end
   end
 
   return word
 end
 
--- Uppercase keywords en una línea
+
+-- Uppercase keywords
 local function uppercase_keywords(line)
   -- Uppercase keywords + autocompletar por prefijo unico
   return line:gsub("([%a_][%w_-]*)", function(word)
