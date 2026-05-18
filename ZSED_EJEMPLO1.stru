@@ -1,0 +1,10 @@
+*&---------------------------------------------------------------------*
+*& Objeto:   ZSED_EJEMPLO1
+*& Paquete:  $TMP
+*&---------------------------------------------------------------------*
+@EndUserText.label : 'Estructura ZSED_EJEMPLO1'
+define structure ZSED_EJEMPLO1 {
+  field1 : char10;
+  field2 : char40;
+  field3 : numc10;
+}

@@ -26,9 +26,25 @@ Instalación:
 
   -- Formatear con abaplint (usa Shift+F, sin conflicto)
   vim.keymap.set("n", "<leader>aF", function()
-    if vim.bo.filetype == "abap" then
-      vim.lsp.buf.format({ async = true })
+    if vim.bo.filetype ~= "abap" then return end
+    local filepath = vim.api.nvim_buf_get_name(0)
+    if filepath == "" then
+      vim.notify("sap-nvim: Save the file first", vim.log.levels.WARN)
+      return
     end
+    vim.cmd("write")
+    vim.fn.jobstart({ "abaplint", "--fix", filepath }, {
+      on_exit = function(_, code)
+        vim.schedule(function()
+          vim.cmd("checktime")
+          if code == 0 then
+            vim.notify("sap-nvim: Format applied", vim.log.levels.INFO)
+          else
+            vim.notify("sap-nvim: abaplint --fix failed (code " .. code .. ")", vim.log.levels.WARN)
+          end
+        end)
+      end,
+    })
   end, { desc = "ABAP: Formatear" })
 
   -- SAP GUI integration

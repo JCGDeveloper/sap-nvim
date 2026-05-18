@@ -266,6 +266,21 @@ local function get_picker_items()
   return items
 end
 
+-- ─── Cabecera de paquete y transporte ─────────────────────────────────────
+
+local function add_package_header(name, pkg, trans_req)
+  local lines = {}
+  table.insert(lines, "*&---------------------------------------------------------------------*")
+  table.insert(lines, "*& Objeto:   " .. name)
+  table.insert(lines, "*& Paquete:  " .. (pkg or "$TMP"))
+  if trans_req and trans_req ~= "" then
+    table.insert(lines, "*& Orden:    " .. trans_req)
+  end
+  table.insert(lines, "*&---------------------------------------------------------------------*")
+  table.insert(lines, "")
+  return table.concat(lines, "\n")
+end
+
 -- ─── Crear archivo con template ─────────────────────────────────────────────
 
 local function create_file(obj_type, obj_name, extra, pkg, trans_req)
@@ -300,13 +315,13 @@ local function create_file(obj_type, obj_name, extra, pkg, trans_req)
   content = header .. content
 
   -- Escribir archivo
-  local f = io.open(filename, "w")
-  if not f then
+  local fw = io.open(filename, "w")
+  if not fw then
     vim.notify("[sap-nvim] ❌ No se pudo crear '" .. filename .. "'", vim.log.levels.ERROR)
     return
   end
-  f:write(content)
-  f:close()
+  fw:write(content)
+  fw:close()
 
   local msg = string.format("✅ %s creado: %s", t.name, filename)
   if pkg and pkg ~= "$TMP" then
@@ -319,21 +334,6 @@ local function create_file(obj_type, obj_name, extra, pkg, trans_req)
   end
   vim.notify("[sap-nvim] " .. msg)
   vim.cmd("edit " .. filename)
-end
-
--- ─── Cabecera de paquete y transporte ─────────────────────────────────────
-
-local function add_package_header(name, pkg, trans_req)
-  local lines = {}
-  table.insert(lines, "*&---------------------------------------------------------------------*")
-  table.insert(lines, "*& Objeto:   " .. name)
-  table.insert(lines, "*& Paquete:  " .. (pkg or "$TMP"))
-  if trans_req and trans_req ~= "" then
-    table.insert(lines, "*& Orden:    " .. trans_req)
-  end
-  table.insert(lines, "*&---------------------------------------------------------------------*")
-  table.insert(lines, "")
-  return table.concat(lines, "\n")
 end
 
 -- ─── Picker principal ────────────────────────────────────────────────────────

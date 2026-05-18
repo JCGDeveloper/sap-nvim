@@ -13,6 +13,14 @@ local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
+-- Forward declarations (Lua necesita que las variables existan antes de usarse)
+local show_new_connection
+local show_edit_connection
+local show_connections
+local show_test_connection
+local show_delete_connection
+local install_sapcli
+
 local function read_file(path)
   local f = io.open(path, "r")
   if not f then return nil end
@@ -322,7 +330,7 @@ end
 
 -- ─── Nueva conexión ──────────────────────────────────────────────────────────
 
-local function show_new_connection()
+function show_new_connection()
   input_dialog("NUEVA CONEXIÓN", {
     { key = "name",     value = "desarrollo" },
     { key = "ashost",   value = "" },
@@ -372,7 +380,7 @@ end
 
 -- ─── Editar conexión ─────────────────────────────────────────────────────────
 
-local function show_edit_connection()
+function show_edit_connection()
   local config = parse_sapcli_config()
   local names = vim.tbl_keys(config.contexts)
 
@@ -420,7 +428,7 @@ end
 
 -- ─── Ver conexiones ──────────────────────────────────────────────────────────
 
-local function show_connections()
+function show_connections()
   local config = parse_sapcli_config()
   local names = vim.tbl_keys(config.contexts)
 
@@ -470,7 +478,7 @@ end
 
 -- ─── Probar conexión ─────────────────────────────────────────────────────────
 
-local function show_test_connection()
+function show_test_connection()
   local config = parse_sapcli_config()
   local names = vim.tbl_keys(config.contexts)
 
@@ -488,7 +496,7 @@ end
 
 -- ─── Eliminar conexión ───────────────────────────────────────────────────────
 
-local function show_delete_connection()
+function show_delete_connection()
   local config = parse_sapcli_config()
   local names = vim.tbl_keys(config.contexts)
 
@@ -515,7 +523,7 @@ end
 
 -- ─── Instalar/verificar sapcli ───────────────────────────────────────────────
 
-local function install_sapcli()
+function install_sapcli()
   local ok, path = check_sapcli()
   if ok then
     notify("✅ sapcli ya está instalado: " .. path)

@@ -10,6 +10,8 @@ function M.setup(opts)
     "sap-nvim.core.treesitter",
     "sap-nvim.core.lsp",
     "sap-nvim.core.keymaps",
+    "sap-nvim.core.setup",
+    "sap-nvim.core.new",
     "sap-nvim.adapters.terminal",
   }
 
