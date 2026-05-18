@@ -6,21 +6,79 @@ local M = {}
 function M.setup(opts)
   opts = opts or {}
 
-  -- Ayuda
+  -- TDD: Ejecutar tests unitarios ABAP vía sapcli
+  vim.keymap.set("n", "<leader>at", function()
+    local obj = vim.fn.expand("%:t:r")
+    if obj == "" then
+      vim.notify("sap-nvim: Guardá el archivo primero", vim.log.levels.WARN)
+      return
+    end
+    vim.cmd("write")
+    vim.notify("sap-nvim: Ejecutando tests de " .. obj .. "...")
+    vim.fn.jobstart({
+      "/Users/jcgomez/.sap-nvim-venv/bin/sapcli", "aunit", "run", "class", obj
+    }, {
+      on_stdout = function(_, data)
+        if data then
+          for _, line in ipairs(data) do
+            if line ~= "" then
+              vim.notify(line)
+            end
+          end
+        end
+      end,
+      on_exit = function(_, code)
+        if code == 0 then
+          vim.notify("sap-nvim: Tests OK ✅", vim.log.levels.INFO)
+        else
+          vim.notify("sap-nvim: Tests fallaron (code " .. code .. ")", vim.log.levels.WARN)
+        end
+      end,
+    })
+  end, { desc = "ABAP: Ejecutar tests unitarios" })
+
+  -- ATC: Ejecutar ABAP Test Cockpit
+  vim.keymap.set("n", "<leader>ak", function()
+    local obj = vim.fn.expand("%:t:r")
+    if obj == "" then
+      vim.notify("sap-nvim: Guardá el archivo primero", vim.log.levels.WARN)
+      return
+    end
+    vim.notify("sap-nvim: Ejecutando ATC sobre " .. obj .. "...")
+    vim.fn.jobstart({
+      "/Users/jcgomez/.sap-nvim-venv/bin/sapcli", "atc", "run", "object", obj
+    }, {
+      on_stdout = function(_, data)
+        if data then
+          for _, line in ipairs(data) do
+            if line ~= "" then
+              vim.notify(line)
+            end
+          end
+        end
+      end,
+      on_exit = function(_, code)
+        if code == 0 then
+          vim.notify("sap-nvim: ATC OK ✅", vim.log.levels.INFO)
+        else
+          vim.notify("sap-nvim: ATC encontró issues", vim.log.levels.WARN)
+        end
+      end,
+    })
+  end, { desc = "ABAP: Ejecutar ATC" })
+
+  -- Help actualizada
   vim.keymap.set("n", "<leader>ah", function()
     vim.notify([[
 sap-nvim atajos:
   <leader>ah   Ayuda
+  <leader>aF   Formatear (uppercase + indent)
+  <leader>at   Ejecutar tests unitarios (sapcli)
+  <leader>ak   Ejecutar ATC (quality check)
   <leader>asg  Abrir SAP GUI
-  <leader>aso  Abrir objeto en SAP GUI
-  <leader>aF   Formatear con abaplint (F mayúscula)
-
-Comandos:
-  :SapConnectionsHelp  Ayuda detallada
-
-Instalación:
-  npm install -g @abaplint/cli  → LSP ABAP
-  :TSInstall abap               → Syntax highlighting
+  <leader>aso  Objeto en SAP GUI
+  <leader>asc  Configurar conexiones
+  <leader>an   Nuevo objeto ABAP
     ]], "info", { title = "sap-nvim" })
   end, { desc = "ABAP: Ayuda" })
 
