@@ -45,6 +45,6 @@ function M.debug_current()
   M.debug_terminal({ program = prog, line = "1" })
 end
 
-return M
-
 function M.setup(opts) end
+
+return M

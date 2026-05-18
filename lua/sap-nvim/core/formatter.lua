@@ -189,6 +189,6 @@ function M.format_file()
   vim.notify("sap-nvim: ABAP formateado correctamente", vim.log.levels.INFO)
 end
 
-return M
-
 function M.setup(opts) end
+
+return M
