@@ -178,15 +178,38 @@ function M.format_file()
 
   local result = {}
   local indent = 0
+  local fixes = {}  -- Lista de correcciones sugeridas
 
-  for _, line in ipairs(lines) do
+  for i, line in ipairs(lines) do
     local formatted, new_indent = format_line(line, indent)
     table.insert(result, formatted)
     indent = new_indent
+
+    -- Detectar REPORT sin nombre
+    local content = line:match("^%s*(.-)%s*$") or ""
+    if content:upper():match("^REPORT%s*$") or content:upper():match("^REPORT%s+$") then
+      table.insert(fixes, "L" .. i .. ": REPORT sin nombre de programa")
+    end
+    -- Detectar falta de punto al final
+    if #content > 0 and not content:match("^%*|^\"") then
+      if not content:match("%.$") and not content:match("^%s*$") then
+        -- Solo ciertas sentencias ABAP requieren punto
+        local kw = get_main_keyword(line)
+        if kw and (keyword_set[kw:lower()]) then
+          table.insert(fixes, "L" .. i .. ": falta punto final en '" .. content:match("^%S+") .. "...'")
+        end
+      end
+    end
   end
 
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, result)
-  vim.notify("sap-nvim: ABAP formateado correctamente", vim.log.levels.INFO)
+
+  if #fixes > 0 then
+    local msg = "ABAP: " .. #fixes .. " sugerencias:\n" .. table.concat(fixes, "\n")
+    vim.notify(msg, vim.log.levels.WARN)
+  else
+    vim.notify("sap-nvim: ABAP formateado correctamente", vim.log.levels.INFO)
+  end
 end
 
 function M.setup(opts) end
