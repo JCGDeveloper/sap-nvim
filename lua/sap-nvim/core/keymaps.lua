@@ -33,14 +33,38 @@ Instalación:
       return
     end
     vim.cmd("write")
-    vim.fn.jobstart({ "abaplint", "--fix", filepath }, {
+
+    -- Workaround para abaplint v2.119: pasar el directorio del archivo
+    local dir = vim.fn.fnamemodify(filepath, ":h")
+    local cfg = dir .. "/abaplint.json"
+    local f = io.open(cfg, "r")
+    if not f then
+      -- Crear config temporal si no existe
+      local tmp_cfg = dir .. "/.abaplint.tmp.json"
+      local fw = io.open(tmp_cfg, "w")
+      if fw then
+        fw:write('{"global":{"files":"*.abap"}}')
+        fw:close()
+        cfg = tmp_cfg
+      end
+    else
+      f:close()
+    end
+
+    -- Ejecutar abaplint --fix con ruta absoluta
+    vim.fn.jobstart({
+      "abaplint", cfg, "--fix", "--file", filepath
+    }, {
       on_exit = function(_, code)
         vim.schedule(function()
           vim.cmd("checktime")
-          if code == 0 then
-            vim.notify("sap-nvim: Format applied", vim.log.levels.INFO)
+          -- Limpiar config temporal
+          local tmp = dir .. "/.abaplint.tmp.json"
+          os.remove(tmp)
+          if code == 0 or code == 2 then
+            vim.notify("sap-nvim: Formateado aplicado", vim.log.levels.INFO)
           else
-            vim.notify("sap-nvim: abaplint --fix failed (code " .. code .. ")", vim.log.levels.WARN)
+            vim.notify("sap-nvim: Formateo falló (code " .. code .. ")", vim.log.levels.WARN)
           end
         end)
       end,

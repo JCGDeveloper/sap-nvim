@@ -13,14 +13,6 @@ local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
--- Forward declarations (Lua necesita que las variables existan antes de usarse)
-local show_new_connection
-local show_edit_connection
-local show_connections
-local show_test_connection
-local show_delete_connection
-local install_sapcli
-
 local function read_file(path)
   local f = io.open(path, "r")
   if not f then return nil end
@@ -293,7 +285,7 @@ end
 
 -- ─── UI: Menú principal con telescopio-like ──────────────────────────────────
 
-local function show_main_menu()
+local show_main_menu = function()
   local items = {
     { label = "1. Nueva conexión SAP",       action = "new" },
     { label = "2. Editar conexión existente", action = "edit" },
@@ -330,7 +322,7 @@ end
 
 -- ─── Nueva conexión ──────────────────────────────────────────────────────────
 
-function show_new_connection()
+local show_new_connection = function()
   input_dialog("NUEVA CONEXIÓN", {
     { key = "name",     value = "desarrollo" },
     { key = "ashost",   value = "" },
@@ -380,7 +372,7 @@ end
 
 -- ─── Editar conexión ─────────────────────────────────────────────────────────
 
-function show_edit_connection()
+local show_edit_connection = function()
   local config = parse_sapcli_config()
   local names = vim.tbl_keys(config.contexts)
 
@@ -428,7 +420,7 @@ end
 
 -- ─── Ver conexiones ──────────────────────────────────────────────────────────
 
-function show_connections()
+local show_connections = function()
   local config = parse_sapcli_config()
   local names = vim.tbl_keys(config.contexts)
 
@@ -478,7 +470,7 @@ end
 
 -- ─── Probar conexión ─────────────────────────────────────────────────────────
 
-function show_test_connection()
+local show_test_connection = function()
   local config = parse_sapcli_config()
   local names = vim.tbl_keys(config.contexts)
 
@@ -496,7 +488,7 @@ end
 
 -- ─── Eliminar conexión ───────────────────────────────────────────────────────
 
-function show_delete_connection()
+local show_delete_connection = function()
   local config = parse_sapcli_config()
   local names = vim.tbl_keys(config.contexts)
 
@@ -523,7 +515,7 @@ end
 
 -- ─── Instalar/verificar sapcli ───────────────────────────────────────────────
 
-function install_sapcli()
+local install_sapcli = function()
   local ok, path = check_sapcli()
   if ok then
     notify("✅ sapcli ya está instalado: " .. path)
