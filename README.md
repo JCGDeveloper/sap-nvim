@@ -347,17 +347,19 @@ Without lualine, the plugin sets `vim.opt_local.statusline` on ABAP buffers auto
 
 ---
 
-## AI assistance (GitHub Copilot)
+## Asistencia con IA (GitHub Copilot)
 
-ABAP-aware AI, **off by default**. It uses **GitHub Copilot** — the same backend and license
-as the VSCode Copilot extension (including Claude models if your org enables them).
+IA con conocimiento de ABAP, **apagada por defecto**. Usa **GitHub Copilot** — el mismo backend
+y la misma licencia que la extensión de Copilot en VSCode (incluyendo modelos Claude si tu
+organización los habilita).
 
-> **Why Copilot and not an external API:** Copilot keeps your source code inside the channel
-> your company already approved. A direct Anthropic/OpenAI API integration (like the bundled
-> `avante.lua`) would send ABAP source to an external endpoint — usually a data-governance
-> violation in corporate SAP environments. Use Copilot unless IT explicitly approves otherwise.
+> **Por qué Copilot y no una API externa:** Copilot mantiene tu código fuente dentro del canal
+> que tu empresa ya aprobó. Una integración directa con la API de Anthropic/OpenAI (como el
+> `avante.lua` que viene incluido) enviaría código ABAP a un endpoint externo — normalmente una
+> violación de la política de datos en entornos SAP corporativos. Usá Copilot salvo que IT
+> apruebe explícitamente otra cosa.
 
-### Enable it
+### Cómo activarlo
 
 ```lua
 {
@@ -369,27 +371,36 @@ as the VSCode Copilot extension (including Claude models if your org enables the
   config = function()
     require("sap-nvim").setup({
       ai = "copilot",
-      -- optional: pin a Claude model your org enabled in Copilot
+      -- opcional: fijar un modelo Claude que tu organización habilitó en Copilot
       -- copilot_model = "claude-sonnet-4",
     })
   end,
 }
 ```
 
-Then authenticate once: `:Copilot auth` (uses your company GitHub login).
+Después autenticá una sola vez: `:Copilot auth` (usa tu login de GitHub de la empresa).
 
-### Keymaps
+### Flujo de trabajo
 
-| Keymap | Action |
-|--------|--------|
-| `<leader>agc` | Toggle Copilot chat |
-| `<leader>age` | Explain selected ABAP |
-| `<leader>agr` | Review selected ABAP (perf, naming, tests) |
-| `<leader>agt` | Generate AUnit tests |
-| `<leader>agf` | Fix selected ABAP |
+1. **Instalá las dos dependencias** (`copilot.lua` + `CopilotChat.nvim`) y poné `ai = "copilot"`.
+2. **`:Copilot auth`** — autenticación única con tu cuenta de GitHub corporativa.
+3. **Sugerencias inline**: aparecen mientras escribís en archivos ABAP/CDS; aceptás con `<Tab>`.
+4. **Chat / agente**: seleccioná código en modo visual y usá los atajos de abajo. El chat ya
+   viene cargado con un *system prompt* de ABAP/CDS/Clean ABAP, así que las respuestas salen en
+   contexto SAP sin que tengas que explicárselo cada vez.
 
-The chat is pre-loaded with an ABAP/CDS/Clean-ABAP system prompt. Until you set `ai = "copilot"`
-and install the two plugins, this integration is a complete no-op.
+### Atajos
+
+| Atajo | Acción |
+|-------|--------|
+| `<leader>agc` | Abrir/cerrar el chat de Copilot |
+| `<leader>age` | Explicar el ABAP seleccionado |
+| `<leader>agr` | Revisar el ABAP seleccionado (rendimiento, naming, tests) |
+| `<leader>agt` | Generar tests AUnit |
+| `<leader>agf` | Corregir el ABAP seleccionado |
+
+> Hasta que pongas `ai = "copilot"` e instales los dos plugins, esta integración es un
+> **no-op total**: no carga nada ni define atajos.
 
 ---
 
