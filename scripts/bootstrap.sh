@@ -297,26 +297,44 @@ fi
 
 header "[6/8] Herramientas ABAP"
 
-# 6.1 sapcli
+# pipx: forma correcta de instalar apps CLI de Python en entornos
+# "externally-managed" (PEP 668). Aísla sapcli en su propio venv; un `pip3
+# install` directo está bloqueado a propósito en Python moderno (Homebrew,
+# Ubuntu/Debian recientes).
+ensure_pipx() {
+  if cmd_exists pipx; then
+    ok "pipx ya instalado"
+  else
+    info "Instalando pipx..."
+    case "$PKG_MANAGER" in
+      brew)   brew install pipx ;;
+      apt)    sudo apt-get install -y pipx ;;
+      dnf)    sudo dnf install -y pipx ;;
+      pacman) sudo pacman -S --noconfirm python-pipx ;;
+    esac
+  fi
+  pipx ensurepath >/dev/null 2>&1 || true
+  export PATH="$HOME/.local/bin:$PATH"   # disponible en ESTA sesión, hasta reabrir shell
+}
+
+# 6.1 sapcli (vía pipx — PEP 668 safe)
 if cmd_exists sapcli; then
   ok "sapcli $(sapcli --version 2>&1 | head -1)"
 else
-  info "Instalando sapcli..."
-  pip3 install sapcli
+  ensure_pipx
+  info "Instalando sapcli vía pipx..."
+  pipx install sapcli
   ok "sapcli instalado"
 fi
 
-# 6.2 abaplint
+# 6.2 abaplint (paquete @abaplint/cli — provee el binario `abaplint`)
 if cmd_exists abaplint; then
   ok "abaplint $(abaplint --version)"
 else
   info "Instalando abaplint..."
-  npm install -g abaplint
+  npm install -g @abaplint/cli
   ok "abaplint instalado"
 fi
-
-# 6.3 pyyaml (para sincronización)
-python3 -c "import yaml" 2>/dev/null || pip3 install pyyaml
 
 # ─── 7. sap-nvim ────────────────────────────────────────────────────────────
 
