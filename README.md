@@ -1,23 +1,23 @@
 # sap-nvim
 
-A Neovim plugin for SAP ABAP development. Integrates with `sapcli` and `abaplint` to bring
-Eclipse/VSCode-level tooling into Neovim: real-time diagnostics, quickfix-driven activation,
-test runner, transport management, object browser, CDS support, and more.
+Un plugin de Neovim para desarrollo ABAP en SAP. Se integra con `sapcli` y `abaplint` para
+traer herramientas de nivel Eclipse/VSCode a Neovim: diagnósticos en tiempo real, activación
+con quickfix, runner de tests, gestión de transportes, explorador de objetos, soporte CDS y más.
 
 ---
 
-## Requirements
+## Requisitos
 
-| Tool | Purpose | Install |
-|------|---------|---------|
-| [sapcli](https://github.com/jfilak/sapcli) | ADT operations (activate, checkout, AUnit, transports…) | `pip install sapcli` |
-| [abaplint](https://github.com/abaplint/abaplint) | Real-time linting and naming checks | `npm install -g @abaplint/cli` |
-| Neovim ≥ 0.9 | Plugin host | — |
-| `vim.ui.select` provider | Pickers (Telescope, fzf-lua, or built-in) | optional |
+| Herramienta | Para qué | Instalación |
+|-------------|----------|-------------|
+| [sapcli](https://github.com/jfilak/sapcli) | Operaciones ADT (activar, checkout, AUnit, transportes…) | `pip install sapcli` |
+| [abaplint](https://github.com/abaplint/abaplint) | Linting y chequeos de naming en tiempo real | `npm install -g @abaplint/cli` |
+| Neovim ≥ 0.9 | Host del plugin | — |
+| Proveedor de `vim.ui.select` | Pickers (Telescope, fzf-lua o el nativo) | opcional |
 
 ---
 
-## Installation
+## Instalación
 
 ```lua
 -- lazy.nvim
@@ -35,59 +35,59 @@ test runner, transport management, object browser, CDS support, and more.
 
 ---
 
-## Getting started — connect to a SAP system
+## Primeros pasos — conectar a un sistema SAP
 
-The whole flow is two commands: **`:SapSetup`** (configure once) → **`:SapDoctor`** (validate).
-Connections are stored in sapcli's own file `~/.sapcli/config.yml` (kubeconfig-style) — that
-file is the single source of truth.
+Todo el flujo son dos comandos: **`:SapSetup`** (configurás una vez) → **`:SapDoctor`** (validás).
+Las conexiones se guardan en el propio archivo de sapcli `~/.sapcli/config.yml` (estilo
+kubeconfig) — ese archivo es la única fuente de verdad.
 
-### 1. Install the external tools
+### 1. Instalar las herramientas externas
 
 ```sh
-pip install sapcli                 # ADT client (Python)
+pip install sapcli                 # cliente ADT (Python)
 npm install -g @abaplint/cli       # linter (Node.js)
 ```
 
-Then, inside Neovim:
+Después, dentro de Neovim:
 
 ```vim
 :checkhealth sap-nvim
 ```
 
-This reports every dependency (sapcli, abaplint, node, tree-sitter parsers) and your
-connection status, each with the exact command to fix what's missing. Install the
-tree-sitter parsers with `:TSInstall abap cds`.
+Esto reporta cada dependencia (sapcli, abaplint, node, parsers de tree-sitter) y el estado de
+tu conexión, cada uno con el comando exacto para arreglar lo que falte. Instalá los parsers de
+tree-sitter con `:TSInstall abap cds`.
 
-### 2. Configure the connection — `:SapSetup`
+### 2. Configurar la conexión — `:SapSetup`
 
-`:SapSetup` (or `<leader>asc`) opens a menu:
+`:SapSetup` (o `<leader>asc`) abre un menú:
 
 ```
-1. Nueva conexión SAP      ← create connection + user + context
-2. Ver configuración        ← dump ~/.sapcli/config.yml
-3. Activar conexión         ← switch current-context
-4. Probar conexión          ← read-only: sapcli abap systeminfo
+1. Nueva conexión SAP      ← crea connection + user + context
+2. Ver configuración        ← muestra ~/.sapcli/config.yml
+3. Activar conexión         ← cambia el current-context
+4. Probar conexión          ← solo lectura: sapcli abap systeminfo
 5. Eliminar conexión
 6. Instalar/verificar sapcli
 ```
 
-Choose **1** and fill the fields (`:wq` to save, `:cq` to cancel):
+Elegí la **1** y completá los campos (`:wq` para guardar, `:cq` para cancelar):
 
-| Field | Meaning | Example |
-|-------|---------|---------|
-| `name` | Context name | `dev` |
-| `ashost` | Application server host | `sap-dev.company.local` |
-| `port` | **HTTPS port of the ICM** (not the sysnr) | `44300` |
-| `client` | SAP client / mandante | `100` |
-| `user` | Your dialog user | `JCGOMEZ` |
-| `password` | Your password | — |
-| `ssl` | `true` for HTTPS | `true` |
+| Campo | Significado | Ejemplo |
+|-------|-------------|---------|
+| `name` | Nombre del contexto | `dev` |
+| `ashost` | Host del servidor de aplicaciones | `sap-dev.company.local` |
+| `port` | **Puerto HTTPS del ICM** (no el sysnr) | `44300` |
+| `client` | Mandante SAP | `100` |
+| `user` | Tu usuario de diálogo | `JCGOMEZ` |
+| `password` | Tu contraseña | — |
+| `ssl` | `true` para HTTPS | `true` |
 
-> **`port` is the HTTPS ICM port** (typically `44300`, `8000`, or `443`) — **not** the
-> 2-digit system number used by SAP GUI/RFC. If you don't know it, check your SAP GUI
-> connection or ask Basis.
+> **El `port` es el puerto HTTPS del ICM** (típicamente `44300`, `8000` o `443`) — **no** el
+> número de sistema de 2 dígitos que usa SAP GUI/RFC. Si no lo sabés, miralo en tu conexión de
+> SAP GUI o preguntale a Basis.
 
-Under the hood this runs:
+Por debajo, esto ejecuta:
 
 ```sh
 sapcli config set-connection dev --ashost HOST --port 44300 --client 100 --ssl
@@ -96,12 +96,13 @@ sapcli config set-context dev --connection dev --user dev-user
 sapcli config use-context dev
 ```
 
-> **Security note:** the password is stored in plaintext in `~/.sapcli/config.yml`. Use a
-> personal dev user on a non-production system. Lock the file down (`chmod 600 ~/.sapcli/config.yml`).
+> **Nota de seguridad:** la contraseña se guarda en texto plano en `~/.sapcli/config.yml`. Usá
+> un usuario de desarrollo personal en un sistema que no sea productivo. Restringí el archivo
+> (`chmod 600 ~/.sapcli/config.yml`).
 
-### 3. Validate everything — `:SapDoctor`
+### 3. Validar todo — `:SapDoctor`
 
-`:SapDoctor` (or `<leader>asd`) runs a **read-only** ladder and reports PASS/FAIL:
+`:SapDoctor` (o `<leader>asd`) corre una escalera **de solo lectura** y reporta PASS/FAIL:
 
 ```
 Local:
@@ -115,198 +116,204 @@ En vivo (contactan el sistema SAP — SOLO LECTURA):
   ✅ Transportes (cts list transport)
 ```
 
-It never writes, activates, or locks anything. If a live check fails, the first error line
-is shown inline. **The first failed login can lock your SAP user after a few attempts — if it
-fails, stop and check credentials before retrying.**
+Nunca escribe, activa ni bloquea nada. Si una prueba en vivo falla, se muestra la primera línea
+del error. **El primer login fallido puede bloquear tu usuario SAP tras unos intentos — si
+falla, pará y revisá las credenciales antes de reintentar.**
 
 ---
 
-## Windows: install under WSL2
+## Windows: instalar bajo WSL2
 
-The work laptop is Windows? Install Neovim and this plugin inside **WSL2 (Ubuntu)**, not
-native Windows — sapcli/abaplint/node all run as Linux tools and the plugin shells out to them.
+¿El portátil del trabajo es Windows? Instalá Neovim y este plugin dentro de **WSL2 (Ubuntu)**,
+no en Windows nativo — sapcli/abaplint/node corren como herramientas Linux y el plugin las
+invoca por consola.
 
 ```sh
-# inside WSL2 Ubuntu
+# dentro de WSL2 Ubuntu
 sudo apt update && sudo apt install -y neovim python3-pip nodejs npm
 pip install sapcli
 npm install -g @abaplint/cli
 ```
 
-### WSL networking — the connection gotcha
+### Red en WSL — el gotcha de la conexión
 
-`sapcli` runs **inside WSL**, so the SAP host must be reachable **from WSL**, not just from
-Windows. WSL2 uses a NAT network by default, which can break corporate access:
+`sapcli` corre **dentro de WSL**, así que el host SAP tiene que ser alcanzable **desde WSL**, no
+solo desde Windows. WSL2 usa una red NAT por defecto, que puede romper el acceso corporativo:
 
-- **Corporate VPN on the Windows host often does NOT route WSL traffic.** If your SAP system
-  is only reachable through the company VPN, test it first (see below).
-- **Internal DNS names** (e.g. `sap-dev.company.local`) may not resolve inside WSL.
+- **La VPN corporativa en el host Windows muchas veces NO enruta el tráfico de WSL.** Si tu
+  sistema SAP solo es alcanzable a través de la VPN de la empresa, probalo primero (ver abajo).
+- **Los nombres DNS internos** (ej. `sap-dev.company.local`) pueden no resolverse dentro de WSL.
 
-**Test reachability from inside WSL before `:SapDoctor`:**
+**Probá el alcance desde dentro de WSL antes de `:SapDoctor`:**
 
 ```sh
-# replace with your host/port
+# reemplazá con tu host/puerto
 curl -kv https://sap-dev.company.local:44300/sap/bc/adt/core/discovery 2>&1 | head
-# or just the TCP port:
+# o solo el puerto TCP:
 nc -vz sap-dev.company.local 44300
 ```
 
-If that hangs or fails but the same host works from Windows, it's a WSL routing/DNS issue. Fixes:
+Si eso se cuelga o falla pero el mismo host anda desde Windows, es un problema de ruteo/DNS de
+WSL. Soluciones:
 
-1. **Mirrored networking** (Windows 11 22H2+) — in `C:\Users\<you>\.wslconfig`:
+1. **Red en modo mirrored** (Windows 11 22H2+) — en `C:\Users\<vos>\.wslconfig`:
    ```ini
    [wsl2]
    networkingMode=mirrored
    ```
-   Then `wsl --shutdown` and reopen. This makes WSL share the Windows network stack (VPN included).
-2. If DNS fails, use the SAP server's IP in `ashost`, or fix WSL DNS (`/etc/resolv.conf`).
-3. If the VPN client blocks WSL entirely, ask IT — some corporate VPNs need a WSL-aware config.
+   Después `wsl --shutdown` y reabrí. Esto hace que WSL comparta el stack de red de Windows (VPN incluida).
+2. Si falla el DNS, usá la IP del servidor SAP en `ashost`, o arreglá el DNS de WSL (`/etc/resolv.conf`).
+3. Si el cliente de VPN bloquea WSL por completo, hablá con IT — algunas VPN corporativas
+   necesitan una configuración consciente de WSL.
 
-Once `curl`/`nc` reaches the host, `:SapSetup` → `:SapDoctor` will work the same as on Linux.
-
----
-
-## Features
-
-### Real-time diagnostics
-
-abaplint runs in the background while you type (600 ms debounce) and on every save.
-Results appear as inline virtual text, gutter signs, and hover floats — no extra config needed.
-
-Checks include:
-- Syntax and parser errors
-- Unused variables
-- Naming convention violations (fully configurable in `abaplint.json`)
-- Unreachable code, uncaught exceptions, missing ORDER BY
-- Cyclomatic complexity, method length, line length
-- Style: `prefer_inline`, `prefer_corresponding`, `prefer_is_not`, `use_line_exists`
-
-Diagnostics are **editor-only** — they never block activation or interact with SAP.
+Una vez que `curl`/`nc` llegan al host, `:SapSetup` → `:SapDoctor` funcionan igual que en Linux.
 
 ---
 
-### Activation with jump-to-error
+## Funcionalidades
 
-`<leader>aa` saves the file and runs `sapcli <type> activate` (the object type is derived from
-the file extension). On success it clears the quickfix list.
-On error it parses the SAP output, loads all errors into the quickfix list, and jumps directly
-to the first failing line.
+### Diagnósticos en tiempo real
 
-Supports multiple SAP error formats: `Line N:`, `Row N:`, `(N,col):`, `error at line N`, and more.
+abaplint corre en segundo plano mientras escribís (debounce de 600 ms) y en cada guardado.
+Los resultados aparecen como texto virtual inline, signos en el gutter y flotantes al hacer
+hover — sin configuración extra.
 
-After activation, the statusline shows `[OK]` or `[ERR]` for the current buffer.
+Los chequeos incluyen:
+- Errores de sintaxis y de parser
+- Variables sin usar
+- Violaciones de convención de naming (totalmente configurable en `abaplint.json`)
+- Código inalcanzable, excepciones no capturadas, falta de ORDER BY
+- Complejidad ciclomática, largo de método, largo de línea
+- Estilo: `prefer_inline`, `prefer_corresponding`, `prefer_is_not`, `use_line_exists`
 
----
-
-### AUnit — test runner
-
-`<leader>aT` runs `sapcli aunit run class <name> --output junit4`, parses the JUnit4 XML
-response, and loads every failing test into the quickfix list with the exact line number.
-
-Summary notification: `3 test(s) failed in ZCL_FOO. See quickfix.`
+Los diagnósticos son **solo del editor** — nunca bloquean la activación ni interactúan con SAP.
 
 ---
 
-### ATC — quality check
+### Activación con salto al error
 
-`<leader>aK` runs ABAP Test Cockpit via `sapcli atc run <type> <name>` (type derived from the
-file extension).
+`<leader>aa` guarda el archivo y ejecuta `sapcli <tipo> activate` (el tipo de objeto se deriva
+de la extensión del archivo). Si tiene éxito, limpia la lista de quickfix.
+Si hay error, parsea la salida de SAP, carga todos los errores en el quickfix y salta directo a
+la primera línea que falla.
 
----
+Soporta varios formatos de error de SAP: `Line N:`, `Row N:`, `(N,col):`, `error at line N`, y más.
 
-### Where-used list
-
-`<leader>aw` asks SAP for all usages of the current object and loads them into the quickfix
-list. Entries marked `[local]` if the file exists locally, `[system]` otherwise.
-
----
-
-### Inactive objects
-
-`<leader>ai` (`:SapInactive`) fetches the inactive objects queue from the system, then:
-
-- **Select one** → Open local file / Activate in system / Open + Activate. Activation prompts
-  for the object type and runs `sapcli <type> activate <name>`.
-
-> sapcli has no bulk "activate all" command, so inactive objects are activated one at a time.
+Después de activar, la statusline muestra `[OK]` o `[ERR]` para el buffer actual.
 
 ---
 
-### Diff local vs system
+### AUnit — runner de tests
 
-`<leader>aD` (`:SapDiff`) reads the current object from SAP via `sapcli program/class/interface read`
-and opens a vertical split vimdiff. The system buffer is read-only and auto-cleaned up on close.
+`<leader>aT` ejecuta `sapcli aunit run class <name> --output junit4`, parsea la respuesta XML
+JUnit4 y carga cada test fallido en el quickfix con el número de línea exacto.
 
----
-
-### New ABAP object
-
-`<leader>an` (`:SapNew`) guides you through creating a new ABAP object:
-
-1. Choose type: Program, Class, Interface, Function Group, Include, Test Class
-2. Enter name
-3. Pick package from the system (live picker via `sapcli package list`) — or type manually
-4. Pick transport order from your open orders (live picker via `sapcli cts list transport`)
-   — skipped automatically for `$TMP` packages
-
-Creates the local file with the correct header template and opens it for editing.
+Notificación resumen: `3 test(s) failed in ZCL_FOO. See quickfix.`
 
 ---
 
-### Object browser and search
+### ATC — chequeo de calidad
 
-| Keymap | Command | Description |
-|--------|---------|-------------|
-| `<leader>afs` | `:SapSearch` | Search objects in SAP by name pattern |
-| `<leader>afb` | `:SapBrowse` | Browse all objects in a package |
-
-Selecting an object from either picker tries to open it locally; if not found, offers to check it out.
+`<leader>aK` corre el ABAP Test Cockpit vía `sapcli atc run <tipo> <name>` (el tipo se deriva de
+la extensión del archivo).
 
 ---
 
-### Package checkout
+### Where-used (lista de usos)
 
-`<leader>ack` (`:SapCheckout`) downloads a full SAP package to the local filesystem via
-`sapcli checkout package`. Prompts for package name, target directory, and recursive flag.
-Opens oil.nvim (if available) or the directory when done.
-
----
-
-### Transport management
-
-| Keymap | Command | Description |
-|--------|---------|-------------|
-| `<leader>atl` | `:SapTransports` | List open transport orders — Enter copies ID to clipboard |
-| `<leader>atc` | `:SapTransportCreate` | Create a new transport order |
-| `<leader>atr` | `:SapTransportRelease` | Release a transport order (with confirmation) |
+`<leader>aw` le pide a SAP todos los usos del objeto actual y los carga en el quickfix. Las
+entradas se marcan `[local]` si el archivo existe localmente, `[system]` si no.
 
 ---
 
-### Formatter
+### Objetos inactivos
 
-`<leader>aF` formats the current file. Dispatches automatically by extension:
+`<leader>ai` (`:SapInactive`) trae la cola de objetos inactivos del sistema, y después:
+
+- **Elegir uno** → Abrir archivo local / Activar en el sistema / Abrir + Activar. La activación
+  pregunta el tipo de objeto y ejecuta `sapcli <tipo> activate <name>`.
+
+> sapcli no tiene un comando de "activar todo" en bloque, así que los objetos inactivos se
+> activan de a uno.
+
+---
+
+### Diff local vs sistema
+
+`<leader>aD` (`:SapDiff`) lee el objeto actual desde SAP vía `sapcli program/class/interface read`
+y abre un vimdiff en split vertical. El buffer del sistema es de solo lectura y se limpia solo al cerrar.
+
+---
+
+### Nuevo objeto ABAP
+
+`<leader>an` (`:SapNew`) te guía para crear un objeto ABAP nuevo:
+
+1. Elegí el tipo: Program, Class, Interface, Function Group, Include, Test Class
+2. Ingresá el nombre
+3. Elegí el paquete desde el sistema (picker en vivo vía `sapcli package list`) — o tipealo a mano
+4. Elegí la orden de transporte de tus órdenes abiertas (picker en vivo vía `sapcli cts list transport`)
+   — se omite automáticamente para paquetes `$TMP`
+
+Crea el archivo local con el template de cabecera correcto y lo abre para editar.
+
+---
+
+### Explorador y búsqueda de objetos
+
+| Atajo | Comando | Descripción |
+|-------|---------|-------------|
+| `<leader>afs` | `:SapSearch` | Buscar objetos en SAP por patrón de nombre |
+| `<leader>afb` | `:SapBrowse` | Explorar todos los objetos de un paquete |
+
+Al elegir un objeto de cualquiera de los dos pickers, intenta abrirlo localmente; si no lo
+encuentra, ofrece hacer checkout.
+
+---
+
+### Checkout de paquete
+
+`<leader>ack` (`:SapCheckout`) descarga un paquete SAP completo al sistema de archivos local vía
+`sapcli checkout package`. Pregunta el nombre del paquete, el directorio destino y el flag
+recursivo. Abre oil.nvim (si está disponible) o el directorio al terminar.
+
+---
+
+### Gestión de transportes
+
+| Atajo | Comando | Descripción |
+|-------|---------|-------------|
+| `<leader>atl` | `:SapTransports` | Listar órdenes de transporte abiertas — Enter copia el ID al portapapeles |
+| `<leader>atc` | `:SapTransportCreate` | Crear una nueva orden de transporte |
+| `<leader>atr` | `:SapTransportRelease` | Liberar una orden de transporte (con confirmación) |
+
+---
+
+### Formateador
+
+`<leader>aF` formatea el archivo actual. Despacha automáticamente según la extensión:
 
 **ABAP (`.abap`, `.cls`, `.intf`, `.prog`):**
-- Uppercase all keywords (`IF`, `DATA`, `SELECT`, …)
-- Correct block indentation (`IF/ENDIF`, `METHOD/ENDMETHOD`, `CASE/WHEN/ENDCASE`, …)
-- Autocomplete keywords by unique prefix (`sel` → `SELECT`)
-- Fuzzy-correct typos via Levenshtein distance (`SELCT` → `SELECT`)
-- String literals and inline comments are never modified
+- Pone en mayúsculas todas las palabras clave (`IF`, `DATA`, `SELECT`, …)
+- Corrige la indentación de bloques (`IF/ENDIF`, `METHOD/ENDMETHOD`, `CASE/WHEN/ENDCASE`, …)
+- Autocompleta palabras clave por prefijo único (`sel` → `SELECT`)
+- Corrige typos por distancia de Levenshtein (`SELCT` → `SELECT`)
+- Los literales de string y los comentarios inline nunca se modifican
 
 **CDS/DDL (`.ddls`, `.dcl`, `.bdef`, `.cds`):**
-- Brace-based indentation (`{` / `}`)
-- Annotations (`@AbapCatalog.…`) preserved as-is
-- Comments (`//`, `/* */`) indented but not modified
+- Indentación basada en llaves (`{` / `}`)
+- Las anotaciones (`@AbapCatalog.…`) se preservan tal cual
+- Los comentarios (`//`, `/* */`) se indentan pero no se modifican
 
 ---
 
-### Statusline integration
+### Integración con la statusline
 
-The plugin exposes a lualine component that shows the active SAP connection and the last
-activation result for the current buffer.
+El plugin expone un componente de lualine que muestra la conexión SAP activa y el último
+resultado de activación del buffer actual.
 
 ```lua
--- lualine config
+-- config de lualine
 require("lualine").setup({
   sections = {
     lualine_x = {
@@ -317,33 +324,34 @@ require("lualine").setup({
 })
 ```
 
-Display: ` DEV · 100 · JCGOMEZ [OK]`
-Color: orange (`#e8a87c`, bold). Only visible on ABAP buffers.
+Muestra: ` DEV · 100 · JCGOMEZ [OK]`
+Color: naranja (`#e8a87c`, bold). Solo visible en buffers ABAP.
 
-Without lualine, the plugin sets `vim.opt_local.statusline` on ABAP buffers automatically.
+Sin lualine, el plugin setea `vim.opt_local.statusline` en los buffers ABAP automáticamente.
 
-`:SapStatus` / `<leader>asi` prints the full connection details.
-
----
-
-### SAP GUI integration
-
-| Keymap | Description |
-|--------|-------------|
-| `<leader>asg` | Open SAP GUI |
-| `<leader>aso` | Open SAP GUI and show the relevant transaction for the current file |
+`:SapStatus` / `<leader>asi` imprime los detalles completos de la conexión.
 
 ---
 
-### Connection setup
+### Integración con SAP GUI
 
-`:SapSetup` / `<leader>asc` — interactive assistant. Writes to sapcli's kubeconfig-style
-`~/.sapcli/config.yml` via `sapcli config` (single source of truth). See
-[Getting started](#getting-started--connect-to-a-sap-system).
+| Atajo | Descripción |
+|-------|-------------|
+| `<leader>asg` | Abrir SAP GUI |
+| `<leader>aso` | Abrir SAP GUI y mostrar la transacción correspondiente al archivo actual |
 
-`:SapDoctor` / `<leader>asd` — read-only validation ladder (connectivity, object search, transports).
+---
 
-`:SapStatus` / `<leader>asi` — shows the active connection: system, client, user.
+### Configuración de conexión
+
+`:SapSetup` / `<leader>asc` — asistente interactivo. Escribe en el `~/.sapcli/config.yml` estilo
+kubeconfig de sapcli vía `sapcli config` (única fuente de verdad). Ver
+[Primeros pasos](#primeros-pasos--conectar-a-un-sistema-sap).
+
+`:SapDoctor` / `<leader>asd` — escalera de validación de solo lectura (conectividad, búsqueda de
+objetos, transportes).
+
+`:SapStatus` / `<leader>asi` — muestra la conexión activa: sistema, mandante, usuario.
 
 ---
 
@@ -404,117 +412,118 @@ Después autenticá una sola vez: `:Copilot auth` (usa tu login de GitHub de la 
 
 ---
 
-## Keymaps — full reference
+## Atajos — referencia completa
 
-| Keymap | Command | Description |
-|--------|---------|-------------|
-| `<leader>aa` | — | Activate object → errors in quickfix, jump to line |
-| `<leader>aT` | `:SapAUnit` | Run AUnit tests → failures in quickfix |
-| `<leader>aK` | — | Run ATC quality check |
-| `<leader>aF` | — | Format file (ABAP uppercase+indent / CDS braces) |
-| `<leader>aw` | `:SapWhereUsed` | Where-used list → quickfix |
-| `<leader>aD` | `:SapDiff` | Diff local buffer vs active system version |
-| `<leader>ai` | `:SapInactive` | Inactive objects — open or activate individually |
-| `<leader>an` | `:SapNew` | New ABAP object with system package/transport pickers |
-| `<leader>afs` | `:SapSearch` | Search objects in SAP |
-| `<leader>afb` | `:SapBrowse` | Browse package contents |
-| `<leader>ack` | `:SapCheckout` | Checkout full package to local filesystem |
-| `<leader>atl` | `:SapTransports` | List open transport orders |
-| `<leader>atc` | `:SapTransportCreate` | Create transport order |
-| `<leader>atr` | `:SapTransportRelease` | Release transport order |
-| `<leader>asi` | `:SapStatus` | Show active SAP connection info |
-| `<leader>asc` | `:SapSetup` | Connection setup assistant (sapcli kubeconfig) |
-| `<leader>asd` | `:SapDoctor` | Read-only validation: connection, objects, transports |
-| `<leader>asg` | — | Open SAP GUI |
-| `<leader>aso` | — | Open current object in SAP GUI |
-| `<leader>ah` | — | Help (all keymaps) |
+| Atajo | Comando | Descripción |
+|-------|---------|-------------|
+| `<leader>aa` | — | Activar objeto → errores en quickfix, salta a la línea |
+| `<leader>aT` | `:SapAUnit` | Correr tests AUnit → fallos en quickfix |
+| `<leader>aK` | — | Correr chequeo de calidad ATC |
+| `<leader>aF` | — | Formatear archivo (ABAP mayúsculas+indent / CDS llaves) |
+| `<leader>aw` | `:SapWhereUsed` | Lista de usos → quickfix |
+| `<leader>aD` | `:SapDiff` | Diff del buffer local vs la versión activa del sistema |
+| `<leader>ai` | `:SapInactive` | Objetos inactivos — abrir o activar de a uno |
+| `<leader>an` | `:SapNew` | Nuevo objeto ABAP con pickers de paquete/transporte del sistema |
+| `<leader>afs` | `:SapSearch` | Buscar objetos en SAP |
+| `<leader>afb` | `:SapBrowse` | Explorar contenido de un paquete |
+| `<leader>ack` | `:SapCheckout` | Checkout de un paquete completo al sistema de archivos local |
+| `<leader>atl` | `:SapTransports` | Listar órdenes de transporte abiertas |
+| `<leader>atc` | `:SapTransportCreate` | Crear orden de transporte |
+| `<leader>atr` | `:SapTransportRelease` | Liberar orden de transporte |
+| `<leader>asi` | `:SapStatus` | Mostrar info de la conexión SAP activa |
+| `<leader>asc` | `:SapSetup` | Asistente de configuración de conexión (kubeconfig de sapcli) |
+| `<leader>asd` | `:SapDoctor` | Validación de solo lectura: conexión, objetos, transportes |
+| `<leader>asg` | — | Abrir SAP GUI |
+| `<leader>aso` | — | Abrir el objeto actual en SAP GUI |
+| `<leader>ah` | — | Ayuda (todos los atajos) |
 
 ---
 
-## Naming conventions (abaplint.json)
+## Convenciones de naming (abaplint.json)
 
-`abaplint.json` in the project root configures real-time naming checks.
-Edit any pattern and the change takes effect on the next keystroke — no restart needed.
+El `abaplint.json` en la raíz del proyecto configura los chequeos de naming en tiempo real.
+Editá cualquier patrón y el cambio toma efecto en la siguiente tecla — sin reiniciar.
 
-### Variables inside methods and forms (local scope)
+### Variables dentro de métodos y forms (ámbito local)
 
-| Type | Prefix |
-|------|--------|
+| Tipo | Prefijo |
+|------|---------|
 | Variable | `WL_` |
-| Internal table | `TL_` |
-| Structure / Work area | `XL_` / `WAL_` |
-| Constant | `CL_` |
-| Type | `TYL_` |
-| Type (table) | `TTL_` |
+| Tabla interna | `TL_` |
+| Estructura / Work area | `XL_` / `WAL_` |
+| Constante | `CL_` |
+| Tipo | `TYL_` |
+| Tipo (tabla) | `TTL_` |
 | Static | `STL_` |
 | Range | `RL_` |
 | Field symbol | `<FS_xxx>` |
-| Importing parameter | `PI_` |
-| Exporting parameter | `PO_` |
-| Changing parameter | `PC_` |
-| Tables parameter | `PT_` |
+| Parámetro importing | `PI_` |
+| Parámetro exporting | `PO_` |
+| Parámetro changing | `PC_` |
+| Parámetro tables | `PT_` |
 
-### Class attributes (global scope)
+### Atributos de clase (ámbito global)
 
-| Type | Prefix |
-|------|--------|
-| Instance / static variable | `WG_` |
-| Internal table | `T_` |
-| Structure / Work area | `X_` / `WA_` |
+| Tipo | Prefijo |
+|------|---------|
+| Variable de instancia / estática | `WG_` |
+| Tabla interna | `T_` |
+| Estructura / Work area | `X_` / `WA_` |
 | Static | `ST_` |
-| Type | `TY_` / `TT_` |
-| Constant | `C_` |
+| Tipo | `TY_` / `TT_` |
+| Constante | `C_` |
 
-### Object naming
+### Naming de objetos
 
-| Object | Pattern | Example |
-|--------|---------|---------|
-| Program / Report | `Z` | `ZFIR_IVA_MENSUAL` |
-| Class (normal) | `ZCLA###_` | `ZCLAMM_PEDIDO` |
-| Class (abstract) | `ZCLN###_` | `ZCLN_BASE` |
-| Interface | `ZIF###_` | `ZIFMM_MINILOAD` |
-| Function group | `ZFG##_` | `ZFGFI_IVA` |
-| DDIC Table | `ZT###_` | `ZTFI_CODIGOS` |
-| DDIC Structure | `ZS###_` | `ZSFI_CODIGOS` |
-| Data element | `ZE###_` | `ZELEM_DAT` |
-| Domain | `ZD##_` | `ZD_STATUS` |
-| View | `ZV###_` | `ZVFI_CODIGOS` |
+| Objeto | Patrón | Ejemplo |
+|--------|--------|---------|
+| Programa / Report | `Z` | `ZFIR_IVA_MENSUAL` |
+| Clase (normal) | `ZCLA###_` | `ZCLAMM_PEDIDO` |
+| Clase (abstracta) | `ZCLN###_` | `ZCLN_BASE` |
+| Interfaz | `ZIF###_` | `ZIFMM_MINILOAD` |
+| Grupo de funciones | `ZFG##_` | `ZFGFI_IVA` |
+| Tabla DDIC | `ZT###_` | `ZTFI_CODIGOS` |
+| Estructura DDIC | `ZS###_` | `ZSFI_CODIGOS` |
+| Elemento de datos | `ZE###_` | `ZELEM_DAT` |
+| Dominio | `ZD##_` | `ZD_STATUS` |
+| Vista | `ZV###_` | `ZVFI_CODIGOS` |
 
 ---
 
-## Architecture
+## Arquitectura
 
 ```
 sap-nvim/
 ├── lua/sap-nvim/
-│   ├── init.lua              Entry point — loads all modules
+│   ├── init.lua              Punto de entrada — carga todos los módulos
 │   ├── core/
-│   │   ├── adt.lua           sapcli wrapper: activate, fetch packages/transports/objects
-│   │   ├── aunit.lua         AUnit runner + JUnit4 XML parser → quickfix
-│   │   ├── browser.lua       Object search and package browser
-│   │   ├── checkout.lua      Package checkout to local filesystem
-│   │   ├── debugger.lua      Interactive ABAP debugger (requires connection)
-│   │   ├── diff.lua          Local vs system vimdiff
-│   │   ├── doctor.lua        :SapDoctor read-only validation ladder
-│   │   ├── formatter.lua     ABAP + CDS native formatter
-│   │   ├── inactive.lua      Inactive objects picker + activation
-│   │   ├── keymaps.lua       All keymap definitions
-│   │   ├── lsp.lua           Real-time abaplint diagnostics via vim.diagnostic
-│   │   ├── new.lua           New object wizard with system pickers
-│   │   ├── objtype.lua       File extension → sapcli object group (single source)
-│   │   ├── setup.lua         :SapSetup — sapcli kubeconfig connection wizard
-│   │   ├── statusline.lua    Lualine component + native statusline
-│   │   ├── transport.lua     Transport order management
-│   │   └── whereused.lua     Where-used list → quickfix
+│   │   ├── adt.lua           Wrapper de sapcli: activar, traer paquetes/transportes/objetos
+│   │   ├── aunit.lua         Runner de AUnit + parser de XML JUnit4 → quickfix
+│   │   ├── browser.lua       Búsqueda de objetos y explorador de paquetes
+│   │   ├── checkout.lua      Checkout de paquete al sistema de archivos local
+│   │   ├── debugger.lua      Debugger ABAP interactivo (requiere conexión)
+│   │   ├── diff.lua          vimdiff local vs sistema
+│   │   ├── doctor.lua        :SapDoctor escalera de validación de solo lectura
+│   │   ├── formatter.lua     Formateador nativo de ABAP + CDS
+│   │   ├── inactive.lua      Picker de objetos inactivos + activación
+│   │   ├── keymaps.lua       Todas las definiciones de atajos
+│   │   ├── lsp.lua           Diagnósticos abaplint en tiempo real vía vim.diagnostic
+│   │   ├── new.lua           Asistente de objeto nuevo con pickers del sistema
+│   │   ├── objtype.lua       Extensión de archivo → grupo de objeto sapcli (fuente única)
+│   │   ├── setup.lua         :SapSetup — asistente de conexión kubeconfig de sapcli
+│   │   ├── statusline.lua    Componente de lualine + statusline nativa
+│   │   ├── transport.lua     Gestión de órdenes de transporte
+│   │   └── whereused.lua     Lista de usos → quickfix
 │   └── integrations/
-│       ├── completion.lua    ABAP snippet and keyword completion
-│       ├── avante.lua        AI assistant (Avante) — opt-in, not loaded by default
-│       └── mcphub.lua        MCP servers for SAP ADT — opt-in, not loaded by default
-└── abaplint.json             Linting and naming convention config
+│       ├── completion.lua    Snippets ABAP y autocompletado de palabras clave
+│       ├── copilot.lua       IA ABAP vía GitHub Copilot — opt-in, gateada por setup({ ai = "copilot" })
+│       ├── avante.lua        Asistente IA (Avante) — opt-in, no se carga por defecto
+│       └── mcphub.lua        Servidores MCP para SAP ADT — opt-in, no se carga por defecto
+└── abaplint.json             Config de linting y convenciones de naming
 ```
 
 ---
 
-## License
+## Licencia
 
 MIT
