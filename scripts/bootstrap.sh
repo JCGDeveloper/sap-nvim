@@ -317,13 +317,13 @@ ensure_pipx() {
   export PATH="$HOME/.local/bin:$PATH"   # disponible en ESTA sesión, hasta reabrir shell
 }
 
-# 6.1 sapcli (vía pipx — PEP 668 safe)
+# 6.1 sapcli — NO está en PyPI; se instala desde el repo git (vía pipx, PEP 668 safe)
 if cmd_exists sapcli; then
   ok "sapcli $(sapcli --version 2>&1 | head -1)"
 else
   ensure_pipx
-  info "Instalando sapcli vía pipx..."
-  pipx install sapcli
+  info "Instalando sapcli desde git (no está publicado en PyPI)..."
+  pipx install git+https://github.com/jfilak/sapcli.git
   ok "sapcli instalado"
 fi
 

@@ -10,7 +10,7 @@ con quickfix, runner de tests, gestión de transportes, explorador de objetos, s
 
 | Herramienta | Para qué | Instalación |
 |-------------|----------|-------------|
-| [sapcli](https://github.com/jfilak/sapcli) | Operaciones ADT (activar, checkout, AUnit, transportes…) | `pipx install sapcli` |
+| [sapcli](https://github.com/jfilak/sapcli) | Operaciones ADT (activar, checkout, AUnit, transportes…) | `pipx install git+https://github.com/jfilak/sapcli.git` |
 | [abaplint](https://github.com/abaplint/abaplint) | Linting y chequeos de naming en tiempo real | `npm install -g @abaplint/cli` |
 | Neovim ≥ 0.9 | Host del plugin | — |
 | Proveedor de `vim.ui.select` | Pickers (Telescope, fzf-lua o el nativo) | opcional |
@@ -77,17 +77,17 @@ se instala):
 
 ```sh
 # Linux / WSL2 (Ubuntu/Debian)
-sudo apt update && sudo apt install -y neovim build-essential nodejs npm pipx
+sudo apt update && sudo apt install -y neovim git build-essential nodejs npm pipx
 
 # herramientas ABAP (a nivel usuario)
-pipx install sapcli                # cliente ADT (Python, vía pipx — PEP 668 safe)
+pipx install git+https://github.com/jfilak/sapcli.git                # cliente ADT (Python, vía pipx — PEP 668 safe)
 npm install -g @abaplint/cli       # linter (Node.js)
 ```
 
 ```sh
 # macOS
 brew install neovim node python pipx
-pipx install sapcli
+pipx install git+https://github.com/jfilak/sapcli.git
 npm install -g @abaplint/cli
 ```
 
@@ -136,7 +136,7 @@ kubeconfig) — ese archivo es la única fuente de verdad.
 ### 1. Instalar las herramientas externas
 
 ```sh
-pipx install sapcli                # cliente ADT (Python, vía pipx — PEP 668 safe)
+pipx install git+https://github.com/jfilak/sapcli.git                # cliente ADT (Python, vía pipx — PEP 668 safe)
 npm install -g @abaplint/cli       # linter (Node.js)
 ```
 
@@ -222,8 +222,8 @@ invoca por consola.
 
 ```sh
 # dentro de WSL2 Ubuntu
-sudo apt update && sudo apt install -y neovim build-essential nodejs npm pipx
-pipx install sapcli
+sudo apt update && sudo apt install -y neovim git build-essential nodejs npm pipx
+pipx install git+https://github.com/jfilak/sapcli.git
 npm install -g @abaplint/cli
 ```
 

@@ -58,7 +58,7 @@ tree-sitter, efm-langserver) → Node.js → Python → sapcli + abaplint → sp
 
 ```bash
 # Linux / WSL2 (Ubuntu/Debian)
-sudo apt update && sudo apt install -y neovim build-essential nodejs npm pipx
+sudo apt update && sudo apt install -y neovim git build-essential nodejs npm pipx
 
 # macOS
 brew install neovim node python pipx
@@ -66,7 +66,7 @@ brew install neovim node python pipx
 
 ```bash
 # herramientas ABAP (nivel usuario, en cualquier SO)
-pipx install sapcli                # cliente ADT (Python, vía pipx — PEP 668 safe)
+pipx install git+https://github.com/jfilak/sapcli.git                # cliente ADT (Python, vía pipx — PEP 668 safe)
 npm install -g @abaplint/cli       # linter
 ```
 
