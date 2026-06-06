@@ -50,7 +50,8 @@ bash ~/sap-nvim/scripts/bootstrap.sh
      `~/.config/nvim/lua/plugins/sap-nvim.lua` (lazy.nvim lo carga solo). Si ese archivo
      ya existe, no cambia nada.
    - Si **no tenés** ninguna config → genera una mínima con lazy.nvim desde cero.
-8. Instala los parsers de tree-sitter (`abap`, `cds`) en modo headless.
+8. Intenta instalar los parsers de tree-sitter (`abap`, `cds`) en modo headless
+   (best-effort, con timeout). Si no lo logra, abrí Neovim y corré `:TSInstall abap cds`.
 9. Corre una validación final y lista qué quedó OK y qué falta.
 
 Es **idempotente**: podés correrlo las veces que quieras sin romper nada. Para deshacer,

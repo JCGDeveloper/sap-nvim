@@ -428,13 +428,23 @@ fi
 
 header "[Extra] Tree-sitter ABAP + CDS"
 
-if cmd_exists nvim; then
-  info "Instalando parsers vía Neovim headless..."
-  nvim --headless "+TSInstallSync abap" "+TSInstallSync cds" +qa 2>/dev/null && \
-    ok "Parsers tree-sitter instalados" || \
-    warn "Pendiente: nvim +TSInstallSync abap (puede requerir interfaz gráfica)"
-else
+# NOTA: arrancar nvim --headless con una config grande (LazyVim) dispara la
+# instalación de TODOS los plugins en headless y puede COLGARSE. Por eso este
+# paso es best-effort, con timeout, y NUNCA bloquea el script. Lo fiable es
+# abrir Neovim normal una vez y correr `:TSInstall abap cds`.
+TS_HINT="Abrí Neovim y corré:  :TSInstall abap cds"
+
+if ! cmd_exists nvim; then
   warn "Neovim no instalado, no se pueden instalar parsers"
+elif cmd_exists timeout; then
+  info "Intentando instalar parsers vía Neovim headless (best-effort, máx 180s)..."
+  if timeout 180 nvim --headless "+TSInstallSync abap" "+TSInstallSync cds" +qa >/dev/null 2>&1; then
+    ok "Parsers tree-sitter instalados"
+  else
+    warn "No se pudieron instalar en headless (timeout o config interactiva). $TS_HINT"
+  fi
+else
+  warn "Salteo la instalación headless (sin 'timeout' para evitar cuelgues). $TS_HINT"
 fi
 
 # ─── pbzip (validación) ─────────────────────────────────────────────────────
