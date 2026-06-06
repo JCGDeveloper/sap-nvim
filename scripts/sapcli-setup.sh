@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #===============================================================================
 # sapcli-setup.sh — Configuración interactiva de sapcli
-# Parte del proyecto sap-nvim (https://github.com/JoaquinCarrasco/sap-nvim)
+# Parte del proyecto sap-nvim (https://github.com/JCGDeveloper/sap-nvim)
 #
 # Uso: ./scripts/sapcli-setup.sh
 #   Crea/edita ~/.sapcli/config.yml con asistente interactivo.

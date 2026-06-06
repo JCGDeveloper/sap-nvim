@@ -4,6 +4,10 @@
 
 set -e
 
+# Resolve repo root from this script's own location (scripts/ is one level down).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+
 echo "📦 Instalando servidores LSP para ABAP..."
 
 # Verificar Node.js
@@ -39,5 +43,5 @@ echo '{
       "url": "https://raw.githubusercontent.com/SAP/styleguides/main/clean-abap/CleanABAP.json"
     }
   ]
-}' > ~/Desktop/sap-nvim/config/abaplint.json
-echo "   → Creado en ~/Desktop/sap-nvim/config/abaplint.json"
+}' > "$REPO_DIR/config/abaplint.json"
+echo "   → Creado en $REPO_DIR/config/abaplint.json"

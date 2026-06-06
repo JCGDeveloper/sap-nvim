@@ -2,7 +2,8 @@
 # sap-connect.sh
 # Script de conexión y prueba de SAP ADT
 
-CONFIG_FILE="$HOME/Desktop/sap-nvim/config/sap-connections.json"
+# Single source of truth for SAP connections is sapcli's own config.
+SAPCLI_CONFIG="$HOME/.sapcli/config.yml"
 
 # Colores
 GREEN='\033[0;32m'
@@ -44,31 +45,19 @@ else
   echo -e "${YELLOW}⚠️ ${NC} tree-sitter-cds: No instalado"
 fi
 
-# Verificar conexiones configuradas
+# Verificar conexiones configuradas (fuente de verdad: sapcli config.yml)
 echo ""
 echo "📋 Conexiones SAP:"
-if [ -f "$CONFIG_FILE" ]; then
-  echo -e "${GREEN}✅${NC} Archivo de conexiones encontrado: $CONFIG_FILE"
-  cat "$CONFIG_FILE" | python3 -m json.tool 2>/dev/null || cat "$CONFIG_FILE"
+if [ -f "$SAPCLI_CONFIG" ]; then
+  echo -e "${GREEN}✅${NC} sapcli config encontrado: $SAPCLI_CONFIG"
+  sapcli config get-contexts 2>/dev/null || true
 else
-  echo -e "${YELLOW}⚠️ ${NC} No hay archivo de conexiones."
-  echo "   Crea uno en: $CONFIG_FILE"
-  echo "   Ejemplo:"
-  echo '{
-    "current": "desarrollo",
-    "connections": {
-      "desarrollo": {
-        "ashost": "sap.example.com",
-        "sysnr": "00",
-        "client": "100",
-        "port": 443,
-        "user": "$USER",
-        "ssl": true,
-        "system_id": "D01",
-        "description": "Conexión desarrollo"
-      }
-    }
-  }'
+  echo -e "${YELLOW}⚠️ ${NC} No hay conexión configurada."
+  echo "   Configurala con sapcli (estilo kubeconfig):"
+  echo "     sapcli config set-connection dev --ashost HOST --port 44300 --client 100 --ssl"
+  echo "     sapcli config set-user me --user SAPUSER --password ****"
+  echo "     sapcli config set-context dev --connection dev --user me"
+  echo "     sapcli config use-context dev"
 fi
 
 # Probar abaplint
@@ -81,7 +70,7 @@ echo "REPORT ztest." | abaplint --format json 2>/dev/null && \
 echo ""
 echo "============================================"
 echo "Para empezar a desarrollar:"
-echo "  1. nvim ~/Desktop/sap-nvim/"
+echo "  1. :checkhealth sap-nvim   → verificar dependencias y conexión"
 echo "  2. Abre un archivo .abap"
-echo "  3. Usa <leader>aa para activar en SAP"
-echo "  4. Usa <leader>ac para ejecutar ATC"
+echo "  3. <leader>aa para activar en SAP"
+echo "  4. <leader>aK para ejecutar ATC"

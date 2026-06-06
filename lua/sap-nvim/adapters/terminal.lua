@@ -14,12 +14,18 @@ sap-nvim - Comandos (requieren sapcli + conexión SAP):
   :SapActivate [obj]  Activar objeto ABAP
   :SapSearch <query>  Buscar objetos
 
-Instalación:
-  pip install sapcli (en ~/.sap-nvim-venv/)
-  ~/.sap-nvim-venv/bin/sapcli --help
+Diagnóstico de instalación:
+  :checkhealth sap-nvim
 
-Configura conexión en:
-  ~/Desktop/sap-nvim/config/sap-connections.json
+Instalación de dependencias:
+  pip install sapcli
+  npm install -g @abaplint/cli
+
+Configurar conexión (fuente de verdad: ~/.sapcli/config.yml):
+  sapcli config set-connection dev --ashost HOST --port 44300 --client 100 --ssl
+  sapcli config set-user me --user SAPUSER --password ****
+  sapcli config set-context dev --connection dev --user me
+  sapcli config use-context dev
     ]], "info", { title = "sap-nvim" })
   end, { desc = "Ayuda de comandos sap-nvim" })
 end

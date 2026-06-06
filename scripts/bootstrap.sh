@@ -4,8 +4,8 @@
 # Instalación completa del entorno Neovim para desarrollo ABAP
 # Inspirado en Gentlemen Programming — one script, zero friction
 #
-# Uso: curl -fsSL https://raw.githubusercontent.com/JoaquinCarrasco/nvim-abap-config/main/bootstrap.sh | bash
-#      O: git clone https://github.com/JoaquinCarrasco/nvim-abap-config.git && cd nvim-abap-config && bash bootstrap.sh
+# Uso: curl -fsSL https://raw.githubusercontent.com/JCGDeveloper/sap-nvim/main/scripts/bootstrap.sh | bash
+#      O: git clone https://github.com/JCGDeveloper/sap-nvim.git && cd sap-nvim && bash scripts/bootstrap.sh
 #
 # Soporte:
 #   - macOS (Apple Silicon / Intel)    → Homebrew
@@ -19,11 +19,12 @@ set -euo pipefail
 
 # ─── Configuración ──────────────────────────────────────────────────────────
 
-SAP_NVIM_DIR="$HOME/Desktop/sap-nvim"
+# Optional dev clone location; override with SAP_NVIM_DIR=... if you want it elsewhere.
+# Not required for the lazy.nvim install — lazy pulls the plugin from GitHub directly.
+SAP_NVIM_DIR="${SAP_NVIM_DIR:-$HOME/sap-nvim}"
 NVIM_CONFIG_DIR="$HOME/.config/nvim"
 SAPCLI_CONFIG_DIR="$HOME/.sapcli"
-REPO_URL="https://github.com/JoaquinCarrasco/sap-nvim.git"
-DISTRO_URL="https://github.com/JoaquinCarrasco/nvim-abap-config.git"
+REPO_URL="https://github.com/JCGDeveloper/sap-nvim.git"
 NVIM_VERSION_MIN="0.10"
 
 # Colores
@@ -361,13 +362,17 @@ LUAEOF
   # sap-nvim plugin config
   cat > "$NVIM_CONFIG_DIR/lua/plugins/sap-nvim.lua" << 'PLUGINEOF'
 return {
-  dir = vim.fn.expand("~/Desktop/sap-nvim"),
+  "JCGDeveloper/sap-nvim",
   dependencies = {
     "nvim-treesitter/nvim-treesitter",
     "nvim-treesitter/nvim-treesitter-textobjects",
     "neovim/nvim-lspconfig",
   },
-  opts = {},
+  -- NOTE: the plugin module is "sap-nvim"; lazy's `opts` would resolve the wrong
+  -- main name ("sap"), so call setup() explicitly.
+  config = function()
+    require("sap-nvim").setup()
+  end,
 }
 PLUGINEOF
 

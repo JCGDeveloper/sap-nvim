@@ -4,8 +4,9 @@
 
 local M = {}
 
+-- Single source of truth for SAP connections: sapcli's own kubeconfig-style file.
+-- We do NOT mirror it into a separate nvim JSON anymore.
 local config_path = vim.fn.expand("~/.sapcli/config.yml")
-local nvim_connections_path = vim.fn.expand("~/Desktop/sap-nvim/config/sap-connections.json")
 
 -- ─── Utilerías ───────────────────────────────────────────────────────────────
 
@@ -119,33 +120,6 @@ local function write_sapcli_config(config)
   end
 
   return write_file(config_path, table.concat(lines, "\n"))
-end
-
--- ─── Sincronizar con sap-connections.json de Neovim ─────────────────────────
-
-local function sync_to_neovim(config)
-  local connections = {}
-  for name, ctx in pairs(config.contexts) do
-    connections[name] = {
-      ashost = ctx.ashost or "",
-      sysnr = ctx.sysnr or "00",
-      client = ctx.client or "100",
-      port = tonumber(ctx.port) or 443,
-      user = ctx.user or "",
-      ssl = ctx.ssl ~= "false",
-      system_id = (ctx.sysid or name):upper():sub(1, 3),
-      description = ctx.description or ("Conexión " .. name),
-    }
-  end
-
-  local output = vim.fn.json_encode({
-    current = config.current,
-    connections = connections,
-  })
-
-  vim.fn.mkdir(vim.fn.fnamemodify(nvim_connections_path, ":h"), "p")
-  write_file(nvim_connections_path, output)
-  return connections
 end
 
 -- ─── Verificar sapcli ────────────────────────────────────────────────────────
@@ -364,7 +338,6 @@ show_new_connection = function()
     end
 
     if write_sapcli_config(config) then
-      sync_to_neovim(config)
       notify("✅ Conexión '" .. name .. "' guardada. Usá <leader>a" .. (#vim.tbl_keys(config.contexts)) .. " para seleccionarla.")
     end
   end)
@@ -411,7 +384,6 @@ show_edit_connection = function()
       }
 
       if write_sapcli_config(config) then
-        sync_to_neovim(config)
         notify("✅ Conexión '" .. name .. "' actualizada.")
       end
     end)
@@ -507,7 +479,6 @@ show_delete_connection = function()
       config.current = remaining[1] or ""
     end
     if write_sapcli_config(config) then
-      sync_to_neovim(config)
       notify("🗑️ Conexión '" .. name .. "' eliminada.")
     end
   end)
@@ -549,11 +520,6 @@ function M.setup()
     show_main_menu()
   end, { desc = "ABAP: Configurar conexiones SAP" })
 
-  -- Cargar conexiones existentes al iniciar
-  local config = parse_sapcli_config()
-  if next(config.contexts) then
-    vim.g.sap_nvim_connections = sync_to_neovim(config)
-  end
 end
 
 return M
