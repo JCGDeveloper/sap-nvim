@@ -1,135 +1,130 @@
 # Guía de Instalación — sap-nvim
 
+Esta guía amplía la sección **Instalación** del [README](../README.md) con el detalle
+completo. Hay dos caminos: el **script automático** (Opción A) o la **instalación manual**
+(Opción B). Ambos respetan tu configuración de Neovim existente: **no sobrescriben tu `init.lua`**.
+
+---
+
 ## Prerrequisitos
 
+| Herramienta | Versión mínima | Para qué |
+|-------------|----------------|----------|
+| Neovim | ≥ 0.9 | Host del plugin |
+| Node.js + npm | ≥ 18 | abaplint |
+| Python 3 + pip | ≥ 3.8 | sapcli |
+| Compilador C (gcc/clang) | — | parsers de tree-sitter |
+
+Verificá lo que ya tenés:
+
 ```bash
-# Neovim ≥ 0.12
 nvim --version
-
-# Node.js ≥ 18 (para abaplint, CDS LSP, MCP servers)
 node --version
-
-# Python ≥ 3.8 (para sapcli)
 python3 --version
-
-# Compilador C (para tree-sitter)
 gcc --version || clang --version
 ```
 
-## Paso 1: Parsers Tree-sitter
+---
+
+## Opción A — Script automático
+
+Para **WSL2**, Linux y macOS. Instala todo y añade el plugin **sin tocar tu config**.
 
 ```bash
-# Instalar parsers desde Neovim
-# :TSInstall abap
-# :TSInstall cds
+git clone https://github.com/JCGDeveloper/sap-nvim.git ~/sap-nvim
+bash ~/sap-nvim/scripts/bootstrap.sh
 ```
 
-O desde el script:
+El script es **idempotente** (podés repetirlo sin romper nada) y **no destructivo**: si ya
+tenés `~/.config/nvim/init.lua`, solo añade `~/.config/nvim/lua/plugins/sap-nvim.lua` y deja
+el resto intacto. Si no tenés ninguna config, genera una mínima con lazy.nvim.
+
+Flags:
+
 ```bash
-chmod +x ~/Desktop/sap-nvim/scripts/setup-treesitter.sh
-./~/Desktop/sap-nvim/scripts/setup-treesitter.sh
+bash ~/sap-nvim/scripts/bootstrap.sh --skip-packages   # no instala paquetes de sistema
+bash ~/sap-nvim/scripts/bootstrap.sh --help
 ```
 
-## Paso 2: Servidores LSP
+Lo que hace, en orden: gestor de paquetes → Neovim → deps de sistema (git, ripgrep, fd,
+tree-sitter, efm-langserver) → Node.js → Python → sapcli + abaplint → spec del plugin
+(no destructivo) → parsers tree-sitter (abap, cds) → validación final.
+
+---
+
+## Opción B — Manual, paso a paso
+
+### Paso 1: Herramientas externas
 
 ```bash
-# abaplint (validación ABAP)
-npm install -g abaplint
+# Linux / WSL2 (Ubuntu/Debian)
+sudo apt update && sudo apt install -y neovim python3-pip nodejs npm
 
-# CDS LSP (Core Data Services)
-npm install -g @sap/cds-lsp
+# macOS
+brew install neovim node python
 ```
 
-Verificar instalación:
 ```bash
+# herramientas ABAP (nivel usuario, en cualquier SO)
+pip install sapcli                 # cliente ADT
+npm install -g @abaplint/cli       # linter
+```
+
+Verificar:
+
+```bash
+sapcli --version
 abaplint --version
-cds-lsp --version
 ```
 
-## Paso 3: Cliente ADT
+### Paso 2: Añadir el plugin (lazy.nvim)
 
-### sapcli (Python)
-```bash
-pip install sapcli
-# o
-pipx install sapcli
-```
-
-### abap-adt-api (Node.js)
-```bash
-npm install -g abap-adt-api
-```
-
-## Paso 4: Servidores MCP
-
-### ARC-1
-```bash
-git clone https://github.com/marianfoo/arc-1.git
-cd arc-1
-npm install
-# Configurar conexión SAP en .env
-```
-
-### mcp-abap-adt-api
-```bash
-git clone https://github.com/mario-andreschak/mcp-abap-abap-adt-api.git
-cd mcp-abap-abap-adt-api
-npm install
-```
-
-## Paso 5: Configuración de Neovim
-
-### Con LazyVim (recomendado)
-
-Añadir a `~/.config/nvim/lua/plugins/sap.lua`:
+Creá `~/.config/nvim/lua/plugins/sap-nvim.lua` — **no toques tu `init.lua`**:
 
 ```lua
 return {
-  -- Este plugin
-  dir = "~/Desktop/sap-nvim",
-
-  -- Tree-sitter parsers
-  {
+  "JCGDeveloper/sap-nvim",
+  dependencies = {
     "nvim-treesitter/nvim-treesitter",
-    opts = function(_, opts)
-      vim.list_extend(opts.ensure_installed, {})
-    end,
+    "neovim/nvim-lspconfig",
   },
-
-  -- MCP Hub
-  {
-    "ravitemer/mcphub.nvim",
-    dependencies = { "nvim-lua/plenary.nvim" },
-    opts = {
-      servers = {
-        {
-          name = "arc-1",
-          cmd = { "node", "~/arc-1/server.js" },
-        },
-      },
-    },
-  },
-
-  -- Avante (alternativa MCP)
-  {
-    "yetone/avante.nvim",
-    opts = {
-      provider = "claude",
-      -- ... configuración existente
-    },
-  },
+  config = function()
+    require("sap-nvim").setup()
+  end,
 }
 ```
 
-## Verificación
+lazy.nvim carga automáticamente cualquier archivo dentro de `lua/plugins/`. Reiniciá Neovim.
 
-```bash
-# Probar abaplint
-echo "REPORT ztest." | abaplint --format json
+### Paso 3: Parsers tree-sitter
 
-# Probar sapcli
-sapcli --help
+Dentro de Neovim:
 
-# Probar MCP
-node ~/arc-1/server.js --help
+```vim
+:TSInstall abap cds
 ```
+
+### Paso 4: Verificación
+
+```vim
+:checkhealth sap-nvim
+```
+
+Reporta cada dependencia con el comando exacto para arreglar lo que falte.
+
+---
+
+## Asistencia con IA (opcional)
+
+Apagada por defecto. Usa **GitHub Copilot** (mismo backend y licencia que la extensión de
+VSCode). Ver la sección [Asistencia con IA](../README.md#asistencia-con-ia-github-copilot)
+del README. **No** se recomienda la integración directa con APIs externas (avante) en
+entornos SAP corporativos: enviaría código ABAP fuera del canal aprobado por tu empresa.
+
+---
+
+## Siguiente paso
+
+Con todo en verde, conectá a tu sistema SAP: `:SapSetup` → `:SapDoctor`.
+Ver [Primeros pasos](../README.md#primeros-pasos--conectar-a-un-sistema-sap) y, en Windows,
+[instalar bajo WSL2](../README.md#windows-instalar-bajo-wsl2).

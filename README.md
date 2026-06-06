@@ -19,9 +19,81 @@ con quickfix, runner de tests, gestión de transportes, explorador de objetos, s
 
 ## Instalación
 
+Hay dos caminos. Elegí **uno**. Si ya tenés una config de Neovim (LazyVim u otra) que
+no querés tocar, los dos respetan tu `init.lua`: **ninguno lo sobrescribe**.
+
+### Opción A — Script automático (se instala solo)
+
+Para **WSL2**, Linux y macOS. Detecta tu SO/distro, instala las dependencias y **añade el
+plugin sin tocar tu configuración existente**.
+
+```sh
+# 1) cloná el repo
+git clone https://github.com/JCGDeveloper/sap-nvim.git ~/sap-nvim
+
+# 2) corré el bootstrap
+bash ~/sap-nvim/scripts/bootstrap.sh
+```
+
+**Qué hace** (paso a paso, en orden):
+
+1. Detecta el gestor de paquetes (`apt`/`dnf`/`pacman` en Linux/WSL2, Homebrew en macOS).
+2. Instala Neovim si falta.
+3. Instala las deps del sistema: `git`, `ripgrep`, `fd`, `tree-sitter`, `efm-langserver`.
+4. Instala Node.js + npm si faltan.
+5. Instala Python 3 + pip si faltan.
+6. Instala las herramientas ABAP: `sapcli` (pip) y `abaplint` (npm).
+7. **Config de Neovim — NO destructiva:**
+   - Si **ya tenés** `~/.config/nvim/init.lua` → no lo toca. Solo crea
+     `~/.config/nvim/lua/plugins/sap-nvim.lua` (lazy.nvim lo carga solo). Si ese archivo
+     ya existe, no cambia nada.
+   - Si **no tenés** ninguna config → genera una mínima con lazy.nvim desde cero.
+8. Instala los parsers de tree-sitter (`abap`, `cds`) en modo headless.
+9. Corre una validación final y lista qué quedó OK y qué falta.
+
+Es **idempotente**: podés correrlo las veces que quieras sin romper nada. Para deshacer,
+borrá `~/.config/nvim/lua/plugins/sap-nvim.lua` y desinstalá las herramientas.
+
+> **Sobre WSL2 y "no tocar el ordenador de empresa":** WSL2 es una VM Linux aislada del
+> Windows host. `sudo apt` dentro de WSL **solo toca tu Ubuntu de WSL**, nunca Windows. El
+> script no instala nada en el lado Windows. Ver [Windows: instalar bajo WSL2](#windows-instalar-bajo-wsl2)
+> para el detalle de red/VPN, que es el único punto delicado real.
+
+Flags útiles:
+
+```sh
+bash ~/sap-nvim/scripts/bootstrap.sh --skip-packages   # no instala paquetes de sistema (ya los tenés)
+bash ~/sap-nvim/scripts/bootstrap.sh --help
+```
+
+### Opción B — Manual, paso a paso
+
+Si preferís controlar cada paso (recomendado en máquinas de empresa para ver exactamente qué
+se instala):
+
+**1. Instalá las herramientas externas** (no requieren tocar tu config de nvim):
+
+```sh
+# Linux / WSL2 (Ubuntu/Debian)
+sudo apt update && sudo apt install -y neovim python3-pip nodejs npm
+
+# herramientas ABAP (a nivel usuario)
+pip install sapcli                 # cliente ADT (Python)
+npm install -g @abaplint/cli       # linter (Node.js)
+```
+
+```sh
+# macOS
+brew install neovim node python
+pip3 install sapcli
+npm install -g @abaplint/cli
+```
+
+**2. Añadí el plugin a tu config de lazy.nvim.** Creá un archivo nuevo
+`~/.config/nvim/lua/plugins/sap-nvim.lua` (no toques tu `init.lua`):
+
 ```lua
--- lazy.nvim
-{
+return {
   "JCGDeveloper/sap-nvim",
   dependencies = {
     "nvim-treesitter/nvim-treesitter",
@@ -32,6 +104,24 @@ con quickfix, runner de tests, gestión de transportes, explorador de objetos, s
   end,
 }
 ```
+
+lazy.nvim detecta cualquier archivo dentro de `lua/plugins/` automáticamente — no hace falta
+registrar nada más. Reiniciá Neovim y lazy instala el plugin solo.
+
+**3. Instalá los parsers de tree-sitter** (dentro de Neovim):
+
+```vim
+:TSInstall abap cds
+```
+
+**4. Verificá la instalación:**
+
+```vim
+:checkhealth sap-nvim
+```
+
+Reporta cada dependencia (sapcli, abaplint, node, parsers) con el comando exacto para arreglar
+lo que falte. Cuando todo esté en verde, seguí con [Primeros pasos](#primeros-pasos--conectar-a-un-sistema-sap).
 
 ---
 

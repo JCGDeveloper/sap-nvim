@@ -310,37 +310,55 @@ else
   }
 fi
 
-# ─── 8. Configuración Neovim ────────────────────────────────────────────────
+# ─── 8. Configuración Neovim (NO destructiva) ───────────────────────────────
+#
+# REGLA DE ORO: este paso NUNCA sobrescribe una configuración de Neovim
+# existente. Si ya tenés LazyVim u otra config, solo se añade el spec del
+# plugin en lua/plugins/sap-nvim.lua (lazy.nvim lo carga solo). Tu init.lua
+# y el resto de tu configuración quedan intactos.
 
 header "[8/8] Configuración Neovim"
 
-# Detectar si estamos en el repositorio clonado o en curl|bash
-DISTRO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || echo "")"
+PLUGIN_SPEC="$NVIM_CONFIG_DIR/lua/plugins/sap-nvim.lua"
 
-if [ -n "$DISTRO_DIR" ] && [ -f "$DISTRO_DIR/init.lua" ]; then
-  info "Copiando configuración desde $DISTRO_DIR..."
+write_plugin_spec() {
   mkdir -p "$NVIM_CONFIG_DIR/lua/plugins"
-  mkdir -p "$NVIM_CONFIG_DIR/lua/config"
+  cat > "$PLUGIN_SPEC" << 'PLUGINEOF'
+return {
+  "JCGDeveloper/sap-nvim",
+  dependencies = {
+    "nvim-treesitter/nvim-treesitter",
+    "neovim/nvim-lspconfig",
+  },
+  -- The plugin module is "sap-nvim"; lazy's `opts` would resolve the wrong
+  -- main name ("sap"), so call setup() explicitly.
+  config = function()
+    require("sap-nvim").setup()
+  end,
+}
+PLUGINEOF
+}
 
-  cp "$DISTRO_DIR/init.lua" "$NVIM_CONFIG_DIR/init.lua" 2>/dev/null || true
-  cp -r "$DISTRO_DIR/lua"/* "$NVIM_CONFIG_DIR/lua/" 2>/dev/null || true
-
-  for f in lazyvim.json lazy-lock.json stylua.toml LICENSE; do
-    [ -f "$DISTRO_DIR/$f" ] && cp "$DISTRO_DIR/$f" "$NVIM_CONFIG_DIR/$f" 2>/dev/null || true
-  done
-
-  ok "Configuración copiada desde distro local"
+if [ -f "$NVIM_CONFIG_DIR/init.lua" ]; then
+  # Config existente → NO se toca. Solo se añade el spec del plugin.
+  ok "Config de Neovim existente detectada en $NVIM_CONFIG_DIR — tu init.lua NO se toca"
+  if [ -f "$PLUGIN_SPEC" ]; then
+    ok "El spec del plugin ya existe ($PLUGIN_SPEC) — sin cambios"
+  else
+    info "Añadiendo solo lua/plugins/sap-nvim.lua (lazy.nvim lo detecta automáticamente)..."
+    write_plugin_spec
+    ok "Creado $PLUGIN_SPEC — el resto de tu configuración quedó intacto"
+  fi
+  warn "Si NO usás lazy.nvim, añadí el plugin con tu gestor a mano (ver README)."
 else
-  info "No se encontró distro local. Creando configuración desde cero..."
-
+  # No hay ninguna config → es seguro generar una mínima desde cero.
+  info "No hay config de Neovim. Creando una mínima con lazy.nvim..."
   mkdir -p "$NVIM_CONFIG_DIR/lua/plugins"
-  mkdir -p "$NVIM_CONFIG_DIR/lua/config"
 
-  # init.lua con lazy.nvim bootstrap
   cat > "$NVIM_CONFIG_DIR/init.lua" << 'LUAEOF'
--- nvim-abap-config — bootstrap lazy.nvim
+-- sap-nvim — bootstrap lazy.nvim (config mínima generada porque no existía ninguna)
 local lazypath = vim.fn.stdpath("data") .. "/lazy/lazy.nvim"
-if not vim.loop.fs_stat(lazypath) then
+if not (vim.uv or vim.loop).fs_stat(lazypath) then
   vim.fn.system({
     "git", "clone", "--filter=blob:none",
     "https://github.com/folke/lazy.nvim.git",
@@ -353,32 +371,12 @@ vim.opt.timeoutlen = 1000
 vim.opt.ttimeoutlen = 0
 
 require("lazy").setup("plugins", {
-  defaults = { lazy = true },
-  install = { colorscheme = { "catppuccin" } },
   change_detection = { notify = false },
 })
 LUAEOF
 
-  # sap-nvim plugin config
-  cat > "$NVIM_CONFIG_DIR/lua/plugins/sap-nvim.lua" << 'PLUGINEOF'
-return {
-  "JCGDeveloper/sap-nvim",
-  dependencies = {
-    "nvim-treesitter/nvim-treesitter",
-    "nvim-treesitter/nvim-treesitter-textobjects",
-    "neovim/nvim-lspconfig",
-  },
-  -- NOTE: the plugin module is "sap-nvim"; lazy's `opts` would resolve the wrong
-  -- main name ("sap"), so call setup() explicitly.
-  config = function()
-    require("sap-nvim").setup()
-  end,
-}
-PLUGINEOF
-
-  echo '{"version":2,"colorscheme":"catppuccin"}' > "$NVIM_CONFIG_DIR/lazyvim.json"
-
-  ok "Configuración básica creada"
+  write_plugin_spec
+  ok "Configuración mínima creada (no se sobrescribió nada: no existía)"
 fi
 
 # ─── Tree-sitter parsers ──────────────────────────────────────────────────
