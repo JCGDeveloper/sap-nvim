@@ -46,6 +46,12 @@ function M.run()
       local c = vim.fn.systemlist({ "sapcli", "config", "current-context" })
       return vim.v.shell_error == 0 and c[1] ~= nil and not c[1]:match("No configuration")
     end },
+    { "~/.sapcli/config.yml protegido (0600 — clave en texto plano)", function()
+      local st = vim.loop.fs_stat(vim.fn.expand("~/.sapcli/config.yml"))
+      if not st then return true end -- sin archivo todavía, nada que filtrar
+      -- Inseguro si el grupo u otros tienen cualquier permiso (bits bajos != 0).
+      return (st.mode % 64) == 0
+    end },
   }
   for _, c in ipairs(local_checks) do
     table.insert(results, mark(c[2]()) .. c[1])

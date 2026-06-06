@@ -101,7 +101,13 @@ local function create_connection(v)
   end
 
   run({ "sapcli", "config", "use-context", name })
-  notify("✅ Conexión '" .. name .. "' creada y activada. Verificá con :SapDoctor")
+
+  -- Harden the config file. It stores the password in plaintext, so on a shared
+  -- machine no other user must be able to read it. 0600 = owner read/write only.
+  local cfg = vim.fn.expand("~/.sapcli/config.yml")
+  pcall(vim.loop.fs_chmod, cfg, tonumber("600", 8))
+
+  notify("✅ Conexión '" .. name .. "' creada y activada (config 0600). Verificá con :SapDoctor")
 end
 
 -- Deletes a context and its dedicated connection/user (best-effort).
