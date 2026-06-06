@@ -228,8 +228,35 @@ if [ "$SKIP_PACKAGES" = false ]; then
   install_pkg "lazygit"   "lazygit"   "lazygit"   "lazygit"   "lazygit"
   install_pkg "fd"        "fd"        "fd-find"   "fd-find"   "fd"
   install_pkg "rg"        "ripgrep"   "ripgrep"   "ripgrep"   "ripgrep"
-  install_pkg "tree-sitter" "tree-sitter" "tree-sitter" "tree-sitter" "tree-sitter"
-  install_pkg "efm-langserver" "efm-langserver" "efm-langserver" "efm-langserver" "efm-langserver"
+
+  # Compilador C: nvim-treesitter compila los parsers (abap, cds) desde fuente.
+  # NO se necesita el CLI `tree-sitter` (no está en apt/dnf y solo sirve para
+  # gramáticas custom). Lo que de verdad hace falta es un compilador C.
+  if cmd_exists cc || cmd_exists gcc || cmd_exists clang; then
+    ok "compilador C ya disponible"
+  else
+    info "Instalando compilador C (para compilar parsers tree-sitter)..."
+    case "$PKG_MANAGER" in
+      brew)   xcode-select --install 2>/dev/null || true ;;
+      apt)    sudo apt-get install -y build-essential ;;
+      dnf)    sudo dnf install -y gcc make ;;
+      pacman) sudo pacman -S --noconfirm base-devel ;;
+    esac
+    ok "compilador C instalado"
+  fi
+
+  # efm-langserver es OPCIONAL: solo habilita el bridge de formato vía LSP.
+  # No está en apt/dnf; si no se puede instalar, seguimos sin problema porque
+  # el plugin ya formatea con su formatter nativo (<leader>aF).
+  if cmd_exists efm-langserver; then
+    ok "efm-langserver ya instalado (opcional)"
+  else
+    case "$PKG_MANAGER" in
+      brew)   brew install efm-langserver || warn "efm-langserver no instalado (opcional)" ;;
+      pacman) sudo pacman -S --noconfirm efm-langserver || warn "efm-langserver no instalado (opcional)" ;;
+      *)      warn "efm-langserver es opcional y no está en $PKG_MANAGER — se omite (instalalo con 'go install github.com/mattn/efm-langserver@latest' si querés el bridge LSP de formato)" ;;
+    esac
+  fi
 fi
 
 # ─── 4. Node.js ─────────────────────────────────────────────────────────────
@@ -412,10 +439,24 @@ echo ""
 echo "  ${BOLD}Editor:${NC}"
 validate_cmd nvim "Neovim"
 
+validate_optional() {
+  local name="$1" label="${2:-$1}"
+  if cmd_exists "$name"; then
+    echo -e "    ${GREEN}✔${NC} $label"
+  else
+    echo -e "    ${YELLOW}⚠${NC} $label: opcional, no instalado"
+  fi
+}
+
 echo ""
 echo "  ${BOLD}Dependencias:${NC}"
 validate_cmd git; validate_cmd lazygit; validate_cmd rg "ripgrep"
-validate_cmd tree-sitter; validate_cmd efm-langserver
+if cmd_exists cc || cmd_exists gcc || cmd_exists clang; then
+  echo -e "    ${GREEN}✔${NC} compilador C"
+else
+  echo -e "    ${RED}✘${NC} compilador C NO INSTALADO"; ERRORS=$((ERRORS + 1))
+fi
+validate_optional efm-langserver "efm-langserver"
 validate_cmd node "Node.js"; validate_cmd npm; validate_cmd python3 "Python 3"
 
 echo ""

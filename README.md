@@ -39,7 +39,9 @@ bash ~/sap-nvim/scripts/bootstrap.sh
 
 1. Detecta el gestor de paquetes (`apt`/`dnf`/`pacman` en Linux/WSL2, Homebrew en macOS).
 2. Instala Neovim si falta.
-3. Instala las deps del sistema: `git`, `ripgrep`, `fd`, `tree-sitter`, `efm-langserver`.
+3. Instala las deps del sistema: `git`, `ripgrep`, `fd` y un **compilador C** (para que
+   nvim-treesitter compile los parsers `abap`/`cds`). `efm-langserver` es opcional y se
+   omite si no está disponible en tu gestor.
 4. Instala Node.js + npm si faltan.
 5. Instala Python 3 + pip si faltan.
 6. Instala las herramientas ABAP: `sapcli` (pip) y `abaplint` (npm).
