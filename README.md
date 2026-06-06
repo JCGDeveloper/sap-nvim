@@ -170,6 +170,51 @@ Una vez que `curl`/`nc` llegan al host, `:SapSetup` → `:SapDoctor` funcionan i
 
 ---
 
+## Seguridad (máquinas compartidas)
+
+Pensado para entornos donde varias personas comparten el sistema SAP (o la máquina). El diseño
+es **conservador por defecto**: no podés romper ni perder nada del sistema con este plugin.
+
+### Lo que el plugin NO puede hacer (auditado en el código)
+
+| Riesgo | Estado | Por qué |
+|--------|--------|---------|
+| Sobrescribir código de otro | **Imposible** | No existe ningún `sapcli write`/`checkin`. Editás archivos locales; el source remoto nunca se pisa. |
+| Borrar objetos | **Imposible** | No hay ningún comando `delete` en el código. |
+| Liberar transportes ajenos | **No** | La lista se filtra por `--owner` (solo los tuyos) y la liberación exige confirmar explícitamente. |
+| Dejar el sistema roto tras un error | **No** | Cada operación es una llamada `sapcli` atómica. Si falla, el objeto queda inactivo (igual que Eclipse) — reversible y solo tuyo. |
+| Locks colgados | **Riesgo mínimo** | sapcli toma y libera el lock dentro de la misma llamada; los locks ADT expiran por sesión. |
+
+Lo peor que puede pasar es que una activación falle y tu objeto quede inactivo. Es reversible y
+no afecta el trabajo de los demás.
+
+### Protección de credenciales
+
+La contraseña se guarda en **texto plano** en `~/.sapcli/config.yml`. En una máquina compartida,
+si otra persona lee ese archivo puede hacerse pasar por vos. El plugin lo mitiga:
+
+- **`:SapSetup` aplica `chmod 600`** al archivo al crear la conexión (solo el dueño lo lee).
+- **`:SapDoctor` chequea los permisos** y marca ❌ si el grupo u otros tienen acceso de lectura.
+
+Si tenés un `config.yml` previo, aseguralo a mano:
+
+```sh
+chmod 600 ~/.sapcli/config.yml
+```
+
+### Tu responsabilidad (no la cubre el código)
+
+1. **Usá tu usuario SAP personal de diálogo**, no uno compartido — así cada acción queda a tu
+   nombre y el daño potencial se acota a tus permisos.
+2. **Conectate solo a sistemas de DEV/sandbox**, nunca a productivo.
+3. **Si comparten la misma cuenta de SO** (Windows/WSL), el `chmod 600` no alcanza: mismo usuario
+   = mismo acceso. Lo ideal es que cada persona tenga su cuenta de SO o, al menos, su propio
+   `~/.sapcli`.
+4. **El primer login fallido puede bloquear tu usuario SAP** tras unos intentos. Si `:SapDoctor`
+   falla en la conexión, pará y revisá las credenciales antes de reintentar.
+
+---
+
 ## Funcionalidades
 
 ### Diagnósticos en tiempo real
