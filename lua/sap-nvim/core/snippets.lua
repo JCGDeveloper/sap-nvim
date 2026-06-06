@@ -33,7 +33,8 @@ return {
     body = [[DO ${1:10} TIMES.\n  ${0}\nENDDO.]],
   },
   -- WHILE / ENDWHILE
-  while = {
+  -- NOTE: `while` is a Lua reserved word, so the key must be quoted.
+  ["while"] = {
     trig = "while",
     name = "WHILE-ENDWHILE",
     body = [[WHILE ${1:condition}.\n  ${0}\nENDWHILE.]],
