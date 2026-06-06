@@ -114,7 +114,7 @@ function M.fetch_objects(query, callback)
   local results = {}
   local stderr = {}
 
-  vim.fn.jobstart({ "sapcli", "abap", "search", query }, {
+  vim.fn.jobstart({ "sapcli", "abap", "find", query }, {
     on_stdout = function(_, data)
       for _, line in ipairs(data) do
         local t = vim.trim(line)
@@ -207,19 +207,26 @@ end
 function M.activate_current()
   local bufnr      = vim.api.nvim_get_current_buf()
   local filename   = vim.api.nvim_buf_get_name(bufnr)
-  local obj_name   = vim.fn.expand("%:t:r")
+  local objtype    = require("sap-nvim.core.objtype")
+  local group      = objtype.group(filename)
+  local obj_name   = objtype.name(filename)
 
   if obj_name == "" then
     vim.notify("[sap-nvim] No hay un objeto ABAP para activar", vim.log.levels.WARN)
     return
   end
 
+  if not objtype.is_activatable(group) then
+    vim.notify("[sap-nvim] Tipo no activable o desconocido para: " .. filename, vim.log.levels.WARN)
+    return
+  end
+
   pcall(vim.cmd, "write")
-  vim.notify("[sap-nvim] Activando " .. obj_name .. "...")
+  vim.notify("[sap-nvim] Activando " .. obj_name .. " (" .. group .. ")...")
 
   local out, err = {}, {}
 
-  vim.fn.jobstart({ "sapcli", "activate", obj_name }, {
+  vim.fn.jobstart({ "sapcli", group, "activate", obj_name }, {
     on_stdout = function(_, data)
       for _, l in ipairs(data) do
         if l ~= "" then table.insert(out, l) end
@@ -297,12 +304,16 @@ end
 
 -- Ejecutar ATC (ABAP Test Cockpit)
 function M.run_atc()
-  local object_name = vim.fn.expand("%:t:r")
+  local filename    = vim.api.nvim_buf_get_name(0)
+  local objtype     = require("sap-nvim.core.objtype")
+  local group       = objtype.group(filename)
+  local object_name = objtype.name(filename)
   if object_name == "" then return end
 
-  vim.notify("[sap-nvim] Ejecutando ATC sobre " .. object_name .. "...")
+  local atc_type = objtype.atc_type(group)
+  vim.notify("[sap-nvim] Ejecutando ATC sobre " .. object_name .. " (" .. atc_type .. ")...")
   local lines = {}
-  vim.fn.jobstart({ "sapcli", "atc", "run", "object", object_name }, {
+  vim.fn.jobstart({ "sapcli", "atc", "run", atc_type, object_name }, {
     on_stdout = function(_, data)
       for _, l in ipairs(data) do
         if l ~= "" then table.insert(lines, l) end
@@ -347,7 +358,7 @@ end
 
 -- Buscar objetos en SAP
 function M.search(query)
-  vim.fn.jobstart({ "sapcli", "search", query }, {
+  vim.fn.jobstart({ "sapcli", "abap", "find", query }, {
     on_stdout = function(_, data)
       if data then
         local results = vim.iter(data):filter(function(line) return line ~= "" end):totable()

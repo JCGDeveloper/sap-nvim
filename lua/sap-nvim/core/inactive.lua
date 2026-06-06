@@ -7,31 +7,21 @@ local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
-local function activate_all()
-  notify("Activating all inactive objects...")
-  local stderr = {}
-  vim.fn.jobstart({ "sapcli", "activation", "activate", "inactiveobjects" }, {
-    on_stderr = function(_, data)
-      for _, l in ipairs(data) do
-        if vim.trim(l) ~= "" then table.insert(stderr, l) end
-      end
-    end,
-    on_exit = function(_, code)
-      vim.schedule(function()
-        if code == 0 then
-          notify("All inactive objects activated.")
-        else
-          notify(#stderr > 0 and stderr[1] or "Activation failed.", vim.log.levels.ERROR)
-        end
-      end)
-    end,
-  })
+-- sapcli (1.0.0) has no bulk "activate all inactive" command; the `activation
+-- inactiveobjects` group only exposes `list`. Objects are activated one by one
+-- via `sapcli <type> activate <name>` (see activate_single).
+local function activate_all_unsupported(count)
+  notify(
+    ("Activar en bloque no está soportado por sapcli. Activá los %d objetos de a uno.")
+      :format(count or 0),
+    vim.log.levels.WARN
+  )
 end
 
-local function activate_single(obj_name)
-  notify("Activating " .. obj_name .. "...")
+local function activate_single(obj_name, group)
+  notify("Activating " .. obj_name .. " (" .. group .. ")...")
   local out, err = {}, {}
-  vim.fn.jobstart({ "sapcli", "activate", obj_name }, {
+  vim.fn.jobstart({ "sapcli", group, "activate", obj_name }, {
     on_stdout = function(_, data)
       for _, l in ipairs(data) do if l ~= "" then table.insert(out, l) end end
     end,
@@ -81,7 +71,14 @@ local function handle_single_object(obj_name)
         end
       end
       if activate_it then
-        activate_single(obj_name)
+        vim.ui.select(
+          { "program", "class", "interface", "functiongroup", "functionmodule",
+            "table", "structure", "dataelement", "domain", "ddl", "include" },
+          { prompt = "Tipo de objeto para activar " .. obj_name .. ":" },
+          function(group)
+            if group then activate_single(obj_name, group) end
+          end
+        )
       end
     end
   )
@@ -116,7 +113,7 @@ function M.show_inactive()
         if not choice then return end
 
         if choice:match("^%[Activate ALL") then
-          activate_all()
+          activate_all_unsupported(#objects)
           return
         end
 

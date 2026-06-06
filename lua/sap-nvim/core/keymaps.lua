@@ -39,32 +39,7 @@ function M.setup(opts)
 
   -- ATC: Ejecutar ABAP Test Cockpit
   vim.keymap.set("n", "<leader>aK", function()
-    local obj = vim.fn.expand("%:t:r")
-    if obj == "" then
-      vim.notify("sap-nvim: Guardá el archivo primero", vim.log.levels.WARN)
-      return
-    end
-    vim.notify("[sap-nvim] Ejecutando ATC sobre " .. obj .. "...")
-    local atc_lines = {}
-    vim.fn.jobstart({ "sapcli", "atc", "run", "object", obj }, {
-      on_stdout = function(_, data)
-        for _, line in ipairs(data) do
-          if line ~= "" then table.insert(atc_lines, line) end
-        end
-      end,
-      on_exit = function(_, code)
-        vim.schedule(function()
-          if #atc_lines > 0 then
-            vim.notify("[sap-nvim] ATC:\n" .. table.concat(atc_lines, "\n"))
-          end
-          if code == 0 then
-            vim.notify("[sap-nvim] ATC OK", vim.log.levels.INFO)
-          else
-            vim.notify("[sap-nvim] ATC encontro issues", vim.log.levels.WARN)
-          end
-        end)
-      end,
-    })
+    require("sap-nvim.core.adt").run_atc()
   end, { desc = "ABAP: Ejecutar ATC" })
 
   -- Help actualizada
@@ -97,7 +72,8 @@ sap-nvim atajos:
   CONEXION:
   <leader>asg  Abrir SAP GUI
   <leader>aso  Objeto en SAP GUI
-  <leader>asc  Configurar conexiones (:SapSetup)
+  <leader>asc  Configurar conexiones (:SapSetup, formato kubeconfig)
+  <leader>asd  Diagnostico SAP solo-lectura (:SapDoctor)
   <leader>asi  Info conexion activa (:SapStatus)
     ]], vim.log.levels.INFO)
   end, { desc = "ABAP: Ayuda" })

@@ -29,20 +29,28 @@ local function open_or_checkout(obj_name)
     { prompt = "'" .. obj_name .. "' no existe localmente:" },
     function(choice)
       if not choice or choice:match("Cancelar") then return end
-      notify("Haciendo checkout de " .. obj_name .. "...")
-      vim.fn.jobstart({ "sapcli", "checkout", obj_name }, {
-        on_exit = function(_, code)
-          vim.schedule(function()
-            if code == 0 then
-              notify("Checkout OK: " .. obj_name .. ". Abriendo...")
-              -- Try to open the downloaded file
-              open_or_checkout(obj_name)
-            else
-              notify("Checkout fallido para: " .. obj_name, vim.log.levels.ERROR)
-            end
-          end)
-        end,
-      })
+      -- sapcli needs the object type for a single-object checkout:
+      -- `sapcli checkout {class,program,interface,function_group} NAME`.
+      vim.ui.select(
+        { "class", "program", "interface", "function_group" },
+        { prompt = "Tipo de objeto para checkout de " .. obj_name .. ":" },
+        function(otype)
+          if not otype then return end
+          notify("Haciendo checkout de " .. obj_name .. " (" .. otype .. ")...")
+          vim.fn.jobstart({ "sapcli", "checkout", otype, obj_name }, {
+            on_exit = function(_, code)
+              vim.schedule(function()
+                if code == 0 then
+                  notify("Checkout OK: " .. obj_name .. ". Abriendo...")
+                  open_or_checkout(obj_name)
+                else
+                  notify("Checkout fallido para: " .. obj_name, vim.log.levels.ERROR)
+                end
+              end)
+            end,
+          })
+        end
+      )
     end
   )
 end
