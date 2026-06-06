@@ -160,31 +160,74 @@ local function input_dialog(title, fields, callback)
     title = " " .. title .. " ",
     title_pos = "center",
   })
+  -- acwrite + a buffer NAME so that ':w'/':wq' fire BufWriteCmd. A nameless
+  -- buffer can't be written and ':wq' fails with "E32: No file name" before
+  -- the autocmd ever runs. The name is virtual (sap://...), never hits disk.
+  pcall(vim.api.nvim_buf_set_name, buf, "sap://" .. title:gsub("%s+", "-"):lower())
   vim.bo[buf].buftype = "acwrite"
   vim.bo[buf].bufhidden = "wipe"
 
-  local lines = { "  Completá los campos. Guardá con :wq · Cancelá con :cq" }
+  local lines = { "  Editá los campos. Guardá con <CR> o :wq · Cancelá con q, <Esc> o :cq" }
   for _, field in ipairs(fields) do
     table.insert(lines, string.format("  %-12s = %s", field.key, field.value or ""))
   end
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modified = false
 
+  local done = false
+
+  local function read_values()
+    local content = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local values = {}
+    for _, line in ipairs(content) do
+      local key, val = line:match("^%s*(%w+)%s*=%s*(.-)%s*$")
+      if key then values[key] = val end
+    end
+    return values
+  end
+
+  local function close_ui()
+    if vim.api.nvim_win_is_valid(win) then pcall(vim.api.nvim_win_close, win, true) end
+    if vim.api.nvim_buf_is_valid(buf) then pcall(vim.api.nvim_buf_delete, buf, { force = true }) end
+  end
+
+  -- Confirm via keymap (<CR>): read, close, then run the callback.
+  local function commit()
+    if done then return end
+    done = true
+    local values = read_values()
+    close_ui()
+    callback(values)
+  end
+
+  local function cancel()
+    if done then return end
+    done = true
+    close_ui()
+  end
+
+  -- Confirm via ':w'/':wq': read the values, mark the buffer clean so the
+  -- trailing ':q' closes the float, and defer the callback to run afterwards.
   vim.api.nvim_create_autocmd("BufWriteCmd", {
     buffer = buf,
-    once = true,
     callback = function()
-      local content = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-      local values = {}
-      for _, line in ipairs(content) do
-        local key, val = line:match("^%s*(%w+)%s*=%s*(.-)%s*$")
-        if key then values[key] = val end
-      end
-      pcall(vim.api.nvim_buf_delete, buf, { force = true })
-      if vim.api.nvim_win_is_valid(win) then pcall(vim.api.nvim_win_close, win, true) end
-      callback(values)
+      if done then return end
+      done = true
+      local values = read_values()
+      vim.bo[buf].modified = false
+      vim.schedule(function()
+        close_ui()
+        callback(values)
+      end)
     end,
   })
+
+  vim.keymap.set("n", "<CR>", commit, { buffer = buf, nowait = true, desc = "sap-nvim: guardar conexión" })
+  vim.keymap.set("n", "q", cancel, { buffer = buf, nowait = true, desc = "sap-nvim: cancelar" })
+  vim.keymap.set("n", "<Esc>", cancel, { buffer = buf, nowait = true, desc = "sap-nvim: cancelar" })
+
+  -- Land the cursor on the first editable field, not the help line.
+  pcall(vim.api.nvim_win_set_cursor, win, { 2, 0 })
 end
 
 -- ─── UI flows ─────────────────────────────────────────────────────────────────
@@ -254,11 +297,13 @@ local function install_sapcli()
     notify("✅ sapcli instalado: " .. table.concat(ver, " "))
     return
   end
-  notify("Instalando sapcli (pip install sapcli)...")
-  vim.fn.jobstart({ "pip3", "install", "sapcli" }, {
+  -- sapcli is NOT on PyPI; install from the git repo via pipx (PEP 668 safe).
+  notify("Instalando sapcli desde git (pipx install git+…jfilak/sapcli)...")
+  vim.fn.jobstart({ "pipx", "install", "git+https://github.com/jfilak/sapcli.git" }, {
     on_exit = function(_, code)
       vim.schedule(function()
-        notify(code == 0 and "✅ sapcli instalado." or "❌ Error. Probá: pip install sapcli",
+        notify(code == 0 and "✅ sapcli instalado."
+          or "❌ Error. Probá: pipx install git+https://github.com/jfilak/sapcli.git",
           code == 0 and vim.log.levels.INFO or vim.log.levels.ERROR)
       end)
     end,
@@ -269,7 +314,7 @@ end
 
 local function main_menu()
   if not sapcli_available() then
-    notify("sapcli no está instalado. Opción 6 lo instala, o: pip install sapcli",
+    notify("sapcli no está instalado. Opción 6 lo instala, o: pipx install git+https://github.com/jfilak/sapcli.git",
       vim.log.levels.WARN)
   end
 

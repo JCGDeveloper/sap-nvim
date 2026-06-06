@@ -18,7 +18,7 @@ Diagnóstico de instalación:
   :checkhealth sap-nvim
 
 Instalación de dependencias:
-  pip install sapcli
+  pipx install git+https://github.com/jfilak/sapcli.git
   npm install -g @abaplint/cli
 
 Configurar conexión (fuente de verdad: ~/.sapcli/config.yml):

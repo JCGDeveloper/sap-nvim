@@ -59,7 +59,7 @@ function M.run()
 
   if vim.fn.executable("sapcli") ~= 1 then
     table.insert(results, "")
-    table.insert(results, "  sapcli falta — instalá con: pip install sapcli")
+    table.insert(results, "  sapcli falta — instalá con: pipx install git+https://github.com/jfilak/sapcli.git")
     open_report(results)
     return
   end

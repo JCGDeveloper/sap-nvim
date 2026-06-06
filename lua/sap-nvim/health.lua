@@ -42,7 +42,7 @@ function M.check()
   if has("sapcli") then
     ok("sapcli: " .. vim.fn.exepath("sapcli"))
   else
-    err("sapcli not found", { "Install: pip install sapcli" })
+    err("sapcli not found", { "Install: pipx install git+https://github.com/jfilak/sapcli.git" })
   end
 
   if has("abaplint") then
