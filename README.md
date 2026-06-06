@@ -347,6 +347,52 @@ Without lualine, the plugin sets `vim.opt_local.statusline` on ABAP buffers auto
 
 ---
 
+## AI assistance (GitHub Copilot)
+
+ABAP-aware AI, **off by default**. It uses **GitHub Copilot** — the same backend and license
+as the VSCode Copilot extension (including Claude models if your org enables them).
+
+> **Why Copilot and not an external API:** Copilot keeps your source code inside the channel
+> your company already approved. A direct Anthropic/OpenAI API integration (like the bundled
+> `avante.lua`) would send ABAP source to an external endpoint — usually a data-governance
+> violation in corporate SAP environments. Use Copilot unless IT explicitly approves otherwise.
+
+### Enable it
+
+```lua
+{
+  "JCGDeveloper/sap-nvim",
+  dependencies = {
+    "zbirenbaum/copilot.lua",
+    "CopilotC-Nvim/CopilotChat.nvim",
+  },
+  config = function()
+    require("sap-nvim").setup({
+      ai = "copilot",
+      -- optional: pin a Claude model your org enabled in Copilot
+      -- copilot_model = "claude-sonnet-4",
+    })
+  end,
+}
+```
+
+Then authenticate once: `:Copilot auth` (uses your company GitHub login).
+
+### Keymaps
+
+| Keymap | Action |
+|--------|--------|
+| `<leader>agc` | Toggle Copilot chat |
+| `<leader>age` | Explain selected ABAP |
+| `<leader>agr` | Review selected ABAP (perf, naming, tests) |
+| `<leader>agt` | Generate AUnit tests |
+| `<leader>agf` | Fix selected ABAP |
+
+The chat is pre-loaded with an ABAP/CDS/Clean-ABAP system prompt. Until you set `ai = "copilot"`
+and install the two plugins, this integration is a complete no-op.
+
+---
+
 ## Keymaps — full reference
 
 | Keymap | Command | Description |
