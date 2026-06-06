@@ -23,11 +23,146 @@ test runner, transport management, object browser, CDS support, and more.
 -- lazy.nvim
 {
   "JCGDeveloper/sap-nvim",
+  dependencies = {
+    "nvim-treesitter/nvim-treesitter",
+    "neovim/nvim-lspconfig",
+  },
   config = function()
     require("sap-nvim").setup()
   end,
 }
 ```
+
+---
+
+## Getting started — connect to a SAP system
+
+The whole flow is two commands: **`:SapSetup`** (configure once) → **`:SapDoctor`** (validate).
+Connections are stored in sapcli's own file `~/.sapcli/config.yml` (kubeconfig-style) — that
+file is the single source of truth.
+
+### 1. Install the external tools
+
+```sh
+pip install sapcli                 # ADT client (Python)
+npm install -g @abaplint/cli       # linter (Node.js)
+```
+
+Then, inside Neovim:
+
+```vim
+:checkhealth sap-nvim
+```
+
+This reports every dependency (sapcli, abaplint, node, tree-sitter parsers) and your
+connection status, each with the exact command to fix what's missing. Install the
+tree-sitter parsers with `:TSInstall abap cds`.
+
+### 2. Configure the connection — `:SapSetup`
+
+`:SapSetup` (or `<leader>asc`) opens a menu:
+
+```
+1. Nueva conexión SAP      ← create connection + user + context
+2. Ver configuración        ← dump ~/.sapcli/config.yml
+3. Activar conexión         ← switch current-context
+4. Probar conexión          ← read-only: sapcli abap systeminfo
+5. Eliminar conexión
+6. Instalar/verificar sapcli
+```
+
+Choose **1** and fill the fields (`:wq` to save, `:cq` to cancel):
+
+| Field | Meaning | Example |
+|-------|---------|---------|
+| `name` | Context name | `dev` |
+| `ashost` | Application server host | `sap-dev.company.local` |
+| `port` | **HTTPS port of the ICM** (not the sysnr) | `44300` |
+| `client` | SAP client / mandante | `100` |
+| `user` | Your dialog user | `JCGOMEZ` |
+| `password` | Your password | — |
+| `ssl` | `true` for HTTPS | `true` |
+
+> **`port` is the HTTPS ICM port** (typically `44300`, `8000`, or `443`) — **not** the
+> 2-digit system number used by SAP GUI/RFC. If you don't know it, check your SAP GUI
+> connection or ask Basis.
+
+Under the hood this runs:
+
+```sh
+sapcli config set-connection dev --ashost HOST --port 44300 --client 100 --ssl
+sapcli config set-user dev-user --user JCGOMEZ --password ****
+sapcli config set-context dev --connection dev --user dev-user
+sapcli config use-context dev
+```
+
+> **Security note:** the password is stored in plaintext in `~/.sapcli/config.yml`. Use a
+> personal dev user on a non-production system. Lock the file down (`chmod 600 ~/.sapcli/config.yml`).
+
+### 3. Validate everything — `:SapDoctor`
+
+`:SapDoctor` (or `<leader>asd`) runs a **read-only** ladder and reports PASS/FAIL:
+
+```
+Local:
+  ✅ sapcli instalado
+  ✅ abaplint instalado
+  ✅ current-context configurado
+
+En vivo (contactan el sistema SAP — SOLO LECTURA):
+  ✅ Conectividad + login (abap systeminfo)
+  ✅ Búsqueda de objetos (abap find Z)
+  ✅ Transportes (cts list transport)
+```
+
+It never writes, activates, or locks anything. If a live check fails, the first error line
+is shown inline. **The first failed login can lock your SAP user after a few attempts — if it
+fails, stop and check credentials before retrying.**
+
+---
+
+## Windows: install under WSL2
+
+The work laptop is Windows? Install Neovim and this plugin inside **WSL2 (Ubuntu)**, not
+native Windows — sapcli/abaplint/node all run as Linux tools and the plugin shells out to them.
+
+```sh
+# inside WSL2 Ubuntu
+sudo apt update && sudo apt install -y neovim python3-pip nodejs npm
+pip install sapcli
+npm install -g @abaplint/cli
+```
+
+### WSL networking — the connection gotcha
+
+`sapcli` runs **inside WSL**, so the SAP host must be reachable **from WSL**, not just from
+Windows. WSL2 uses a NAT network by default, which can break corporate access:
+
+- **Corporate VPN on the Windows host often does NOT route WSL traffic.** If your SAP system
+  is only reachable through the company VPN, test it first (see below).
+- **Internal DNS names** (e.g. `sap-dev.company.local`) may not resolve inside WSL.
+
+**Test reachability from inside WSL before `:SapDoctor`:**
+
+```sh
+# replace with your host/port
+curl -kv https://sap-dev.company.local:44300/sap/bc/adt/core/discovery 2>&1 | head
+# or just the TCP port:
+nc -vz sap-dev.company.local 44300
+```
+
+If that hangs or fails but the same host works from Windows, it's a WSL routing/DNS issue. Fixes:
+
+1. **Mirrored networking** (Windows 11 22H2+) — in `C:\Users\<you>\.wslconfig`:
+   ```ini
+   [wsl2]
+   networkingMode=mirrored
+   ```
+   Then `wsl --shutdown` and reopen. This makes WSL share the Windows network stack (VPN included).
+2. If DNS fails, use the SAP server's IP in `ashost`, or fix WSL DNS (`/etc/resolv.conf`).
+3. If the VPN client blocks WSL entirely, ask IT — some corporate VPNs need a WSL-aware config.
+
+Once `curl`/`nc` reaches the host, `:SapSetup` → `:SapDoctor` will work the same as on Linux.
 
 ---
 
@@ -52,7 +187,8 @@ Diagnostics are **editor-only** — they never block activation or interact with
 
 ### Activation with jump-to-error
 
-`<leader>aa` saves the file and runs `sapcli activate`. On success it clears the quickfix list.
+`<leader>aa` saves the file and runs `sapcli <type> activate` (the object type is derived from
+the file extension). On success it clears the quickfix list.
 On error it parses the SAP output, loads all errors into the quickfix list, and jumps directly
 to the first failing line.
 
@@ -73,7 +209,8 @@ Summary notification: `3 test(s) failed in ZCL_FOO. See quickfix.`
 
 ### ATC — quality check
 
-`<leader>aK` runs ABAP Test Cockpit via `sapcli atc run object <name>`.
+`<leader>aK` runs ABAP Test Cockpit via `sapcli atc run <type> <name>` (type derived from the
+file extension).
 
 ---
 
@@ -86,10 +223,12 @@ list. Entries marked `[local]` if the file exists locally, `[system]` otherwise.
 
 ### Inactive objects
 
-`<leader>ai` (`:SapInactive`) fetches the inactive objects queue from the system. Picker options:
+`<leader>ai` (`:SapInactive`) fetches the inactive objects queue from the system, then:
 
-- **Activate ALL** — runs `sapcli activation activate inactiveobjects`
-- **Select one** → second picker: Open local file / Activate in system / Open + Activate
+- **Select one** → Open local file / Activate in system / Open + Activate. Activation prompts
+  for the object type and runs `sapcli <type> activate <name>`.
+
+> sapcli has no bulk "activate all" command, so inactive objects are activated one at a time.
 
 ---
 
@@ -198,7 +337,11 @@ Without lualine, the plugin sets `vim.opt_local.statusline` on ABAP buffers auto
 
 ### Connection setup
 
-`:SapSetup` / `<leader>asc` — interactive assistant for configuring sapcli connections.
+`:SapSetup` / `<leader>asc` — interactive assistant. Writes to sapcli's kubeconfig-style
+`~/.sapcli/config.yml` via `sapcli config` (single source of truth). See
+[Getting started](#getting-started--connect-to-a-sap-system).
+
+`:SapDoctor` / `<leader>asd` — read-only validation ladder (connectivity, object search, transports).
 
 `:SapStatus` / `<leader>asi` — shows the active connection: system, client, user.
 
@@ -223,7 +366,8 @@ Without lualine, the plugin sets `vim.opt_local.statusline` on ABAP buffers auto
 | `<leader>atc` | `:SapTransportCreate` | Create transport order |
 | `<leader>atr` | `:SapTransportRelease` | Release transport order |
 | `<leader>asi` | `:SapStatus` | Show active SAP connection info |
-| `<leader>asc` | `:SapSetup` | Connection setup assistant |
+| `<leader>asc` | `:SapSetup` | Connection setup assistant (sapcli kubeconfig) |
+| `<leader>asd` | `:SapDoctor` | Read-only validation: connection, objects, transports |
 | `<leader>asg` | — | Open SAP GUI |
 | `<leader>aso` | — | Open current object in SAP GUI |
 | `<leader>ah` | — | Help (all keymaps) |
@@ -294,17 +438,21 @@ sap-nvim/
 │   │   ├── checkout.lua      Package checkout to local filesystem
 │   │   ├── debugger.lua      Interactive ABAP debugger (requires connection)
 │   │   ├── diff.lua          Local vs system vimdiff
+│   │   ├── doctor.lua        :SapDoctor read-only validation ladder
 │   │   ├── formatter.lua     ABAP + CDS native formatter
 │   │   ├── inactive.lua      Inactive objects picker + activation
 │   │   ├── keymaps.lua       All keymap definitions
 │   │   ├── lsp.lua           Real-time abaplint diagnostics via vim.diagnostic
 │   │   ├── new.lua           New object wizard with system pickers
-│   │   ├── setup.lua         Connection setup assistant
+│   │   ├── objtype.lua       File extension → sapcli object group (single source)
+│   │   ├── setup.lua         :SapSetup — sapcli kubeconfig connection wizard
 │   │   ├── statusline.lua    Lualine component + native statusline
 │   │   ├── transport.lua     Transport order management
 │   │   └── whereused.lua     Where-used list → quickfix
 │   └── integrations/
-│       └── completion.lua    ABAP snippet and keyword completion
+│       ├── completion.lua    ABAP snippet and keyword completion
+│       ├── avante.lua        AI assistant (Avante) — opt-in, not loaded by default
+│       └── mcphub.lua        MCP servers for SAP ADT — opt-in, not loaded by default
 └── abaplint.json             Linting and naming convention config
 ```
 
