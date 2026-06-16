@@ -11,7 +11,7 @@ end
 -- Known ABAP file extensions for local lookup
 local EXTENSIONS = { "abap", "cls", "intf", "func", "fugr", "tabl", "stru", "dtel", "dome", "ddls", "bdef", "dcl" }
 
--- ── Parsing de filas de resultados ──────────────────────────────────────────
+-- Parsing de filas de resultados.
 -- `sapcli abap find` / `sapcli package list -l` devuelven una TABLA en columnas
 -- separadas por "|":   Object type | Name | Description
 -- con una fila de cabecera y una de guiones. El nombre real es la COLUMNA 2.
@@ -20,7 +20,7 @@ local EXTENSIONS = { "abap", "cls", "intf", "func", "fugr", "tabl", "stru", "dte
 -- Tipos de checkout que sapcli soporta como objeto suelto.
 local CHECKOUTABLE = { class = true, program = true, interface = true, function_group = true }
 
--- Prefijo de tipo ADT → grupo de objeto de sapcli.
+-- Prefijo de tipo ADT -> grupo de objeto de sapcli.
 local TYPE_PREFIX_TO_GROUP = {
   CLAS = "class",
   INTF = "interface",
@@ -38,11 +38,11 @@ local function split_cols(line)
   return cols
 end
 
--- Descarta cabecera ("Object type | Name | …") y filas separadoras ("----").
+-- Descarta cabecera ("Object type | Name | ...") y filas separadoras ("----").
 local function is_data_row(line)
   if not line or line == "" then return false end
-  if line:match("^%s*[-|%s]*$") then return false end -- solo guiones/pipes/espacios
-  if line:find("Object type") then return false end    -- cabecera
+  if line:match("^%s*[-|%s]*$") then return false end
+  if line:find("Object type") then return false end
   return true
 end
 
@@ -70,17 +70,15 @@ local function is_include(line)
   return type_token(line):match("^PROG/I") ~= nil
 end
 
--- Grupo de checkout implícito en el tipo ADT (o nil si no aplica / es include).
+-- Grupo de checkout implicito en el tipo ADT (o nil si no aplica / es include).
 local function type_group(line)
   local prefix, sub = type_token(line):match("(%u+)/(%u+)")
   if not prefix then return nil end
-  if prefix == "PROG" and sub == "I" then return nil end -- include
+  if prefix == "PROG" and sub == "I" then return nil end
   return TYPE_PREFIX_TO_GROUP[prefix]
 end
 
 -- Try to open an object locally; if not found, offer checkout.
--- `hint_group` (opcional) es el grupo de checkout ya derivado del tipo ADT.
--- `include` (opcional) marca que la fila era un include de programa.
 local function open_or_checkout(obj_name, hint_group, include)
   local cwd = vim.fn.getcwd()
   for _, ext in ipairs(EXTENSIONS) do
@@ -96,7 +94,7 @@ local function open_or_checkout(obj_name, hint_group, include)
   if include then
     notify(
       "'" .. obj_name .. "' es un INCLUDE de programa: sapcli no lo baja suelto. "
-        .. "Bajá el programa padre (fila PROG/P) o usá :SapCheckout sobre el paquete.",
+        .. "Baja el programa padre (fila PROG/P) o usa :SapCheckout sobre el paquete.",
       vim.log.levels.WARN
     )
     return
@@ -124,13 +122,10 @@ local function open_or_checkout(obj_name, hint_group, include)
     { prompt = "'" .. obj_name .. "' no existe localmente:" },
     function(choice)
       if not choice or choice:match("Cancelar") then return end
-      -- Si ya sabemos el tipo (derivado del token ADT) y es checkout-able,
-      -- lo usamos directamente y nos saltamos el menú manual.
       if hint_group and CHECKOUTABLE[hint_group] then
         do_checkout(hint_group)
         return
       end
-      -- Si no, pedimos el tipo a mano.
       vim.ui.select(
         { "class", "program", "interface", "function_group" },
         { prompt = "Tipo de objeto para checkout de " .. obj_name .. ":" },
@@ -153,7 +148,7 @@ end
 function M.search_objects(query)
   local function do_search(q)
     if not adt.is_configured() then
-      notify("No hay conexión SAP. Usá :SapSetup primero.", vim.log.levels.WARN)
+      notify("No hay conexion SAP. Usa :SapSetup primero.", vim.log.levels.WARN)
       return
     end
 
@@ -165,7 +160,6 @@ function M.search_objects(query)
           return
         end
 
-        -- Quita cabecera y separadores para que no sean seleccionables.
         results = vim.tbl_filter(is_data_row, results)
         if #results == 0 then
           notify("Sin resultados para: " .. q, vim.log.levels.WARN)
@@ -196,7 +190,7 @@ end
 function M.browse_package(pkg_name)
   local function do_browse(pkg)
     if not adt.is_configured() then
-      notify("No hay conexión SAP. Usá :SapSetup primero.", vim.log.levels.WARN)
+      notify("No hay conexion SAP. Usa :SapSetup primero.", vim.log.levels.WARN)
       return
     end
 
@@ -208,4 +202,61 @@ function M.browse_package(pkg_name)
       on_stdout = function(_, data)
         for _, line in ipairs(data) do
           local t = vim.trim(line)
-          if t ~= "" then table.insert(objects, t) e
+          if t ~= "" then table.insert(objects, t) end
+        end
+      end,
+      on_stderr = function(_, data)
+        for _, line in ipairs(data) do
+          if vim.trim(line) ~= "" then table.insert(stderr, line) end
+        end
+      end,
+      on_exit = function(_, code)
+        vim.schedule(function()
+          if code ~= 0 or #objects == 0 then
+            local msg = #stderr > 0 and stderr[1] or "Paquete vacio o no encontrado: " .. pkg
+            notify(msg, vim.log.levels.WARN)
+            return
+          end
+
+          objects = vim.tbl_filter(is_data_row, objects)
+          if #objects == 0 then
+            notify("Paquete vacio: " .. pkg, vim.log.levels.WARN)
+            return
+          end
+
+          vim.ui.select(objects, {
+            prompt = "Objetos en " .. pkg .. " (" .. #objects .. "):",
+            format_item = function(item) return item end,
+          }, on_pick)
+        end)
+      end,
+    })
+  end
+
+  if pkg_name and pkg_name ~= "" then
+    do_browse(pkg_name:upper())
+    return
+  end
+
+  vim.ui.input({
+    prompt = "Nombre del paquete (ej: ZMYPKG): ",
+    default = "Z",
+  }, function(pkg)
+    if pkg and pkg ~= "" then do_browse(pkg:upper()) end
+  end)
+end
+
+function M.setup()
+  vim.api.nvim_create_user_command("SapSearch", function(args)
+    M.search_objects(args.args ~= "" and args.args or nil)
+  end, { desc = "sap-nvim: Buscar objetos ABAP en el sistema", nargs = "?" })
+
+  vim.api.nvim_create_user_command("SapBrowse", function(args)
+    M.browse_package(args.args ~= "" and args.args or nil)
+  end, { desc = "sap-nvim: Explorar contenido de un paquete SAP", nargs = "?" })
+
+  vim.keymap.set("n", "<leader>afs", M.search_objects, { desc = "ABAP: Buscar objeto en sistema" })
+  vim.keymap.set("n", "<leader>afb", M.browse_package, { desc = "ABAP: Explorar paquete" })
+end
+
+return M
