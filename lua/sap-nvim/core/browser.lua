@@ -11,8 +11,43 @@ end
 -- Known ABAP file extensions for local lookup
 local EXTENSIONS = { "abap", "cls", "intf", "func", "fugr", "tabl", "stru", "dtel", "dome", "ddls", "bdef", "dcl" }
 
+-- ── Parsing de filas de resultados ──────────────────────────────────────────
+-- `sapcli abap find` y `sapcli package list -l` devuelven filas que EMPIEZAN
+-- por el tipo ADT (p.ej. "PROG/I", "CLAS/OC", "INTF/OI"). El nombre real es el
+-- primer token SIN "/" (ni los tipos ADT ni las URIs son nombres válidos).
+
+-- Tipos de checkout que sapcli soporta como objeto suelto.
+local CHECKOUTABLE = { class = true, program = true, interface = true, function_group = true }
+
+-- Prefijo de tipo ADT → grupo de objeto de sapcli.
+local TYPE_PREFIX_TO_GROUP = {
+  CLAS = "class",
+  INTF = "interface",
+  PROG = "program",
+  FUGR = "function_group",
+  FUGS = "function_group",
+}
+
+-- Nombre del objeto a partir de una fila de resultados.
+local function extract_name(line)
+  for tok in line:gmatch("%S+") do
+    if not tok:find("/") then return tok end
+  end
+  return line:match("^(%S+)")
+end
+
+-- Grupo de checkout implícito en el token de tipo ADT (o nil si no aplica).
+-- Los includes (PROG/I) NO se pueden bajar sueltos → devuelve nil.
+local function type_group(line)
+  local prefix, sub = line:match("^(%u+)/(%u+)")
+  if not prefix then return nil end
+  if prefix == "PROG" and sub == "I" then return nil end -- include
+  return TYPE_PREFIX_TO_GROUP[prefix]
+end
+
 -- Try to open an object locally; if not found, offer checkout.
-local function open_or_checkout(obj_name)
+-- `hint_group` (opcional) es el grupo de checkout ya derivado del tipo ADT.
+local function open_or_checkout(obj_name, hint_group)
   local cwd = vim.fn.getcwd()
   for _, ext in ipairs(EXTENSIONS) do
     local path = cwd .. "/" .. obj_name:lower() .. "." .. ext
@@ -24,32 +59,39 @@ local function open_or_checkout(obj_name)
     end
   end
 
+  local function do_checkout(otype)
+    if not otype then return end
+    notify("Haciendo checkout de " .. obj_name .. " (" .. otype .. ")...")
+    vim.fn.jobstart({ "sapcli", "checkout", otype, obj_name }, {
+      on_exit = function(_, code)
+        vim.schedule(function()
+          if code == 0 then
+            notify("Checkout OK: " .. obj_name .. ". Abriendo...")
+            open_or_checkout(obj_name)
+          else
+            notify("Checkout fallido para: " .. obj_name .. " (" .. otype .. ")", vim.log.levels.ERROR)
+          end
+        end)
+      end,
+    })
+  end
+
   vim.ui.select(
     { "Checkout desde el sistema SAP", "Cancelar" },
     { prompt = "'" .. obj_name .. "' no existe localmente:" },
     function(choice)
       if not choice or choice:match("Cancelar") then return end
-      -- sapcli needs the object type for a single-object checkout:
-      -- `sapcli checkout {class,program,interface,function_group} NAME`.
+      -- Si ya sabemos el tipo (derivado del token ADT) y es checkout-able,
+      -- lo usamos directamente y nos saltamos el menú manual.
+      if hint_group and CHECKOUTABLE[hint_group] then
+        do_checkout(hint_group)
+        return
+      end
+      -- Si no, pedimos el tipo (incluye el caso de includes/tipos no soportados).
       vim.ui.select(
         { "class", "program", "interface", "function_group" },
         { prompt = "Tipo de objeto para checkout de " .. obj_name .. ":" },
-        function(otype)
-          if not otype then return end
-          notify("Haciendo checkout de " .. obj_name .. " (" .. otype .. ")...")
-          vim.fn.jobstart({ "sapcli", "checkout", otype, obj_name }, {
-            on_exit = function(_, code)
-              vim.schedule(function()
-                if code == 0 then
-                  notify("Checkout OK: " .. obj_name .. ". Abriendo...")
-                  open_or_checkout(obj_name)
-                else
-                  notify("Checkout fallido para: " .. obj_name, vim.log.levels.ERROR)
-                end
-              end)
-            end,
-          })
-        end
+        do_checkout
       )
     end
   )
@@ -76,8 +118,8 @@ function M.search_objects(query)
           format_item = function(item) return item end,
         }, function(choice)
           if not choice then return end
-          local obj = choice:match("^(%S+)")
-          if obj and obj ~= "" then open_or_checkout(obj) end
+          local obj = extract_name(choice)
+          if obj and obj ~= "" then open_or_checkout(obj, type_group(choice)) end
         end)
       end)
     end)
@@ -132,8 +174,8 @@ function M.browse_package(pkg_name)
             format_item = function(item) return item end,
           }, function(choice)
             if not choice then return end
-            local obj = choice:match("^(%S+)")
-            if obj and obj ~= "" then open_or_checkout(obj) end
+            local obj = extract_name(choice)
+            if obj and obj ~= "" then open_or_checkout(obj, type_group(choice)) end
           end)
         end)
       end,
