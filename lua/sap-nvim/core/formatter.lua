@@ -44,6 +44,18 @@ local KEYWORDS = {
   "super", "friend", "local", "global",
   "new", "export", "import", "deferred",
   "init",
+  -- Declaraciones de clase/interface (compuestas — antes faltaban: CLASS-METHODS, etc.)
+  "methods", "class-methods", "class-data", "class-events", "events",
+  "aliases", "definition", "implementation", "inheriting", "instantiation",
+  "testing", "duration", "level", "risk",
+  "begin", "end", "of", "with", "without",
+  "exceptions", "message", "default", "optional", "preferred",
+  "instance", "static", "constructor",
+  -- Operadores de la nueva sintaxis (constructor expressions)
+  "cond", "switch", "conv", "cast", "reduce", "filter", "base", "let",
+  "corresponding", "mapping", "except", "discarding", "duplicates",
+  "assigning", "transporting", "reference", "casting", "bound",
+  "respecting", "blanks", "no-gaps", "lines", "next",
 }
 
 local BLOCK_START = {
@@ -168,27 +180,37 @@ local function uppercase_keywords(line)
     if seg.literal then
       table.insert(out, seg.text)
     else
+      -- SOLO mayúsculas en keywords EXACTOS. Nada de autocompletar/corregir por
+      -- similitud: eso corrompería identificadores (p.ej. una variable `da` → `DATA`).
       local processed = seg.text:gsub("([%a_][%w_%-]*)", function(word)
         if keyword_set[word:lower()] then return word:upper() end
-        local completed = autocomplete_word(word)
-        if completed ~= word then return completed end
         return word
       end)
+      -- Nueva sintaxis: forzar espacio antes de `#(` (constructor: VALUE #( ), COND #( ),
+      -- NEW #( )...). `#(` solo aparece en constructores, así que es seguro.
+      processed = processed:gsub("([%w_])#%(", "%1 #(")
       table.insert(out, processed)
     end
   end
   return table.concat(out)
 end
 
+-- Colapsa espacios múltiples a uno, pero SOLO en segmentos de código — nunca dentro de
+-- literales de cadena ('...', `...`, |...|) ni comentarios, para no corromper el texto.
 local function clean_spacing(line)
   line = line:gsub("%s+$", "")
   local indent = line:match("^(%s*)")
   local rest   = line:match("^%s*(.*)$")
-  if rest then
-    rest = rest:gsub("%s+", " ")
-    line = indent .. rest
+  if not rest or rest == "" then return indent end
+  local out = {}
+  for _, seg in ipairs(tokenize(rest)) do
+    if seg.literal then
+      table.insert(out, seg.text)
+    else
+      table.insert(out, (seg.text:gsub("%s+", " ")))
+    end
   end
-  return line
+  return indent .. table.concat(out)
 end
 
 local function get_main_keyword(line)
