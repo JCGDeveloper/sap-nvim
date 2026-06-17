@@ -63,14 +63,16 @@ function M.proposals(bufnr, line, col)
   return M.parse(body)
 end
 
--- Parsea el XML de propuestas de ADT -> lista { {word}, ... }.
+-- Parsea el XML de propuestas de ADT -> lista { {word, kind}, ... }.
+-- kind = nº ADT (1 dato/var/param, 2 clase/tipo, 3 método, 52 keyword...).
 function M.parse(body)
   local items = {}
   if not body then return items end
   for block in body:gmatch("<SCC_COMPLETION>(.-)</SCC_COMPLETION>") do
     local id = block:match("<IDENTIFIER>([^<]*)</IDENTIFIER>")
+    local kind = block:match("<KIND>([^<]*)</KIND>")
     if id and id ~= "" and id ~= "@end" then
-      items[#items + 1] = { word = id }
+      items[#items + 1] = { word = id, kind = kind }
     end
   end
   return items
@@ -139,6 +141,34 @@ end
 local function unxml(s)
   return (s or ""):gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"')
     :gsub("&apos;", "'"):gsub("&amp;", "&")
+end
+
+-- ── DOCUMENT HIGHLIGHTS: resalta las apariciones del símbolo bajo el cursor ───
+local HL_NS = vim.api.nvim_create_namespace("sap_nvim_doc_highlight")
+
+function M.clear_highlight(bufnr)
+  vim.api.nvim_buf_clear_namespace(bufnr or vim.api.nvim_get_current_buf(), HL_NS, 0, -1)
+end
+
+function M.document_highlight()
+  local bufnr = vim.api.nvim_get_current_buf()
+  M.clear_highlight(bufnr)
+  local word = vim.fn.expand("<cword>")
+  if not word or #word < 3 then return end -- evita ruido con tokens cortos
+  local needle = word:lower()
+  local plain = needle:gsub("[%-%.%+%[%]%(%)%$%^%%%?%*]", "%%%1")
+  local pat = "%f[%w_]" .. plain .. "%f[^%w_]" -- palabra completa
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  for i, l in ipairs(lines) do
+    local low, s = l:lower(), 1
+    while true do
+      local a, b = low:find(pat, s)
+      if not a then break end
+      pcall(vim.api.nvim_buf_set_extmark, bufnr, HL_NS, i - 1, a - 1,
+        { end_col = b, hl_group = "LspReferenceText" })
+      s = b + 1
+    end
+  end
 end
 
 -- ── HOVER (elementinfo): firma + documentación del símbolo bajo el cursor ─────
@@ -412,6 +442,14 @@ function M.setup()
       vim.keymap.set("n", "gI", function()
         if not M.goto_definition("implementation") then notify("Sin implementación.") end
       end, { buffer = b, desc = "ABAP: Ir a la implementación" })
+
+      -- Document highlights: resaltar apariciones del símbolo al reposar el cursor.
+      vim.api.nvim_create_autocmd("CursorHold", {
+        buffer = b, callback = function() pcall(M.document_highlight) end,
+      })
+      vim.api.nvim_create_autocmd("CursorMoved", {
+        buffer = b, callback = function() M.clear_highlight(b) end,
+      })
 
       -- Syntax check de SAP EN VIVO (como VSCode): al escribir (debounce) y al guardar.
       -- Solo para objetos remotos (sap_obj).

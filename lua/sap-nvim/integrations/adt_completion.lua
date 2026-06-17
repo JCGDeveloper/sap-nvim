@@ -31,6 +31,15 @@ end
 
 local Kind = vim.lsp.protocol.CompletionItemKind
 
+-- KIND de ADT -> icono de completado. 1=dato/var/param/const, 2=clase/tipo/estructura,
+-- 3=método, 52=keyword/operador.
+local KIND_MAP = {
+  ["1"] = Kind.Variable,
+  ["2"] = Kind.Class,
+  ["3"] = Kind.Method,
+  ["52"] = Kind.Keyword,
+}
+
 function source:get_completions(ctx, callback)
   local col = ctx.cursor[2]
   local before = (ctx.line or ""):sub(1, col)
@@ -57,7 +66,7 @@ function source:get_completions(ctx, callback)
       items[#items + 1] = {
         label = p.word,
         insertText = p.word,
-        kind = Kind.Method,
+        kind = KIND_MAP[p.kind or ""] or Kind.Text,
         source_name = "SAP",
       }
     end
