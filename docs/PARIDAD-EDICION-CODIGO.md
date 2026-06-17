@@ -5,6 +5,14 @@
 > `abap-adt-api`) y (2) Eclipse ADT, mapeado contra lo que **sap-nvim ya implementa hoy**,
 > con el gap concreto, el endpoint/medio que lo respalda y una prioridad de fase.
 >
+> **Aviso de verificación (2026-06-17):** se intentó la verificación web encargada
+> (repos de Marcello Urbani, plantillas oficiales de Eclipse ADT) pero **el acceso de red
+> volvió a estar bloqueado en esta sesión**: `WebSearch`, `WebFetch`, `git clone` y `curl`
+> (incluso con sandbox desactivado) fueron **denegados por la capa de permisos del harness**.
+> Por tanto los puntos marcados **(verificar)** SIGUEN sin confirmar contra la fuente real y
+> NO se han tocado. Lo único que pudo verificarse en esta sesión fue offline (cobertura de
+> snippets, contra `lua/sap-nvim/core/snippets.lua`). Detalle en la **§6**.
+>
 > **Estado de la investigación:** el código actual de sap-nvim se leyó directamente
 > (`core/intel.lua`, `adt_http.lua`, `formatter.lua`, `navigate.lua`, `snippets.lua`,
 > `message.lua`, `textsymbol.lua`, `data.lua`, `integrations/adt_completion.lua`). Las
@@ -359,3 +367,81 @@ es riesgo sin ganancia:
 > lectura/análisis**. Las escrituras siguen por sapcli con lock + transporte + confirmación.
 > Cuando se implementen rename/quickfixes (C1/C2), que **escriben**, deben pasar por las mismas
 > barreras (objetos propios Z/Y, confirmación, preview, transporte) o por sapcli.
+
+---
+
+## 6. Verificación web (2026-06-17) — CONFIRMADA contra el código de `abap-adt-api`
+
+> Verificado por el orquestador desde el hilo principal (el subagente investigador tuvo la
+> red denegada por el sandbox; el hilo principal sí pudo usar WebSearch/WebFetch). Fuente: el
+> código fuente real de `marcellourbani/abap-adt-api` (rama `master`), archivos
+> `src/api/syntax.ts`, `src/api/refactor.ts`, `src/api/revisions.ts`. Estos son los endpoints
+> que la extensión de VSCode usa por debajo.
+
+### 6.1 Endpoints ADT REST confirmados (método del API → ruta real)
+
+| Método `abap-adt-api` | HTTP | Ruta REAL | Antes en el doc | Estado sap-nvim |
+|---|---|---|---|---|
+| `syntaxCheck` | POST | `/sap/bc/adt/checkruns?reporters=abapCheckRun` | igual ✓ | usado |
+| `syntaxCheckTypes` | GET | `/sap/bc/adt/checkruns/reporters` | — | n/a |
+| `codeCompletion` | POST | `/sap/bc/adt/abapsource/codecompletion/proposal` | igual ✓ | usado |
+| `codeCompletionFull` | POST | `/sap/bc/adt/abapsource/codecompletion/**insertion**` | decía "insertion/full" | no usado (gap C: insertar plantilla completa) |
+| `codeCompletionElement` | POST | `/sap/bc/adt/abapsource/codecompletion/elementinfo` (text/plain) | igual ✓ | usado (hover); pendiente resolve-on-item |
+| `findDefinition` | POST | `/sap/bc/adt/navigation/target` (text/plain) | igual ✓ | usado (gd/gy/gI) |
+| `usageReferences` | POST | `/sap/bc/adt/repository/informationsystem/usageReferences` | igual ✓ | usado (gr) |
+| `usageReferenceSnippets` | POST | `/sap/bc/adt/repository/informationsystem/**usageSnippets**` | **CORREGIDO** (decía `usageReferences/snippets`) | gap C13 |
+| `classComponents` (objectStructure) | GET | `/sap/bc/adt/objectstructure` | alt. mencionada ✓ | no usado (outline es local) |
+| `fragmentMappings` | GET | `/sap/bc/adt/urifragmentmappings` | — | no usado |
+| `prettyPrinter` | POST | `/sap/bc/adt/abapsource/prettyprinter` (text/plain) | igual ✓ | usado |
+| `prettyPrinterSetting` | GET | `/sap/bc/adt/abapsource/prettyprinter/**settings**` | **CORREGIDO** (faltaba `/settings`) | gap B2 (keyword case del usuario) |
+| `setPrettyPrinterSetting` | PUT | `/sap/bc/adt/abapsource/prettyprinter/settings` | no listado | gap B2 |
+| `typeHierarchy` | POST | `/sap/bc/adt/abapsource/typehierarchy` (text/plain) | igual ✓ (era "(verificar)") | gap C4 |
+| `fixProposals` | POST | `/sap/bc/adt/quickfixes/evaluation` | igual ✓ | gap C1 |
+| `fixEdits` | POST | **la URI `adtcore:uri` que viene DENTRO del proposal** (dinámica) | **CORREGIDO** (no es `/quickfixes/edits` fijo) | gap C1 |
+| `renameEvaluate` / `renamePreview` / `renameExecute` | POST | `/sap/bc/adt/refactorings` | **CORREGIDO** (no `/refactorings/renamings`; el tipo va en el body) | gap C2 |
+| `extractMethodEvaluate/Preview/Execute` | POST | `/sap/bc/adt/refactorings` | **NUEVO** (extract method SÍ existe en el API) | gap C2b (no estaba como feature concreta) |
+| `changePackagePreview/Execute` | POST | `/sap/bc/adt/refactorings` | **NUEVO** | gap C (mover de paquete) |
+| `revisions` | GET | **sin path fijo**: se sigue el link rel `http://www.sap.com/adt/relations/versions` del objectStructure | **CORREGIDO** (decía `/vit/versions`) | gap C5 |
+
+### 6.2 Correcciones a la tabla maestra (§1) y a la §5
+
+- **Call hierarchy (feature #25):** NO existe en `abap-adt-api` (no hay función). La extensión de
+  VSCode **no la ofrece** por esta vía → **no es un gap de paridad**. Bajar de "pendiente" a
+  "N/A salvo reimplementación propia".
+- **Extract method / change package:** SÍ están en el API (mismo endpoint `/refactorings`).
+  Añadir como sub-features de C2 (refactorings de escritura, con §7: solo objetos propios +
+  preview obligatorio + transporte).
+- **`fixEdits`** no tiene endpoint fijo: hay que **leer la `adtcore:uri` del proposal** que
+  devuelve `fixProposals` y postear ahí el body. Importante para implementar C1 correctamente.
+- **Pretty printer settings** existe (`/abapsource/prettyprinter/settings`, GET y PUT): permite
+  leer/respetar el keyword-case del usuario (Upper/Lower/None) — habilita B2.
+
+### 6.3 Conclusión de paridad de ESCRIBIR código (verificada)
+
+El motor de inteligencia (completion, elementinfo/hover, navigation/target para def/type/impl,
+usageReferences, checkruns, prettyprinter, typehierarchy) usa **exactamente los mismos
+endpoints** que ya consume sap-nvim por `core/adt_http.lua` → **paridad de núcleo confirmada**.
+Los gaps reales y verificados para paridad TOTAL, por prioridad:
+
+1. **C1 — Quick fixes / code actions:** `fixProposals` (POST `/quickfixes/evaluation`) → mostrar
+   acciones bajo el cursor → aplicar el delta posteando a la `adtcore:uri` del proposal. Es lo
+   que más se nota al picar (los "💡" de Eclipse/VSCode).
+2. **C2 — Refactorings (POST `/refactorings`):** rename (evaluate→preview→execute), extract
+   method, change package. ESCRIBEN → exigen §7 (objetos propios Z/Y, preview obligatorio,
+   confirmación, transporte). Alto valor, riesgo gestionable con preview.
+3. **C3 — Doc/firma en el item (resolve perezoso):** `codeCompletionElement` sobre el item
+   resaltado; y `codeCompletionFull`/`insertion` para insertar la plantilla completa de una
+   propuesta (lo que en Eclipse rellena los parámetros al elegir un método).
+4. **C4 — Type hierarchy:** `POST /abapsource/typehierarchy` → picker de super/subtipos.
+5. **C5 — Revisiones/versiones:** seguir el link `relations/versions` → listar y diff.
+6. **C13 — Snippets de contexto por referencia:** `usageSnippets` para mostrar la línea de cada
+   uso en el picker de `gr`.
+7. **B2 — Settings del pretty printer:** respetar el keyword-case del usuario.
+
+NO son gaps (la extensión tampoco los tiene por esta vía): call hierarchy, semantic tokens del
+servidor, inlay hints, code lens.
+
+> Nota §7: C1 y C2 ESCRIBEN en SAP. Aunque el API ADT lo permite directo, en sap-nvim el patrón
+> es: lectura/evaluación por ADT directo, y la **aplicación** del cambio con preview obligatorio
+> + confirmación + objeto propio + transporte (o canalizada por sapcli cuando aplique). El
+> debugger (E1) sigue siendo el único hueco mayor sin endpoint en sapcli.
