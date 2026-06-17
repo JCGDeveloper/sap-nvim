@@ -20,6 +20,7 @@ function M.setup(opts)
     "sap-nvim.core.transport",
     "sap-nvim.core.source",
     "sap-nvim.core.navigate",
+    "sap-nvim.core.intel",
     "sap-nvim.core.data",
     "sap-nvim.core.browser",
     "sap-nvim.core.statusline",
