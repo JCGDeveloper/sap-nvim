@@ -65,13 +65,16 @@ end
 -- callback(pkg)  — "$TMP" para local.
 local function ask_package(callback)
   local adt = require("sap-nvim.core.adt")
+  local cfg = require("sap-nvim.core.config").new()
+  -- Default: el paquete configurado si lo hay; si no, el prefijo de búsqueda.
+  local default_pkg = cfg.package or cfg.package_prefix or "Z"
   if not adt.is_configured() then
-    vim.ui.input({ prompt = "Paquete ($TMP para local): ", default = "$TMP" }, function(pkg)
+    vim.ui.input({ prompt = "Paquete ($TMP para local): ", default = cfg.package or "$TMP" }, function(pkg)
       callback(((pkg and pkg ~= "") and pkg or "$TMP"):upper())
     end)
     return
   end
-  vim.ui.input({ prompt = "Prefijo de paquete ($TMP para local): ", default = "Z" }, function(prefix)
+  vim.ui.input({ prompt = "Paquete o prefijo a buscar ($TMP para local): ", default = default_pkg }, function(prefix)
     if not prefix or prefix == "" or prefix:upper() == "$TMP" then callback("$TMP") return end
     notify("Buscando paquetes en el sistema...")
     adt.fetch_packages(prefix:upper() .. "*", function(packages, err)
@@ -129,13 +132,15 @@ function M.new_object()
     return
   end
 
+  local cfg = require("sap-nvim.core.config").new()
+
   vim.ui.select(TYPES, {
     prompt = "Nuevo objeto ABAP en SAP:",
     format_item = function(it) return it.label end,
   }, function(spec)
     if not spec then return end
 
-    vim.ui.input({ prompt = spec.label .. " — nombre: ", default = "Z" }, function(name)
+    vim.ui.input({ prompt = spec.label .. " — nombre: ", default = cfg.name_prefix or "Z" }, function(name)
       if not name or name == "" then return end
       name = name:upper()
       if not name:match("^[ZY]") and not name:match("^/") then
@@ -147,7 +152,7 @@ function M.new_object()
 
         -- Function module: pide el grupo de funciones, sin paquete/transporte propio.
         if spec.needs_group then
-          vim.ui.input({ prompt = "Function Group destino: ", default = "Z" }, function(fg)
+          vim.ui.input({ prompt = "Function Group destino: ", default = cfg.function_group or "Z" }, function(fg)
             if not fg or fg == "" then return end
             do_create(spec, name, desc, nil, nil, fg:upper())
           end)

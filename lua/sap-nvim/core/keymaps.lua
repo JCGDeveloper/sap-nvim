@@ -61,6 +61,7 @@ sap-nvim atajos:
   gd           = <leader>ag (en buffers ABAP)
   -            Volver al archivo anterior de la navegacion (:SapBack)
   <leader>an   Crear objeto ABAP EN SAP y abrirlo (:SapNew)
+  <leader>aX   Borrar el objeto actual del sistema (:SapDelete)
   <leader>aw   Where-used list → quickfix
   <leader>aD   Diff local vs sistema SAP (:SapDiff)
 

@@ -7,6 +7,7 @@ function M.setup(opts)
   opts = opts or {}
 
   local modules = {
+    "sap-nvim.core.config",
     "sap-nvim.core.treesitter",
     "sap-nvim.core.formatter",
     "sap-nvim.core.lsp",

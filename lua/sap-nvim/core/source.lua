@@ -210,6 +210,49 @@ function M.push(bufnr, activate)
   end)
 end
 
+-- Borra un objeto del sistema: `sapcli <group> delete NAME [--corrnr]`. Pide confirmación
+-- y resuelve transporte (igual que el push). Tras borrar, limpia el buffer y la caché.
+function M.delete(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  local obj = vim.b[bufnr].sap_obj
+  if not obj then
+    notify("Este buffer no es un objeto SAP abierto con sap-nvim.", vim.log.levels.WARN)
+    return
+  end
+
+  vim.ui.select({ "No", "Sí, BORRAR " .. obj.name .. " del sistema" },
+    { prompt = "¿Borrar " .. obj.name .. " (" .. obj.group .. ") de SAP? Esto es irreversible." },
+    function(choice)
+      if not choice or not choice:match("^Sí") then return end
+
+      resolve_transport(function(corrnr)
+        local args = { "sapcli", obj.group, "delete", obj.name }
+        if corrnr then vim.list_extend(args, { "--corrnr", corrnr }) end
+
+        notify("Borrando " .. obj.name .. "...")
+        local err = {}
+        vim.fn.jobstart(args, {
+          on_stderr = function(_, data)
+            for _, l in ipairs(data) do if vim.trim(l) ~= "" then err[#err + 1] = l end end
+          end,
+          on_exit = function(_, code)
+            vim.schedule(function()
+              if code ~= 0 then
+                notify("No se pudo borrar " .. obj.name .. ": " .. (err[1] or ("code " .. code)),
+                  vim.log.levels.ERROR)
+                return
+              end
+              local path = vim.api.nvim_buf_get_name(bufnr)
+              pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+              if path ~= "" then pcall(os.remove, path) end
+              notify(obj.name .. " borrado del sistema.")
+            end)
+          end,
+        })
+      end)
+    end)
+end
+
 -- Activar. Para objetos remotos abiertos con sap-nvim, activar implica subir antes
 -- (write + activate atómico, como hace la extensión de VSCode al guardar). Para
 -- archivos sueltos en disco, cae al activate clásico que deduce group/name del nombre.
@@ -239,8 +282,14 @@ function M.setup()
     M.reset_transport()
   end, { desc = "sap-nvim: Olvidar la orden de transporte recordada" })
 
+  vim.api.nvim_create_user_command("SapDelete", function()
+    M.delete(nil)
+  end, { desc = "sap-nvim: Borrar el objeto actual del sistema (con confirmación)" })
+
   vim.keymap.set("n", "<leader>au", function() M.push(nil, false) end,
     { desc = "ABAP: Subir (push) objeto a SAP sin activar" })
+  vim.keymap.set("n", "<leader>aX", function() M.delete(nil) end,
+    { desc = "ABAP: Borrar objeto del sistema" })
 end
 
 return M

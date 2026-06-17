@@ -1,6 +1,10 @@
 -- sap-nvim.snippets
 -- Snippets ABAP para autocompletado con blink.cmp
--- Usá el prefijo + Tab para expandir
+-- Usá el prefijo + Tab para expandir.
+-- Los nombres de variables placeholder usan la convención configurable
+-- (require("sap-nvim").setup({ naming = {...} })) vía core/config.lua.
+
+local n = require("sap-nvim.core.config").naming()
 
 return {
   -- REPORT
@@ -24,7 +28,7 @@ return {
   loop = {
     trig = "loop",
     name = "LOOP-ENDLOOP",
-    body = [[LOOP AT ${1:lt_table} INTO ${2:ls_row}.\n  ${0}\nENDLOOP.]],
+    body = [[LOOP AT ${1:]] .. n.itab .. [[table} INTO ${2:]] .. n.struct .. [[row}.\n  ${0}\nENDLOOP.]],
   },
   -- DO / ENDDO
   doo = {
@@ -43,24 +47,24 @@ return {
   try = {
     trig = "try",
     name = "TRY-CATCH-ENDTRY",
-    body = [[TRY.\n  ${0}\nCATCH ${1:cx_root} INTO ${2:lo_error}.\n  MESSAGE lo_error->get_text( ) TYPE 'E'.\nENDTRY.]],
+    body = [[TRY.\n  ${0}\nCATCH ${1:cx_root} INTO ${2:]] .. n.ref .. [[error}.\n  MESSAGE ]] .. n.ref .. [[error->get_text( ) TYPE 'E'.\nENDTRY.]],
   },
   -- CASE / ENDCASE
   case = {
     trig = "case",
     name = "CASE-WHEN-ENDCASE",
-    body = [[CASE ${1:lv_value}.\n  WHEN ${2:value1}.\n    ${0}\n  WHEN OTHERS.\n    ${3}\nENDCASE.]],
+    body = [[CASE ${1:]] .. n.var .. [[value}.\n  WHEN ${2:value1}.\n    ${0}\n  WHEN OTHERS.\n    ${3}\nENDCASE.]],
   },
   -- DATA declaration
   data = {
     trig = "data",
     name = "DATA declaration",
-    body = [[DATA(${1:lv_name}) TYPE ${2:string}.]],
+    body = [[DATA(${1:]] .. n.var .. [[name}) TYPE ${2:string}.]],
   },
   datab = {
     trig = "datab",
     name = "DATA BEGIN OF",
-    body = [[DATA: BEGIN OF ${1:ls_struct},\n          ${2:field} TYPE ${3:string},\n        END OF ${1:ls_struct}.]],
+    body = [[DATA: BEGIN OF ${1:]] .. n.struct .. [[struct},\n          ${2:field} TYPE ${3:string},\n        END OF ${1:]] .. n.struct .. [[struct}.]],
   },
   -- METHOD
   meth = {
@@ -83,12 +87,12 @@ return {
   sel = {
     trig = "sel",
     name = "SELECT single",
-    body = [[SELECT SINGLE *\n  FROM ${1:dbtab}\n  INTO ${2:ls_row}\n  WHERE ${3:field} = ${4:value}.]],
+    body = [[SELECT SINGLE *\n  FROM ${1:dbtab}\n  INTO ${2:]] .. n.struct .. [[row}\n  WHERE ${3:field} = ${4:value}.]],
   },
   sel_all = {
     trig = "selall",
     name = "SELECT all",
-    body = [[SELECT *\n  FROM ${1:dbtab}\n  INTO TABLE ${2:lt_table}\n  UP TO ${3:100} ROWS\n  WHERE ${4:condition}.\nIF sy-subrc = 0.\n  ${0}\nENDIF.]],
+    body = [[SELECT *\n  FROM ${1:dbtab}\n  INTO TABLE ${2:]] .. n.itab .. [[table}\n  UP TO ${3:100} ROWS\n  WHERE ${4:condition}.\nIF sy-subrc = 0.\n  ${0}\nENDIF.]],
   },
   -- WRITE
   write = {
@@ -123,7 +127,7 @@ return {
   alv = {
     trig = "alv",
     name = "ALV grid call",
-    body = [[cl_salv_table=>factory(\n  IMPORTING\n    r_salv_table = DATA(lo_alv)\n  CHANGING\n    t_table      = ${1:lt_data} ).\nlo_alv->display( ).]],
+    body = [[cl_salv_table=>factory(\n  IMPORTING\n    r_salv_table = DATA(]] .. n.ref .. [[alv)\n  CHANGING\n    t_table      = ${1:]] .. n.itab .. [[data} ).\n]] .. n.ref .. [[alv->display( ).]],
   },
   -- RAP
   rap_behavior = {
