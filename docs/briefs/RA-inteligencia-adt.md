@@ -28,12 +28,23 @@ el source en el body → XML `<SCC_COMPLETION>` con `<IDENTIFIER>`.
   target), integrado en `gd`; `gy` para el tipo. Resuelve clases/métodos/tipos del sistema.
 - **R-A3 Referencias (gr) ✅:** `intel.references` (usageReferences) → picker, Enter abre.
 
+- **R-B4 Pretty Printer REAL de SAP ✅:** `formatter.format_via_adt` (endpoint
+  `/sap/bc/adt/abapsource/prettyprinter`). El formateador de SE80/ADT: capitaliza compuestos
+  (CLASS-METHODS), mantiene identificadores, respeta nueva sintaxis. Usado para objetos
+  remotos en `<leader>aF`; regex como fallback.
+- **F1b Syntax check REAL de SAP ✅:** `intel.check_syntax` (endpoint `/sap/bc/adt/checkruns`,
+  abapCheckRun). Diagnósticos con línea/col EXACTAS del SAP real, en vivo (debounce al
+  escribir + al guardar) + `:SapCheck`. Namespace propio (coexiste con abaplint).
+- **Signature help (params) ✅:** la fuente blink dispara con `(`/`,` y muestra los
+  parámetros del método (ADT los devuelve dentro de `( )`).
+
 ## Pendiente / mejoras futuras
 - **Kinds/iconos en el completado:** mapear `<KIND>` del proposal a método/clase/atributo.
 - **Doc en el completado (resolve):** mostrar firma del item resaltado (elementinfo lazy).
-- **Signature help:** al escribir `meth( ` mostrar los parámetros.
-- **adt_http async total:** hover/def/refs son sync (on-demand, aceptable); migrar a
-  jobstart si se quiere 0 bloqueo.
+- **Float de signature help:** ventana con la firma completa resaltando el param actual
+  (hoy se completan los nombres de params, que es lo esencial).
+- **Quick fixes / code actions ADT, rename, objectstructure outline:** features menores.
+- **adt_http async total:** hover/def/refs son sync (on-demand, aceptable).
 
 ## Arquitectura
 Un solo `adt_http` async (migrar de sync a jobstart para no bloquear), parseo de los XML de
