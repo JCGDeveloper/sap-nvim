@@ -100,13 +100,13 @@ end
 
 -- Ejecuta OpenSQL (-o json) y muestra los datos en una tabla alineada. JSON evita la
 -- desalineación de `-o human` (que omite celdas vacías de forma inconsistente).
-function M.preview(sql, rows)
+function M.preview(sql, rows, _retry)
   if not adt.is_configured() then
     notify("No hay conexión SAP. Usa :SapSetup primero.", vim.log.levels.WARN)
     return
   end
   rows = rows or require("sap-nvim.core.config").data().rows or 100
-  notify("Consultando: " .. sql .. " (máx " .. rows .. " filas)...")
+  if not _retry then notify("Consultando: " .. sql .. " (máx " .. rows .. " filas)...") end
 
   local out, err = {}, {}
   local finished = false
@@ -127,7 +127,16 @@ function M.preview(sql, rows)
         local raw = table.concat(out, "\n")
         local ok, decoded = pcall(vim.json.decode, raw)
         if code ~= 0 or not ok or type(decoded) ~= "table" then
-          notify("Consulta fallida: " .. (err[1] or raw:sub(1, 120)), vim.log.levels.ERROR)
+          -- osql falla a veces de forma transitoria vía jobstart: reintentar UNA vez.
+          if not _retry and code ~= 143 then
+            return M.preview(sql, rows, true)
+          end
+          -- Mostrar el motivo COMPLETO (la 1ª línea suele ser "Exception (ADTError):" y el
+          -- detalle va en las siguientes). Errores de sapcli osql salen por stderr y/o stdout.
+          local detail = vim.trim(table.concat(err, " "))
+          if detail == "" then detail = vim.trim(raw) end
+          if detail == "" then detail = "code " .. code .. " (sin salida; ¿timeout o conexión?)" end
+          notify("Consulta fallida: " .. detail:sub(1, 400), vim.log.levels.ERROR)
           return
         end
         if #decoded == 0 then notify("Sin filas para: " .. sql); return end
