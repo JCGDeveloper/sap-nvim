@@ -175,33 +175,54 @@ function M.preview_cursor()
   end
 end
 
--- Muestra la definición DDIC de una tabla/estructura/data element/dominio.
-function M.read_table(name)
+-- Tipos de objeto cuya definición se puede leer (en orden de intento).
+local DEF_READERS = { "table", "ddl", "structure", "dataelement", "domain", "view" }
+
+-- Muestra la definición de tabla / CDS (DDL) / estructura / data element / dominio.
+-- Prueba los tipos en orden hasta que uno responde (así una CDS se lee con `ddl read`).
+function M.read_definition(name, idx)
   if not adt.is_configured() then
     notify("No hay conexión SAP. Usa :SapSetup primero.", vim.log.levels.WARN)
     return
   end
   name = name:upper()
-  notify("Leyendo definición de " .. name .. "...")
-  local out, err = {}, {}
-  vim.fn.jobstart({ "sapcli", "table", "read", name }, {
-    on_stdout = function(_, data)
-      for _, l in ipairs(data) do out[#out + 1] = l end
-    end,
-    on_stderr = function(_, data)
-      for _, l in ipairs(data) do if vim.trim(l) ~= "" then err[#err + 1] = vim.trim(l) end end
-    end,
+  idx = idx or 1
+  local group = DEF_READERS[idx]
+  if not group then
+    notify("No se encontró definición para " .. name .. " (tabla/CDS/estructura/...).", vim.log.levels.WARN)
+    return
+  end
+  if idx == 1 then notify("Leyendo definición de " .. name .. "...") end
+
+  local out = {}
+  vim.fn.jobstart({ "sapcli", group, "read", name }, {
+    on_stdout = function(_, data) for _, l in ipairs(data) do out[#out + 1] = l end end,
     on_exit = function(_, code)
       vim.schedule(function()
-        if code ~= 0 or #out == 0 then
-          notify("No se pudo leer " .. name .. ": " .. (err[1] or ("code " .. code)), vim.log.levels.ERROR)
-          return
+        -- Éxito si exit 0 y hay contenido que no sea una excepción ADT.
+        local ok = code == 0 and #out > 0 and not (out[1] or ""):match("Exception")
+        if ok then
+          if out[#out] == "" then table.remove(out) end
+          show_scratch("sap-def://" .. name, "abap", out)
+        else
+          M.read_definition(name, idx + 1) -- probar el siguiente tipo
         end
-        if out[#out] == "" then table.remove(out) end
-        show_scratch("sap-table://" .. name, "abap", out)
       end)
     end,
   })
+end
+
+-- Alias para compatibilidad.
+M.read_table = M.read_definition
+
+-- Definición del objeto bajo el cursor (cword) o pregunta.
+function M.read_definition_cursor()
+  local w = vim.fn.expand("<cword>")
+  if w and w:match("^[%w_/]+$") then
+    M.read_definition(w)
+  else
+    vim.ui.input({ prompt = "Objeto (definición): " }, function(v) if v and v ~= "" then M.read_definition(v) end end)
+  end
 end
 
 local function prompt(msg, default, cb)
@@ -212,8 +233,8 @@ end
 
 function M.setup()
   vim.api.nvim_create_user_command("SapTable", function(a)
-    if a.args ~= "" then M.read_table(a.args) else prompt("Tabla (definición DDIC): ", "", M.read_table) end
-  end, { desc = "sap-nvim: Ver definición DDIC de una tabla", nargs = "?" })
+    if a.args ~= "" then M.read_definition(a.args) else M.read_definition_cursor() end
+  end, { desc = "sap-nvim: Ver definición de tabla/CDS/estructura (cursor)", nargs = "?" })
 
   vim.api.nvim_create_user_command("SapTableData", function(a)
     if a.args ~= "" then M.preview_table(a.args) else M.preview_cursor() end
@@ -223,9 +244,8 @@ function M.setup()
     if a.args ~= "" then M.preview(a.args) else prompt("OpenSQL (sin punto): ", "SELECT * FROM ", M.preview) end
   end, { desc = "sap-nvim: Ejecutar OpenSQL y ver resultados", nargs = "?" })
 
-  vim.keymap.set("n", "<leader>avt", function()
-    prompt("Tabla (definición DDIC): ", "", M.read_table)
-  end, { desc = "ABAP: Ver definición de tabla" })
+  vim.keymap.set("n", "<leader>avt", function() M.read_definition_cursor() end,
+    { desc = "ABAP: Ver definición (tabla/CDS/estructura) bajo el cursor" })
   -- Datos de la tabla bajo el cursor (o pregunta si no hay palabra).
   vim.keymap.set("n", "<leader>avd", function() M.preview_cursor() end,
     { desc = "ABAP: Ver datos de la tabla bajo el cursor" })
