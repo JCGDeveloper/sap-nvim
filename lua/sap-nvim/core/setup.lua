@@ -163,7 +163,10 @@ local function input_dialog(title, fields, callback)
   -- acwrite + a buffer NAME so that ':w'/':wq' fire BufWriteCmd. A nameless
   -- buffer can't be written and ':wq' fails with "E32: No file name" before
   -- the autocmd ever runs. The name is virtual (sap://...), never hits disk.
-  pcall(vim.api.nvim_buf_set_name, buf, "sap://" .. title:gsub("%s+", "-"):lower())
+  -- El nombre incluye el id del buffer para ser ÚNICO: si no, reabrir el asistente
+  -- choca con el buffer anterior (nvim_buf_set_name falla, el pcall traga el error)
+  -- y el buffer queda sin nombre → ':wq' falla con E32.
+  pcall(vim.api.nvim_buf_set_name, buf, "sap://" .. title:gsub("%s+", "-"):lower() .. "-" .. buf)
   vim.bo[buf].buftype = "acwrite"
   vim.bo[buf].bufhidden = "wipe"
 
