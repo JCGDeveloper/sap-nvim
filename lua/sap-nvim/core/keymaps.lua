@@ -56,9 +56,11 @@ sap-nvim atajos:
   OBJETOS:
   <leader>aa   Activar objeto (sube antes si es remoto) → errores/warnings a quickfix
   <leader>au   Subir (push) objeto a SAP sin activar (:SapPush)
-  <leader>ao   Outline del objeto: saltar a metodo/form/type (:SapOutline)
-  <leader>ag   Ir a definicion bajo el cursor: local o global (:SapGotoDef)
-  <leader>an   Nuevo objeto ABAP (pickers de paquete y transporte)
+  <leader>ao   Outline del objeto: saltar a metodo/form/type/include (:SapOutline)
+  <leader>ag   Ir a definicion bajo el cursor (gd): include/form/variable/objeto
+  gd           = <leader>ag (en buffers ABAP)
+  -            Volver al archivo anterior de la navegacion (:SapBack)
+  <leader>an   Crear objeto ABAP EN SAP y abrirlo (:SapNew)
   <leader>aw   Where-used list → quickfix
   <leader>aD   Diff local vs sistema SAP (:SapDiff)
 
