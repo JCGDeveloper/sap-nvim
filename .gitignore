@@ -19,3 +19,17 @@ skill/
 *.tabl
 *.dome
 *.intf
+
+# Clon de desarrollo anidado accidental (tiene su propio .git) y scratch de pruebas
+/scripts/sap-nvim/
+/scripts/*.abap
+
+# Fuentes descargadas por sapcli (formato abapGit) — no son parte del plugin
+*.prog.abap
+*.clas.abap
+*.intf.abap
+*.fugr.abap
+*.prog.xml
+*.clas.xml
+*.intf.xml
+*.fugr.xml

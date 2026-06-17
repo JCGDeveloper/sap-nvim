@@ -1,0 +1,11 @@
+# Normaliza saltos de línea: evita el lío de CRLF que mete OneDrive en Windows.
+# Todo el texto se almacena con LF en el repo y en el working tree.
+* text=auto eol=lf
+
+*.lua  text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.sh   text eol=lf
+*.abap text eol=lf
