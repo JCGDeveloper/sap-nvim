@@ -135,4 +135,155 @@ return {
     name = "RAP Behavior Definition",
     body = [[managed implementation in class ${1:zcl_rap} unique.\nstrict.\n\ndefine behavior for ${2:ZENTITY} alias ${3:Alias}\n  persistent table ${4:zdbtab}\n  lock master\n  etag master ${5:last_changed_at}\n{\n  create;\n  update;\n  delete;\n}]],
   },
+
+  -- ── Declaración de miembros de clase/interfaz (lo que enseña Eclipse en las SECTION) ──
+  methi = {
+    trig = "methi",
+    name = "METHODS (instancia, todos los parámetros)",
+    body = [[METHODS ${1:name}\n  IMPORTING\n    !${2:iv_param} TYPE ${3:type}\n  EXPORTING\n    !${4:ev_param} TYPE ${5:type}\n  CHANGING\n    !${6:cv_param} TYPE ${7:type}\n  RETURNING\n    VALUE(${8:rv_result}) TYPE ${9:type}\n  RAISING\n    ${10:cx_static_check}.]],
+  },
+  methr = {
+    trig = "methr",
+    name = "METHODS RETURNING (función)",
+    body = [[METHODS ${1:name}\n  IMPORTING\n    !${2:iv_param} TYPE ${3:type}\n  RETURNING\n    VALUE(${4:rv_result}) TYPE ${5:type}\n  RAISING\n    ${6:cx_static_check}.]],
+  },
+  cmethods = {
+    trig = "cmethods",
+    name = "CLASS-METHODS (estático)",
+    body = [[CLASS-METHODS ${1:name}\n  IMPORTING\n    !${2:iv_param} TYPE ${3:type}\n  RETURNING\n    VALUE(${4:rv_result}) TYPE ${5:type}\n  RAISING\n    ${6:cx_static_check}.]],
+  },
+  ctor = {
+    trig = "ctor",
+    name = "METHODS constructor",
+    body = [[METHODS constructor\n  IMPORTING\n    !${1:iv_param} TYPE ${2:type}.]],
+  },
+  cctor = {
+    trig = "cctor",
+    name = "CLASS-METHODS class_constructor",
+    body = [[CLASS-METHODS class_constructor.]],
+  },
+  attr = {
+    trig = "attr",
+    name = "DATA (atributo de instancia)",
+    body = [[DATA ${1:mv_attribute} TYPE ${2:string}.]],
+  },
+  cattr = {
+    trig = "cattr",
+    name = "CLASS-DATA (atributo estático)",
+    body = [[CLASS-DATA ${1:gv_attribute} TYPE ${2:string}.]],
+  },
+  const = {
+    trig = "const",
+    name = "CONSTANTS",
+    body = [[CONSTANTS ${1:co_name} TYPE ${2:string} VALUE ${3:'x'}.]],
+  },
+  types = {
+    trig = "types",
+    name = "TYPES",
+    body = [[TYPES ${1:ty_name} TYPE ${2:string}.]],
+  },
+  event = {
+    trig = "event",
+    name = "EVENTS",
+    body = [[EVENTS ${1:evt_name} EXPORTING VALUE(${2:ev_param}) TYPE ${3:type}.]],
+  },
+  cevent = {
+    trig = "cevent",
+    name = "CLASS-EVENTS",
+    body = [[CLASS-EVENTS ${1:evt_name}.]],
+  },
+  alias = {
+    trig = "alias",
+    name = "ALIASES",
+    body = [[ALIASES ${1:alias} FOR ${2:if_name}~${3:member}.]],
+  },
+  intf = {
+    trig = "intf",
+    name = "INTERFACES",
+    body = [[INTERFACES ${1:if_name}.]],
+  },
+  redef = {
+    trig = "redef",
+    name = "METHODS REDEFINITION",
+    body = [[METHODS ${1:method} REDEFINITION.]],
+  },
+
+  -- ── Estructuras de control que faltaban ──
+  modu = {
+    trig = "module",
+    name = "MODULE-ENDMODULE",
+    body = [[MODULE ${1:name} ${2:INPUT}.\n  ${0}\nENDMODULE.]],
+  },
+  func = {
+    trig = "func",
+    name = "FUNCTION-ENDFUNCTION",
+    body = [[FUNCTION ${1:name}.\n  ${0}\nENDFUNCTION.]],
+  },
+  sos = {
+    trig = "sos",
+    name = "START-OF-SELECTION",
+    body = [[START-OF-SELECTION.\n  ${0}]],
+  },
+
+  -- ── Sintaxis nueva 7.40+ (constructores, con el espaciado correcto que exige SAP) ──
+  value = {
+    trig = "value",
+    name = "VALUE #( )",
+    body = [[VALUE ${1:#}( ${0} )]],
+  },
+  valuet = {
+    trig = "valuet",
+    name = "VALUE tabla( ( fila ) )",
+    body = [[VALUE ${1:ty_tab}( ( ${2:col1} = ${3:val1} ) )]],
+  },
+  cond = {
+    trig = "cond",
+    name = "COND #( WHEN THEN ELSE )",
+    body = [[COND ${1:#}( WHEN ${2:condition} THEN ${3:a} ELSE ${4:b} )]],
+  },
+  switch = {
+    trig = "switch",
+    name = "SWITCH #( WHEN THEN )",
+    body = [[SWITCH ${1:#}( ${2:operand}\n  WHEN ${3:value} THEN ${4:result}\n  ELSE ${5:default} )]],
+  },
+  new = {
+    trig = "new",
+    name = "NEW #( )",
+    body = [[NEW ${1:zcl_class}( ${0} )]],
+  },
+  conv = {
+    trig = "conv",
+    name = "CONV #( )",
+    body = [[CONV ${1:type}( ${2:value} )]],
+  },
+  refn = {
+    trig = "ref",
+    name = "REF #( )",
+    body = [[REF ${1:#}( ${2:variable} )]],
+  },
+  reduce = {
+    trig = "reduce",
+    name = "REDUCE #( INIT FOR NEXT )",
+    body = [[REDUCE ${1:i}( INIT ${2:s} = 0 FOR ${3:wa} IN ${4:]] .. n.itab .. [[table} NEXT ${2:s} = ${2:s} + ${5:wa-field} )]],
+  },
+  filter = {
+    trig = "filter",
+    name = "FILTER #( WHERE )",
+    body = [[FILTER ${1:#}( ${2:]] .. n.itab .. [[table} WHERE ${3:field} > 0 )]],
+  },
+  corr = {
+    trig = "corr",
+    name = "CORRESPONDING #( MAPPING )",
+    body = [[CORRESPONDING ${1:#}( ${2:source} MAPPING ${3:target} = ${4:source_field} )]],
+  },
+  loopa = {
+    trig = "loopa",
+    name = "LOOP ASSIGNING FIELD-SYMBOL",
+    body = [[LOOP AT ${1:]] .. n.itab .. [[table} ASSIGNING FIELD-SYMBOL(<${2:fs}>).\n  ${0}\nENDLOOP.]],
+  },
+  loopd = {
+    trig = "loopd",
+    name = "LOOP INTO DATA()",
+    body = [[LOOP AT ${1:]] .. n.itab .. [[table} INTO DATA(${2:]] .. n.struct .. [[row}).\n  ${0}\nENDLOOP.]],
+  },
 }
