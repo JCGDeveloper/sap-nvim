@@ -11,6 +11,32 @@ local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
+-- Pila de navegación (back). Cada salto de gd/outline apila la posición de origen;
+-- `-` (M.back) vuelve al archivo+línea anterior. Ej.: prog→form→top, y `-` recorre
+-- top→form→prog.
+M._back = {}
+local function push_here()
+  local b = vim.api.nvim_get_current_buf()
+  local pos = vim.api.nvim_win_get_cursor(0)
+  table.insert(M._back, { buf = b, path = vim.api.nvim_buf_get_name(b), lnum = pos[1], col = pos[2] })
+end
+function M.back()
+  local loc = table.remove(M._back)
+  if not loc then
+    notify("No hay archivo anterior en la navegación.")
+    return
+  end
+  if loc.buf and vim.api.nvim_buf_is_valid(loc.buf) then
+    vim.api.nvim_set_current_buf(loc.buf)
+  elseif loc.path and loc.path ~= "" then
+    vim.cmd("edit " .. vim.fn.fnameescape(loc.path))
+  else
+    return
+  end
+  pcall(vim.api.nvim_win_set_cursor, 0, { loc.lnum, loc.col })
+  vim.cmd("normal! zz")
+end
+
 -- Etiqueta visible por tipo de símbolo.
 local KIND_LABEL = {
   class = "class", ["class-impl"] = "class", interface = "intf",
@@ -101,6 +127,7 @@ function M.outline()
     if not choice then return end
     -- Un INCLUDE no se "salta": se abre el objeto include desde SAP.
     if choice.kind == "include" then
+      push_here()
       require("sap-nvim.core.source").open(choice.name:upper(), "include")
       return
     end
@@ -210,7 +237,7 @@ local function goto_global(word)
         local pool = #exact > 0 and exact or rows
         local function open_row(r)
           local g, n = group_from_find_row(r), row_name(r)
-          if g and n then source.open(n, g)
+          if g and n then push_here(); source.open(n, g)
           else notify("No se pudo resolver el tipo de '" .. (n or word) .. "'.", vim.log.levels.WARN) end
         end
         if #pool == 1 then open_row(pool[1])
@@ -242,6 +269,7 @@ function M.goto_definition()
   local curline = vim.api.nvim_get_current_line():lower()
   local inc = curline:match("^%s*include%s+([%w_/]+)")
   if inc and (inc == word:lower() or curline:match("^%s*include%s")) then
+    push_here()
     require("sap-nvim.core.source").open(inc:upper(), "include")
     return
   end
@@ -249,6 +277,7 @@ function M.goto_definition()
   -- 2) Definición en el buffer actual.
   local lnum = find_def(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), word)
   if lnum then
+    push_here()
     vim.api.nvim_win_set_cursor(0, { lnum, 0 })
     vim.cmd("normal! zz")
     notify("→ " .. word .. " (L" .. lnum .. ", local)")
@@ -263,6 +292,7 @@ function M.goto_definition()
       local ok, lines = pcall(vim.fn.readfile, path)
       local l = ok and find_def(lines, word) or nil
       if l then
+        push_here()
         open_cache_at(path, l)
         notify("→ " .. word .. " en " .. vim.fn.fnamemodify(path, ":t") .. " (L" .. l .. ")")
         return
@@ -285,13 +315,19 @@ function M.setup()
   vim.keymap.set("n", "<leader>ag", function() M.goto_definition() end,
     { desc = "ABAP: Ir a definición (local o global)" })
 
-  -- `gd` en buffers ABAP -> go-to-definition inteligente (include/form/variable/objeto).
+  vim.api.nvim_create_user_command("SapBack", function() M.back() end,
+    { desc = "sap-nvim: Volver al archivo anterior de la navegación" })
+
+  -- En buffers ABAP: `gd` -> go-to-definition inteligente; `-` -> volver atrás en la
+  -- navegación (pila de gd/outline), recorriendo los archivos abiertos.
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "abap",
     group = vim.api.nvim_create_augroup("sap_nvim_navigate", { clear = true }),
     callback = function(ev)
       vim.keymap.set("n", "gd", function() M.goto_definition() end,
         { buffer = ev.buf, desc = "ABAP: Ir a definición (sap-nvim)" })
+      vim.keymap.set("n", "-", function() M.back() end,
+        { buffer = ev.buf, desc = "ABAP: Volver al archivo anterior (sap-nvim)" })
     end,
   })
 end
