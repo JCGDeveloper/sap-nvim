@@ -21,8 +21,15 @@ local function show_scratch(bufname, ft, lines)
   local buf = (existing and vim.api.nvim_buf_is_valid(existing)) and existing
     or vim.api.nvim_create_buf(true, true)
   scratch_bufs[bufname] = buf
+  -- Salvaguarda: ninguna línea puede contener '\n' (nvim_buf_set_lines lo rechaza).
+  local safe = {}
+  for _, l in ipairs(lines) do
+    for _, sub in ipairs(vim.split(tostring(l), "\n", { plain = true })) do
+      safe[#safe + 1] = sub:gsub("\r", "")
+    end
+  end
   vim.bo[buf].modifiable = true
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, safe)
   vim.bo[buf].modifiable = false
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "hide"
@@ -37,6 +44,11 @@ end
 -- rows[1] es la cabecera.
 local function render_cells(rows)
   if #rows == 0 then return { "(sin filas)" } end
+  -- Sanea las celdas: algunos campos (p.ej. de VBAK) traen saltos de línea/tabs, que
+  -- rompen nvim_buf_set_lines ("item contains newlines"). Los sustituimos por un espacio.
+  for _, r in ipairs(rows) do
+    for i, c in ipairs(r) do r[i] = tostring(c):gsub("[\r\n\t]", " ") end
+  end
   local widths = {}
   for _, r in ipairs(rows) do
     for i, c in ipairs(r) do
