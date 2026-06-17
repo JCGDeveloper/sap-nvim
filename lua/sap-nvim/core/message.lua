@@ -12,6 +12,12 @@ local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
+-- §7 S1: solo objetos propios (Z/Y o namespace /XXX/). Bloquea tocar estándar SAP.
+local function is_own(name)
+  local n = (name or ""):upper()
+  return n:match("^[ZY]") ~= nil or n:match("^/%w+/") ~= nil
+end
+
 -- Parsea el MESSAGE con literal+número. Devuelve los trozos necesarios para reescribir.
 -- { indent, literal, msgno, type, class?, rest } donde `rest` es lo que va tras el
 -- '...'(nnn) (TYPE/DISPLAY/WITH... + punto).
@@ -48,6 +54,10 @@ end
 
 -- Crea el mensaje en SE91 y, al terminar, reescribe la línea a MESSAGE e001(clase) ...
 local function create_se91(p, class, text, corrnr, allow_create_class)
+  if not is_own(class) then  -- §7 S1: defensa en profundidad
+    notify("Solo se pueden crear/editar clases de mensajes propias (Z/Y). " .. class .. " es estándar SAP.", vim.log.levels.WARN)
+    return
+  end
   local args = { "sapcli", "messageclass", "message", "create", class, p.msgno, text }
   if corrnr then vim.list_extend(args, { "--corrnr", corrnr }) end
   notify("Creando mensaje " .. class .. "/" .. p.msgno .. "...")
@@ -108,6 +118,10 @@ function M.create_from_cursor()
         vim.ui.input({ prompt = "Clase de mensajes (SE91): ", default = p.class or "Z" }, function(class)
           if not class or class == "" then return end
           class = class:upper()
+          if not is_own(class) then  -- §7 S1
+            notify("Solo se pueden crear mensajes en clases propias (Z/Y). " .. class .. " es estándar SAP.", vim.log.levels.WARN)
+            return
+          end
           vim.ui.input({ prompt = "Texto del mensaje: ", default = p.literal or "" }, function(text)
             if not text or text == "" then return end
             require("sap-nvim.core.source").resolve_transport(function(corrnr)
@@ -131,16 +145,22 @@ end
 -- Permite CORREGIR un mensaje creado por error: abre la clase, lista sus mensajes y deja
 -- editar/borrar/crear sobre la línea. Lecturas vía sapcli; escrituras seguras (§7).
 
--- §7 S1: solo objetos propios (Z/Y o namespace /XXX/). Bloquea tocar estándar SAP.
-local function is_own(name)
-  local n = (name or ""):upper()
-  return n:match("^[ZY]") ~= nil or n:match("^/%w+/") ~= nil
-end
-
--- Lee la clase entera (JSON). system() porque `messageclass read` se cuelga vía jobstart.
+-- Lee la clase entera (JSON). Síncrono (`messageclass read` se cuelga vía jobstart), pero
+-- CON timeout (§7 S9): si SAP no responde en 45s, mata el proceso y no congela el editor.
+local READ_TIMEOUT_MS = 45000
 local function read_class(name)
-  local res = vim.fn.system({ "sapcli", "messageclass", "read", name, "--output", "JSON" })
-  if vim.v.shell_error ~= 0 or not res or res == "" then return nil, res end
+  local cmd = { "sapcli", "messageclass", "read", name, "--output", "JSON" }
+  local res, code
+  if vim.system then -- Neovim 0.10+: spawn con timeout real, mata el proceso si excede
+    local ok, out = pcall(function() return vim.system(cmd, { text = true }):wait(READ_TIMEOUT_MS) end)
+    if not ok then return nil, "timeout o error lanzando sapcli" end
+    res, code = out.stdout, out.code
+    if code == nil then return nil, "sapcli no respondió en " .. (READ_TIMEOUT_MS / 1000) .. "s (timeout)" end
+  else -- fallback: sin timeout fiable, pero acotado por el shell
+    res = vim.fn.system(cmd)
+    code = vim.v.shell_error
+  end
+  if code ~= 0 or not res or res == "" then return nil, res end
   local ok, data = pcall(vim.json.decode, res)
   if not ok or type(data) ~= "table" then return nil, res end
   return data
