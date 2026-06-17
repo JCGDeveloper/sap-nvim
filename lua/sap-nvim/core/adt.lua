@@ -175,14 +175,30 @@ function M._parse_activation_errors(lines, filename, bufnr)
     function(l) return l:match("^%s*(%d+):%s+(.+)") end,
   }
 
-  -- Busca el token entre comillas del mensaje en el buffer -> nº de línea (o 0).
-  local function find_lnum(message)
+  -- Nombre del objeto del buffer (si es un objeto remoto) para saber qué mensajes le
+  -- pertenecen: un error en "Include X" NO es de este buffer (el programa principal).
+  local buf_obj = (bufnr and vim.api.nvim_buf_is_valid(bufnr) and vim.b[bufnr].sap_obj) or nil
+
+  local function belongs_to_buffer(ctx)
+    if not ctx then return true end
+    if buf_obj and buf_obj.name then
+      return ctx:upper():find(buf_obj.name:upper(), 1, true) ~= nil
+    end
+    return ctx:lower():match("^include%s") == nil
+  end
+
+  -- Localiza la línea del mensaje en el buffer buscando el token entre comillas
+  -- (SAP lo da en MAYÚSCULAS -> comparación case-insensitive). Solo si el mensaje
+  -- pertenece a este buffer; los de includes no se pueden ubicar aquí (lnum 0).
+  local function find_lnum(message, ctx)
     if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return 0 end
+    if not belongs_to_buffer(ctx) then return 0 end
     local tok = message:match('"([^"]+)"')
     if not tok or tok == "" then return 0 end
+    local needle = tok:lower()
     local blines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     for i, l in ipairs(blines) do
-      if l:find(tok, 1, true) then return i end
+      if l:lower():find(needle, 1, true) then return i end
     end
     return 0
   end
@@ -198,7 +214,7 @@ function M._parse_activation_errors(lines, filename, bufnr)
         local text = (context and (context .. " — ") or "") .. vim.trim(msg)
         table.insert(qf, {
           filename = filename,
-          lnum     = up == "E" and find_lnum(msg) or 0,
+          lnum     = up == "E" and find_lnum(msg, context) or 0,
           col      = 1,
           text     = text,
           type     = up,
@@ -218,7 +234,19 @@ function M._parse_activation_errors(lines, filename, bufnr)
     end
   end
 
-  return qf
+  -- Errores primero, warnings después (orden estable), deduplicando entradas idénticas
+  -- (SAP repite el mismo mensaje de include en cascada varias veces).
+  local ordered, seen = {}, {}
+  local function add(e)
+    local key = (e.type or "") .. "|" .. (e.lnum or 0) .. "|" .. (e.text or "")
+    if not seen[key] then
+      seen[key] = true
+      ordered[#ordered + 1] = e
+    end
+  end
+  for _, e in ipairs(qf) do if e.type == "E" then add(e) end end
+  for _, e in ipairs(qf) do if e.type ~= "E" then add(e) end end
+  return ordered
 end
 
 -- Activate the current ABAP object. On success clears quickfix.

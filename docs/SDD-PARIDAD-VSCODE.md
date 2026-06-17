@@ -33,6 +33,7 @@ disponible vía el binario `vsp` (Go, `~/sap-mcp/vsp`) ya presente, o reimplemen
 |---|---|---|---|
 | F0 | Abrir/editar/guardar con lock + transporte | ✅ hecho | `core/source.lua` (read/write) |
 | F1 | Activar + objetos inactivos | ✅ hecho | `source.activate`, `:SapInactive` |
+| F1b | Diagnósticos con línea exacta | ⚠️ parcial | ver nota ▼ |
 | F2 | Buscar objeto (Ctrl+Shift+A) | ✅ hecho | `:SapSearch` (`abap find`) |
 | F3 | Explorar paquete | ✅ parcial | `:SapBrowse` (`package list -l`) |
 | F4 | Where-used / referencias | ✅ hecho | `:SapWhereUsed` (`<group> whereused`) |
@@ -53,6 +54,24 @@ disponible vía el binario `vsp` (Go, `~/sap-mcp/vsp`) ya presente, o reimplemen
 | F19 | Revisiones / comparar versiones | ❌ pendiente | gap: ADT revisions API |
 | F20 | CDS (ddl/dcl/bdef) editar + preview | ⚠️ parcial | `ddl/dcl/bdef read/write` + `datapreview` |
 | F21 | Abrir en SAP GUI / transacción | ✅ parcial | `adt.open_gui` |
+
+### Nota F1b — Diagnósticos: precisión de línea/columna
+
+VSCode obtiene línea:columna exactas del **checkRun** de ADT (XML con
+`chkrun:checkMessage uri=".../source/main#start=10,5"`). **sapcli descarta esa posición**
+en su salida de texto (verificado: ni `activate` ni `write --check` muestran nº de línea;
+`--check` sí atribuye bien cada include por su URI).
+
+- **Hecho:** `adt._parse_activation_errors` localiza la línea del objeto principal buscando
+  el token entre comillas del mensaje en el buffer (case-insensitive); errores antes que
+  warnings; dedup de mensajes idénticos en cascada. Cubre el caso común (error en el objeto
+  abierto → salto a la línea).
+- **Límite:** errores dentro de includes salen con lnum 0 (su fuente no está en el buffer);
+  "Statement is not accessible" y similares sin token no se ubican.
+- **Solución completa (futuro):** llamar al endpoint ADT `checkruns` directamente (HTTP con
+  las credenciales de `~/.sapcli/config.yml`) y parsear `chkrun:checkMessage` con
+  `#start=línea,col` y la URI del include → diagnósticos exactos por archivo, como VSCode.
+  Requiere cliente HTTP ADT en Lua (mismo que necesitará F18/F19).
 
 ## 4. Requisitos por feature (las pendientes prioritarias)
 
