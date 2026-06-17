@@ -1,13 +1,16 @@
 -- sap-nvim.integrations.adt_completion
--- Fuente blink.cmp que muestra AUTOMÁTICAMENTE (en un desplegable, como VSCode) los
--- métodos/atributos de la clase que llamas, vía ADT (core/intel.proposals_async).
+-- Fuente blink.cmp que muestra AUTOMÁTICAMENTE (desplegable, como VSCode) el completado
+-- ABAP del sistema vía ADT (core/intel.proposals_async): tanto los métodos/atributos de la
+-- clase que llamas (tras `=>`/`->`/`~`) como NOMBRES DE CLASE/tipos/variables al escribir un
+-- identificador — igual que la extensión de VSCode.
 --
--- Para no martillear SAP, solo consulta ADT tras un operador de acceso a miembro
--- (`=>`, `->`, `~`); blink filtra localmente según escribes (is_incomplete_forward=false),
--- así hay UNA llamada a ADT por `=>` en vez de una por tecla.
+-- Equilibrio para no martillear SAP:
+--   * Tras acceso a miembro (`=>`/`->`/`~`): la lista de miembros es fija → UNA llamada y
+--     blink filtra localmente (is_incomplete_forward=false).
+--   * Identificador suelto (≥2 chars): el conjunto cambia con el prefijo → se re-consulta
+--     según escribes (is_incomplete_forward=true), como VSCode. <2 chars: no consulta.
 --
--- Registro en blink: ver ~/.config/nvim (provider "sap_adt"). El gate enabled() la limita
--- a buffers ABAP.
+-- Registro en blink: provider "sap_adt" (en la config del usuario). enabled() la limita a ABAP.
 
 local source = {}
 
@@ -27,10 +30,15 @@ end
 local Kind = vim.lsp.protocol.CompletionItemKind
 
 function source:get_completions(ctx, callback)
-  -- Solo consultar ADT en contexto de acceso a miembro (cl_x=> , lo-> , if_x~).
   local col = ctx.cursor[2]
   local before = (ctx.line or ""):sub(1, col)
-  if not (before:match("[=%-]>[%w_]*$") or before:match("~[%w_]*$")) then
+
+  -- Contexto: acceso a miembro (cl_x=> , lo-> , if_x~) o identificador suelto.
+  local member = before:match("[=%-]>[%w_]*$") ~= nil or before:match("~[%w_]*$") ~= nil
+  local word = before:match("[%w_/][%w_/]*$")
+
+  -- No consultar si no hay acceso a miembro y el prefijo es <2 chars (evita martillear SAP).
+  if not member and (not word or #word < 2) then
     callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = false })
     return function() end
   end
@@ -52,9 +60,9 @@ function source:get_completions(ctx, callback)
     vim.schedule(function()
       callback({
         items = items,
-        -- Lista completa: blink filtra localmente mientras escribes (1 llamada ADT por `=>`).
-        is_incomplete_backward = false,
-        is_incomplete_forward = false,
+        is_incomplete_backward = not member,
+        -- Miembro: lista fija (filtra local). Identificador suelto: re-consulta al crecer.
+        is_incomplete_forward = not member,
       })
     end)
   end)
