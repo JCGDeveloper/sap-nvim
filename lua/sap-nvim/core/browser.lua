@@ -8,9 +8,6 @@ local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
--- Known ABAP file extensions for local lookup
-local EXTENSIONS = { "abap", "cls", "intf", "func", "fugr", "tabl", "stru", "dtel", "dome", "ddls", "bdef", "dcl" }
-
 -- Parsing de filas de resultados.
 -- `sapcli abap find` / `sapcli package list -l` devuelven una TABLA en columnas
 -- separadas por "|":   Object type | Name | Description
@@ -78,17 +75,47 @@ local function type_group(line)
   return TYPE_PREFIX_TO_GROUP[prefix]
 end
 
--- Try to open an object locally; if not found, offer checkout.
-local function open_or_checkout(obj_name, hint_group, include)
-  local cwd = vim.fn.getcwd()
-  for _, ext in ipairs(EXTENSIONS) do
-    local path = cwd .. "/" .. obj_name:lower() .. "." .. ext
-    local f = io.open(path, "r")
-    if f then
-      f:close()
-      vim.cmd("edit " .. vim.fn.fnameescape(path))
-      return
+-- Directorio donde sapcli escribe los archivos del checkout. sapcli NO admite un
+-- flag de directorio para objetos sueltos (solo `checkout package` lo tiene), así
+-- que fijamos el cwd del job explícitamente y abrimos la ruta exacta que reporta.
+local function checkout_dir()
+  return vim.fn.getcwd()
+end
+
+-- sapcli escribe en formato abapGit: "<nombre>.<tipo>.abap" (+ .xml y, en clases,
+-- ".clas.locals_def.abap", ".clas.testclasses.abap", etc.). El archivo "principal"
+-- es el de menos segmentos: "zcl_x.clas.abap" antes que "zcl_x.clas.locals_def.abap".
+local function pick_main_abap(files)
+  local best, best_dots
+  for _, f in ipairs(files) do
+    if f:match("%.abap$") then
+      local _, dots = f:gsub("%.", "")
+      if not best or dots < best_dots then
+        best, best_dots = f, dots
+      end
     end
+  end
+  return best
+end
+
+-- Busca un .abap ya descargado para `obj_name` en el dir de checkout.
+local function find_local_abap(obj_name, dir)
+  local matches = vim.fn.glob(dir .. "/" .. obj_name:lower() .. ".*.abap", false, true)
+  return pick_main_abap(matches)
+end
+
+local function open_path(path)
+  vim.cmd("edit " .. vim.fn.fnameescape(path))
+end
+
+-- Abre el objeto si ya está descargado localmente; si no, ofrece checkout desde SAP.
+local function open_or_checkout(obj_name, hint_group, include)
+  local dir = checkout_dir()
+
+  local existing = find_local_abap(obj_name, dir)
+  if existing then
+    open_path(existing)
+    return
   end
 
   if include then
@@ -100,18 +127,46 @@ local function open_or_checkout(obj_name, hint_group, include)
     return
   end
 
+  -- Lanza el checkout y abre la RUTA EXACTA que sapcli reporta por stdout
+  -- ("- <archivo>"). Sin recursión: si el checkout no crea ningún .abap, avisa y
+  -- para — nunca se vuelve a llamar a sí mismo "a ciegas".
   local function do_checkout(otype)
     if not otype then return end
     notify("Haciendo checkout de " .. obj_name .. " (" .. otype .. ")...")
+    local created, stderr = {}, {}
     vim.fn.jobstart({ "sapcli", "checkout", otype, obj_name }, {
+      cwd = dir,
+      on_stdout = function(_, data)
+        for _, l in ipairs(data) do
+          -- Filas de archivo creado: "- zcl_x.clas.abap". La 1ª línea es el
+          -- nombre del objeto (sin "-") y se ignora.
+          local file = l:match("^%s*%-%s+(.+)%s*$")
+          if file then table.insert(created, vim.trim(file)) end
+        end
+      end,
+      on_stderr = function(_, data)
+        for _, l in ipairs(data) do
+          if vim.trim(l) ~= "" then table.insert(stderr, vim.trim(l)) end
+        end
+      end,
       on_exit = function(_, code)
         vim.schedule(function()
-          if code == 0 then
-            notify("Checkout OK: " .. obj_name .. ". Abriendo...")
-            open_or_checkout(obj_name)
-          else
-            notify("Checkout fallido para: " .. obj_name .. " (" .. otype .. ")", vim.log.levels.ERROR)
+          if code ~= 0 then
+            local msg = #stderr > 0 and stderr[1] or ("Checkout fallido (code " .. code .. ")")
+            notify("Checkout fallido para " .. obj_name .. ": " .. msg, vim.log.levels.ERROR)
+            return
           end
+          local main = pick_main_abap(created) or find_local_abap(obj_name, dir)
+          if not main then
+            notify(
+              "Checkout de " .. obj_name .. " OK pero no se encontró ningún .abap en " .. dir,
+              vim.log.levels.WARN
+            )
+            return
+          end
+          local path = main:match("^/") and main or (dir .. "/" .. main)
+          notify("Checkout OK: " .. obj_name .. ". Abriendo " .. vim.fn.fnamemodify(path, ":t"))
+          open_path(path)
         end)
       end,
     })
