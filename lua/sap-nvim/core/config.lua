@@ -31,6 +31,10 @@ local defaults = {
     gref    = "go_",  -- referencia global
     const   = "c_",   -- constante
   },
+  -- Visualización de datos (F14).
+  data = {
+    rows = 100,       -- nº de filas por defecto en datapreview osql
+  },
 }
 
 M.values = vim.deepcopy(defaults)
@@ -40,10 +44,12 @@ function M.setup(opts)
   M.values = vim.tbl_deep_extend("force", vim.deepcopy(defaults), {
     new = opts.new or {},
     naming = opts.naming or {},
+    data = opts.data or {},
   })
 end
 
 function M.new() return M.values.new end
 function M.naming() return M.values.naming end
+function M.data() return M.values.data end
 
 return M

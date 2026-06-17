@@ -135,6 +135,14 @@ disco** (no RAM): no consumen memoria y **persisten al cerrar Neovim** (necesari
   (evita editar una copia obsoleta). Por defecto re-leer de SAP.
 - **R-CACHE.3** Marcar en statusline si el buffer puede estar desincronizado.
 
+## 5b. Mejoras futuras anotadas
+
+- **Config por proyecto:** hoy la config (`new`, `naming`, `data`) es global en `setup()`
+  (ver `core/config.lua`, `docs/CONFIGURACION.md`). Mejora: leer un `.sap-nvim.json` o
+  `.sap-nvim.lua` desde el `cwd`/raíz del proyecto y mezclarlo (`tbl_deep_extend`) sobre la
+  global, para que cada proyecto tenga su nomenclatura de variables y sus defaults de
+  paquete/transporte automáticamente, sin tocar la config de Neovim.
+
 ## 6. Roadmap por fases
 
 - **Fase 1 — Navegación (alto valor, bajo riesgo, sin SAP nuevo):** F11 outline, F16 go-to-def,

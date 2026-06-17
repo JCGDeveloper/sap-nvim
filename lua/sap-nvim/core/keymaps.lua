@@ -65,6 +65,11 @@ sap-nvim atajos:
   <leader>aw   Where-used list → quickfix
   <leader>aD   Diff local vs sistema SAP (:SapDiff)
 
+  DATOS / TABLAS:
+  <leader>avt  Ver definicion DDIC de tabla (:SapTable)
+  <leader>avd  Ver datos de tabla SELECT * (:SapTableData)
+  <leader>avq  Ejecutar OpenSQL y ver resultados (:SapData)
+
   PAQUETES / SISTEMA:
   <leader>afs  Buscar objeto en sistema (:SapSearch)
   <leader>afb  Explorar paquete (:SapBrowse)
