@@ -9,11 +9,18 @@ local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
+-- Buffers scratch creados, indexados por nombre exacto (no usamos vim.fn.bufnr porque
+-- interpreta caracteres como '*' como comodín de patrón → bug con "SELECT * FROM ...").
+local scratch_bufs = {}
+
 -- Crea (o reusa) un buffer scratch de solo lectura con `lines` y lo muestra.
 local function show_scratch(bufname, ft, lines)
-  -- Reusar el buffer si ya existe (mismo nombre) para no acumular.
-  local existing = vim.fn.bufnr(bufname)
-  local buf = (existing ~= -1) and existing or vim.api.nvim_create_buf(true, true)
+  -- Saneamos el nombre: sin '*' ni caracteres raros que rompan el nombre del buffer.
+  bufname = bufname:gsub("[^%w_:/%.-]", "_")
+  local existing = scratch_bufs[bufname]
+  local buf = (existing and vim.api.nvim_buf_is_valid(existing)) and existing
+    or vim.api.nvim_create_buf(true, true)
+  scratch_bufs[bufname] = buf
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
@@ -76,7 +83,8 @@ function M.preview(sql, rows)
   notify("Consultando: " .. sql .. " (máx " .. rows .. " filas)...")
 
   local out, err = {}, {}
-  vim.fn.jobstart({ "sapcli", "datapreview", "osql", sql, "--rows", tostring(rows), "-o", "json" }, {
+  local finished = false
+  local job = vim.fn.jobstart({ "sapcli", "datapreview", "osql", sql, "--rows", tostring(rows), "-o", "json" }, {
     on_stdout = function(_, data)
       for _, l in ipairs(data) do out[#out + 1] = l end
     end,
@@ -84,7 +92,12 @@ function M.preview(sql, rows)
       for _, l in ipairs(data) do if vim.trim(l) ~= "" then err[#err + 1] = vim.trim(l) end end
     end,
     on_exit = function(_, code)
+      finished = true
       vim.schedule(function()
+        if code == 143 then
+          notify("Consulta cancelada por timeout (SAP no respondió a tiempo).", vim.log.levels.WARN)
+          return
+        end
         local raw = table.concat(out, "\n")
         local ok, decoded = pcall(vim.json.decode, raw)
         if code ~= 0 or not ok or type(decoded) ~= "table" then
@@ -114,6 +127,11 @@ function M.preview(sql, rows)
       end)
     end,
   })
+
+  -- Timeout: si sapcli/SAP no responde, matar el job para no colgar la consulta.
+  vim.defer_fn(function()
+    if not finished and job and job > 0 then pcall(vim.fn.jobstop, job) end
+  end, 45000)
 end
 
 -- Atajo: datos de una tabla -> SELECT * FROM NAME.

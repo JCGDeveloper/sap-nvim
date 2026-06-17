@@ -153,6 +153,36 @@ sap-nvim atajos:
   vim.keymap.set("n", "<leader>ad", function()
     require("sap-nvim.core.debugger").debug_current()
   end, { desc = "ABAP: Debuggear" })
+
+  -- ── Override BUFFER-LOCAL en buffers ABAP ──────────────────────────────────
+  -- El prefijo <leader>a choca con plugins de IA (code-companion/opencode mapean
+  -- <leader>aa, an, ai...). Los mapeos globales de arriba pueden quedar pisados por
+  -- esos plugins según el orden de carga. Aquí re-asignamos los atajos ABAP como
+  -- BUFFER-LOCAL en filetype abap: en un buffer ABAP ganan siempre (preceden a los
+  -- globales); fuera de ABAP, los plugins de IA siguen funcionando con normalidad.
+  local abap_maps = {
+    { "<leader>aa",  "<cmd>SapActivate<cr>",   "Activar (sube antes si es remoto)" },
+    { "<leader>au",  "<cmd>SapPush<cr>",       "Subir (push) sin activar" },
+    { "<leader>aX",  "<cmd>SapDelete<cr>",     "Borrar objeto del sistema" },
+    { "<leader>ao",  "<cmd>SapOutline<cr>",    "Outline del objeto" },
+    { "<leader>ag",  "<cmd>SapGotoDef<cr>",    "Ir a definición" },
+    { "<leader>aw",  "<cmd>SapWhereUsed<cr>",  "Where-used" },
+    { "<leader>ai",  "<cmd>SapInactive<cr>",   "Objetos inactivos" },
+    { "<leader>an",  "<cmd>SapNew<cr>",        "Nuevo objeto en SAP" },
+    { "<leader>aT",  "<cmd>SapAUnit<cr>",      "Tests unitarios (AUnit)" },
+    { "<leader>avt", "<cmd>SapTable<cr>",      "Ver definición de tabla" },
+    { "<leader>avd", "<cmd>SapTableData<cr>",  "Ver datos de tabla" },
+    { "<leader>avq", "<cmd>SapData<cr>",       "Ejecutar OpenSQL" },
+  }
+  vim.api.nvim_create_autocmd("FileType", {
+    pattern = "abap",
+    group = vim.api.nvim_create_augroup("sap_nvim_keymaps_abap", { clear = true }),
+    callback = function(ev)
+      for _, m in ipairs(abap_maps) do
+        vim.keymap.set("n", m[1], m[2], { buffer = ev.buf, silent = true, desc = "ABAP: " .. m[3] })
+      end
+    end,
+  })
 end
 
 return M
