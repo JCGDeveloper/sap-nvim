@@ -77,7 +77,7 @@ sap-nvim atajos:
 
   DATOS / TABLAS:
   <leader>avt  Ver definicion DDIC de tabla (:SapTable)
-  <leader>avd  Ver datos de tabla SELECT * (:SapTableData)
+  <leader>avd  Ver datos de la tabla BAJO EL CURSOR (split; q/- cierra)
   <leader>avq  Ejecutar OpenSQL y ver resultados (:SapData)
 
   PAQUETES / SISTEMA:

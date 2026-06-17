@@ -36,8 +36,22 @@ local function show_scratch(bufname, ft, lines)
   vim.bo[buf].swapfile = false
   if ft then vim.bo[buf].filetype = ft end
   pcall(vim.api.nvim_buf_set_name, buf, bufname)
-  vim.api.nvim_set_current_buf(buf)
+
+  -- Mostrar en un SPLIT (no reemplazar el buffer actual), para que `q`/`-`/`:q` cierren la
+  -- vista y vuelvan al fichero en el que estabas. Si ya está abierto, reusar su ventana.
+  local win = vim.fn.bufwinid(buf)
+  if win ~= -1 then
+    vim.api.nvim_set_current_win(win)
+  else
+    vim.cmd("botright split")
+    vim.api.nvim_win_set_buf(0, buf)
+  end
+  pcall(vim.api.nvim_win_set_height, 0, math.min(20, math.max(6, #safe + 1)))
+  vim.wo.wrap = false
   vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  -- q / - cierran la vista de datos y vuelven.
+  vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = buf, nowait = true, desc = "Cerrar datos SAP" })
+  vim.keymap.set("n", "-", "<cmd>close<cr>", { buffer = buf, nowait = true, desc = "Cerrar datos SAP" })
 end
 
 -- Renderiza filas (cada una array de celdas) como tabla alineada con box-drawing.
@@ -151,6 +165,16 @@ function M.preview_table(name)
   M.preview("SELECT * FROM " .. name:upper())
 end
 
+-- Datos de la TABLA/ENTIDAD bajo el cursor (cword). Si no hay palabra, pregunta.
+function M.preview_cursor()
+  local w = vim.fn.expand("<cword>")
+  if w and w:match("^[%w_/]+$") then
+    M.preview_table(w)
+  else
+    vim.ui.input({ prompt = "Tabla (datos): " }, function(v) if v and v ~= "" then M.preview_table(v) end end)
+  end
+end
+
 -- Muestra la definición DDIC de una tabla/estructura/data element/dominio.
 function M.read_table(name)
   if not adt.is_configured() then
@@ -202,12 +226,22 @@ function M.setup()
   vim.keymap.set("n", "<leader>avt", function()
     prompt("Tabla (definición DDIC): ", "", M.read_table)
   end, { desc = "ABAP: Ver definición de tabla" })
-  vim.keymap.set("n", "<leader>avd", function()
-    prompt("Tabla (datos): ", "", M.preview_table)
-  end, { desc = "ABAP: Ver datos de tabla" })
+  -- Datos de la tabla bajo el cursor (o pregunta si no hay palabra).
+  vim.keymap.set("n", "<leader>avd", function() M.preview_cursor() end,
+    { desc = "ABAP: Ver datos de la tabla bajo el cursor" })
   vim.keymap.set("n", "<leader>avq", function()
     prompt("OpenSQL (sin punto): ", "SELECT * FROM ", M.preview)
   end, { desc = "ABAP: Ejecutar OpenSQL" })
+
+  -- En buffers ABAP, atajo directo gd-style: <leader>av sobre una tabla -> sus datos.
+  vim.api.nvim_create_autocmd("FileType", {
+    pattern = "abap",
+    group = vim.api.nvim_create_augroup("sap_nvim_data", { clear = true }),
+    callback = function(ev)
+      vim.keymap.set("n", "<leader>avd", function() M.preview_cursor() end,
+        { buffer = ev.buf, desc = "ABAP: Datos de la tabla bajo el cursor" })
+    end,
+  })
 end
 
 return M
