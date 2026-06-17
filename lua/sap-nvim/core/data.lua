@@ -131,7 +131,7 @@ function M.preview(sql, rows)
   -- Timeout: si sapcli/SAP no responde, matar el job para no colgar la consulta.
   vim.defer_fn(function()
     if not finished and job and job > 0 then pcall(vim.fn.jobstop, job) end
-  end, 45000)
+  end, 25000)
 end
 
 -- Atajo: datos de una tabla -> SELECT * FROM NAME.
