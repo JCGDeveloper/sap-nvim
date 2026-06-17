@@ -70,9 +70,40 @@ function M.open(name, group)
         vim.b[bufnr].sap_obj = { name = name, group = group }
         vim.bo[bufnr].filetype = "abap"
         notify(name .. " abierto (" .. group .. "). :SapPush para subir, :SapActivate para activar.")
+        -- Programa: prefetch de sus includes a la caché (en segundo plano) para que
+        -- `gd` navegue forms/variables entre includes sin abrirlos antes.
+        if group == "program" then
+          M.prefetch_includes(out)
+        end
       end)
     end,
   })
+end
+
+-- Descarga a la caché (silenciosamente) los includes referenciados que aún no estén,
+-- para alimentar el go-to-definition cross-include.
+function M.prefetch_includes(lines)
+  local dir = M.cache_dir()
+  for _, raw in ipairs(lines) do
+    local inc = raw:lower():match("^%s*include%s+([%w_/]+)")
+    if inc then
+      local p = dir .. "/" .. objtype.gitfile("include", inc)
+      if vim.fn.filereadable(p) == 0 then
+        local acc = {}
+        vim.fn.jobstart({ "sapcli", "include", "read", inc }, {
+          on_stdout = function(_, data)
+            for _, l in ipairs(data) do acc[#acc + 1] = l end
+          end,
+          on_exit = function(_, code)
+            if code == 0 then
+              if acc[#acc] == "" then table.remove(acc) end
+              if #acc > 0 then pcall(vim.fn.writefile, acc, p) end
+            end
+          end,
+        })
+      end
+    end
+  end
 end
 
 -- Resuelve el transporte a usar para el push y llama cb(corrnr_or_nil).
