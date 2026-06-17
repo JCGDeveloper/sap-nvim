@@ -35,6 +35,10 @@ local defaults = {
   data = {
     rows = 100,       -- nº de filas por defecto en datapreview osql
   },
+  -- Formateo.
+  format = {
+    on_save = false,  -- formatear con el Pretty Printer de SAP al guardar (objetos remotos)
+  },
 }
 
 M.values = vim.deepcopy(defaults)
@@ -45,11 +49,13 @@ function M.setup(opts)
     new = opts.new or {},
     naming = opts.naming or {},
     data = opts.data or {},
+    format = opts.format or {},
   })
 end
 
 function M.new() return M.values.new end
 function M.naming() return M.values.naming end
 function M.data() return M.values.data end
+function M.format() return M.values.format end
 
 return M

@@ -227,12 +227,16 @@ function M.definition_target(bufnr, row, col, filter)
   return target and uri_to_object(unxml(target)) or nil
 end
 
--- Va a la definición (o al tipo, si type=true) del símbolo bajo el cursor, vía ADT.
+-- Va a la definición / tipo / implementación del símbolo bajo el cursor, vía ADT.
+-- filter: "definition" (default) | "typeDefinition" | "implementation".
+-- Compat: true => "typeDefinition", false/nil => "definition".
 -- Devuelve true si encontró y abrió algo.
-function M.goto_definition(want_type)
+function M.goto_definition(filter)
+  if filter == true then filter = "typeDefinition"
+  elseif not filter then filter = "definition" end
   local bufnr = vim.api.nvim_get_current_buf()
   local row, col = unpack(vim.api.nvim_win_get_cursor(0))
-  local obj = M.definition_target(bufnr, row, col, want_type and "typeDefinition" or "definition")
+  local obj = M.definition_target(bufnr, row, col, filter)
   if not obj then return false end
   -- ¿Es el mismo objeto? entonces solo saltar la línea.
   local meta = vim.b[bufnr].sap_obj
@@ -382,8 +386,11 @@ function M.setup()
     { desc = "sap-nvim: Hover ADT (firma + documentación)" })
   vim.api.nvim_create_user_command("SapReferences", function() M.references() end,
     { desc = "sap-nvim: Referencias del símbolo (usageReferences)" })
-  vim.api.nvim_create_user_command("SapGotoType", function() M.goto_definition(true) end,
+  vim.api.nvim_create_user_command("SapGotoType", function() M.goto_definition("typeDefinition") end,
     { desc = "sap-nvim: Ir al tipo del símbolo bajo el cursor" })
+  vim.api.nvim_create_user_command("SapGotoImpl", function()
+    if not M.goto_definition("implementation") then notify("Sin implementación.") end
+  end, { desc = "sap-nvim: Ir a la implementación del método/interfaz" })
 
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "abap",
@@ -399,8 +406,12 @@ function M.setup()
         { buffer = b, desc = "ABAP: Referencias (usageReferences)" })
       -- gy: ir al tipo del dato bajo el cursor.
       vim.keymap.set("n", "gy", function()
-        if not M.goto_definition(true) then notify("Sin tipo para el símbolo.") end
+        if not M.goto_definition("typeDefinition") then notify("Sin tipo para el símbolo.") end
       end, { buffer = b, desc = "ABAP: Ir al tipo del dato" })
+      -- gI: ir a la implementación (de un método de interfaz, etc.).
+      vim.keymap.set("n", "gI", function()
+        if not M.goto_definition("implementation") then notify("Sin implementación.") end
+      end, { buffer = b, desc = "ABAP: Ir a la implementación" })
 
       -- Syntax check de SAP EN VIVO (como VSCode): al escribir (debounce) y al guardar.
       -- Solo para objetos remotos (sap_obj).

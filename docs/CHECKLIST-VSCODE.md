@@ -23,7 +23,7 @@
 - [x] **Diagnósticos en vivo** con posición exacta del SAP — `intel.check_syntax`, ADT `checkruns` (abapCheckRun); + abaplint para estilo
 - [x] **Outline / símbolos del documento** — `:SapOutline` / `<leader>ao` (métodos, forms, includes…)
 - [x] **Búsqueda de objetos del repositorio** (workspace symbols) — `:SapSearch`
-- [ ] **Ir a implementación** (de un método de interfaz) — ADT `navigation/target?filter=implementation` (pendiente)
+- [x] **Ir a implementación** (de un método de interfaz) — `gI` / `:SapGotoImpl`, ADT `navigation/target?filter=implementation`
 - [ ] **Quick fixes / code actions** — ADT `quickfixes` (pendiente)
 - [ ] **Rename / refactor** (renombrar con todos los usos) — ADT rename (pendiente, riesgo alto)
 - [ ] **Documentación en el item del completado** (resolve perezoso de la firma) — pendiente
@@ -69,7 +69,7 @@
 - [x] **Emparejado de paréntesis** — Neovim nativo
 - [x] **Statusline** con sistema/cliente/usuario activos — `core/statusline.lua`
 - [~] **Auto-cerrar paréntesis/comillas** — depende del plugin de autopairs del usuario
-- [ ] **Formateo al guardar** (format-on-save automático) — hoy `<leader>aF` manual; falta autocmd opcional
+- [x] **Formateo al guardar** (format-on-save) — opcional: `setup({ format = { on_save = true } })`
 - [ ] **Formateo de selección / rango** — ADT prettyprinter soporta rango (pendiente)
 - [ ] **Semantic highlighting** (colorear según el análisis del servidor, no solo treesitter) — pendiente
 - [ ] **Resaltar ocurrencias** del símbolo bajo el cursor — pendiente
