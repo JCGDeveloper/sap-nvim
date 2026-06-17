@@ -291,9 +291,93 @@ function M.references()
   end)
 end
 
+-- ── SYNTAX CHECK REAL de SAP (checkRun): diagnósticos con línea/col exactas ───
+local CHECK_NS = vim.api.nvim_create_namespace("sap_nvim_adt_check")
+
+local function b64(s)
+  if vim.base64 and vim.base64.encode then return vim.base64.encode(s) end
+  return vim.fn.system({ "base64", "-w0" }, s):gsub("%s+$", "")
+end
+
+-- URI base del objeto (sin /source/main) a partir de la URI del source.
+local function base_uri(source_uri)
+  return (source_uri:gsub("/source/main$", ""))
+end
+
+local check_timers = {}
+
+-- Lanza el syntax check de SAP sobre el contenido del buffer y publica los diagnósticos
+-- (con posiciones exactas). Async, no bloquea.
+function M.check_syntax(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  if not adt_http.is_available() or not vim.api.nvim_buf_is_valid(bufnr) then return end
+  local source_uri = object_uri(bufnr)
+  if not source_uri then return end
+  local obj_uri = base_uri(source_uri)
+  local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+
+  local xml = '<?xml version="1.0" encoding="UTF-8"?>'
+    .. '<chkrun:checkObjectList xmlns:chkrun="http://www.sap.com/adt/checkrun" '
+    .. 'xmlns:adtcore="http://www.sap.com/adt/core">'
+    .. '<chkrun:checkObject adtcore:uri="' .. obj_uri .. '" chkrun:version="inactive">'
+    .. '<chkrun:artifacts><chkrun:artifact chkrun:contentType="text/plain; charset=utf-8" '
+    .. 'chkrun:uri="' .. source_uri .. '"><chkrun:content>' .. b64(src)
+    .. '</chkrun:content></chkrun:artifact></chkrun:artifacts>'
+    .. '</chkrun:checkObject></chkrun:checkObjectList>'
+
+  adt_http.request_async({
+    method = "POST",
+    path = "/sap/bc/adt/checkruns",
+    query = { reporters = "abapCheckRun" },
+    content_type = "application/vnd.sap.adt.checkobjects+xml",
+    body = xml,
+  }, function(body)
+    if not body then return end
+    local diags = {}
+    for msg in body:gmatch("<chkrun:checkMessage([^>]*)>") do
+      local uri = msg:match('chkrun:uri="([^"]*)"')
+      local typ = msg:match('chkrun:type="([^"]*)"')
+      local text = msg:match('chkrun:shortText="([^"]*)"')
+      local line, col = (uri or ""):match("start=(%d+),(%d+)")
+      -- Solo los mensajes del propio objeto (no de includes externos).
+      if line and uri and uri:find(base_uri(source_uri), 1, true) then
+        local sev = vim.diagnostic.severity.INFO
+        if typ == "E" then sev = vim.diagnostic.severity.ERROR
+        elseif typ == "W" then sev = vim.diagnostic.severity.WARN end
+        diags[#diags + 1] = {
+          lnum = math.max(0, tonumber(line) - 1),
+          col = tonumber(col) or 0,
+          message = unxml(text or "syntax"),
+          severity = sev,
+          source = "SAP",
+        }
+      end
+    end
+    vim.schedule(function()
+      if vim.api.nvim_buf_is_valid(bufnr) then
+        vim.diagnostic.set(CHECK_NS, bufnr, diags)
+      end
+    end)
+  end)
+end
+
+-- Debounce del check tras escribir.
+local function schedule_check(bufnr)
+  local t = check_timers[bufnr]
+  if t then t:stop(); pcall(t.close, t) end
+  local nt = vim.loop.new_timer()
+  check_timers[bufnr] = nt
+  nt:start(900, 0, vim.schedule_wrap(function()
+    check_timers[bufnr] = nil
+    M.check_syntax(bufnr)
+  end))
+end
+
 function M.setup()
   vim.api.nvim_create_user_command("SapComplete", function() M.complete() end,
     { desc = "sap-nvim: Completado ADT (métodos/atributos del sistema)" })
+  vim.api.nvim_create_user_command("SapCheck", function() M.check_syntax() end,
+    { desc = "sap-nvim: Syntax check de SAP (diagnósticos con posición exacta)" })
   vim.api.nvim_create_user_command("SapHover", function() M.hover() end,
     { desc = "sap-nvim: Hover ADT (firma + documentación)" })
   vim.api.nvim_create_user_command("SapReferences", function() M.references() end,
@@ -317,6 +401,18 @@ function M.setup()
       vim.keymap.set("n", "gy", function()
         if not M.goto_definition(true) then notify("Sin tipo para el símbolo.") end
       end, { buffer = b, desc = "ABAP: Ir al tipo del dato" })
+
+      -- Syntax check de SAP EN VIVO (como VSCode): al escribir (debounce) y al guardar.
+      -- Solo para objetos remotos (sap_obj).
+      if vim.b[b].sap_obj then M.check_syntax(b) end
+      vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
+        buffer = b,
+        callback = function() if vim.b[b].sap_obj then schedule_check(b) end end,
+      })
+      vim.api.nvim_create_autocmd("BufWritePost", {
+        buffer = b,
+        callback = function() if vim.b[b].sap_obj then M.check_syntax(b) end end,
+      })
     end,
   })
 end
