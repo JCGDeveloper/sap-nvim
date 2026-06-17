@@ -39,6 +39,10 @@ local KIND_MAP = {
   ["3"] = Kind.Method,
   ["52"] = Kind.Keyword,
 }
+-- Etiqueta de tipo mostrada como "detalle" del item (info en el desplegable).
+local KIND_LABEL = {
+  ["1"] = "variable", ["2"] = "clase/tipo", ["3"] = "método", ["52"] = "keyword",
+}
 
 function source:get_completions(ctx, callback)
   local col = ctx.cursor[2]
@@ -67,6 +71,7 @@ function source:get_completions(ctx, callback)
         label = p.word,
         insertText = p.word,
         kind = KIND_MAP[p.kind or ""] or Kind.Text,
+        labelDetails = { description = KIND_LABEL[p.kind or ""] or "SAP" },
         source_name = "SAP",
       }
     end

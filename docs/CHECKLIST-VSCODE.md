@@ -24,15 +24,18 @@
 - [x] **Outline / símbolos del documento** — `:SapOutline` / `<leader>ao` (métodos, forms, includes…)
 - [x] **Búsqueda de objetos del repositorio** (workspace symbols) — `:SapSearch`
 - [x] **Ir a implementación** (de un método de interfaz) — `gI` / `:SapGotoImpl`, ADT `navigation/target?filter=implementation`
-- [ ] **Quick fixes / code actions** — ADT `quickfixes` (pendiente)
-- [ ] **Rename / refactor** (renombrar con todos los usos) — ADT rename (pendiente, riesgo alto)
-- [ ] **Documentación en el item del completado** (resolve perezoso de la firma) — pendiente
-- [ ] **Iconos por tipo en el completado** (método/clase/atributo) — mapear `<KIND>` (pendiente)
-- [ ] **Float de signature help** con el parámetro actual resaltado (hoy solo se completan nombres de params)
-- [ ] **Inlay hints** (tipos inferidos inline) — pendiente
-- [ ] **Call hierarchy / type hierarchy** — pendiente
-- [ ] **Code lens** (refs/tests encima de la def) — pendiente
-- [ ] **Document highlights** (resaltar otras apariciones del símbolo bajo el cursor) — pendiente
+- [x] **Iconos por tipo en el completado** (método/clase/variable/keyword) — mapea `<KIND>` ADT
+- [x] **Tipo/info en el item del completado** — `labelDetails` (variable/clase/método/keyword)
+- [x] **Document highlights** (resaltar apariciones del símbolo bajo el cursor) — CursorHold local
+- [~] **Signature help** — cubierto por el completado de parámetros al abrir `(` (la extensión de
+  VSCode tampoco muestra un float de firma aparte; usa el completado)
+- [—] **Inlay hints** — N/A: la extensión ABAP de VSCode no los implementa
+- [—] **Code lens** — N/A: la extensión ABAP de VSCode no los implementa
+- [ ] **Documentación completa en el item** (resolve perezoso con doc del método) — bloque mayor
+- [ ] **Quick fixes / code actions** — la *evaluación* funciona (ADT `quickfixes`); *aplicar*
+  (deltas de texto) es bloque mayor
+- [ ] **Rename / refactor** (renombrar con todos los usos) — bloque mayor + riesgo (ADT rename)
+- [ ] **Call hierarchy / type hierarchy** — bloque mayor (ADT type hierarchy)
 
 ## B. Extensión ABAP (abap-remote-fs) — gestión de objetos
 
@@ -88,9 +91,13 @@
 de VSCode para escribir ABAP (completado, hover, navegación, referencias, diagnósticos reales,
 formateo real) está hecho con el cliente ADT directo (`core/adt_http.lua`).
 
-**Pendiente con más valor:** ir-a-implementación, quick fixes, rename, float de firma, iconos
-en el completado, format-on-save. **Grandes bloques aparte:** debugging (F18), revisiones,
-árbol de repo (F12), BAdIs (F15), y las innovaciones (SE91, plantillas).
+**Menores de inteligencia: COMPLETADOS** (iconos + info de tipo en el completado, document
+highlights, ir-a-implementación, format-on-save; signature help cubierto por el completado de
+params; inlay hints / code lens no aplican a la extensión ABAP de VSCode).
+
+**Lo que queda son BLOQUES MAYORES** (no "menores"): quick fixes con aplicación, rename/refactor,
+call/type hierarchy, doc completa en el item, debugging (F18), revisiones/comparar versiones,
+árbol de repo (F12), BAdIs (F15), y las innovaciones (SE91, plantillas, config por proyecto).
 
 Detalle por feature de la inteligencia: `briefs/RA-inteligencia-adt.md`. Plan global:
 `PLAN-MAESTRO.md`.
