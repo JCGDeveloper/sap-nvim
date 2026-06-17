@@ -54,7 +54,8 @@ sap-nvim atajos:
   <leader>ad   Debuggear (vsp)
 
   OBJETOS:
-  <leader>aa   Activar objeto → errores en quickfix, jump a linea
+  <leader>aa   Activar objeto (sube antes si es remoto) → errores/warnings a quickfix
+  <leader>au   Subir (push) objeto a SAP sin activar (:SapPush)
   <leader>an   Nuevo objeto ABAP (pickers de paquete y transporte)
   <leader>aw   Where-used list → quickfix
   <leader>aD   Diff local vs sistema SAP (:SapDiff)
@@ -122,10 +123,11 @@ sap-nvim atajos:
     end
   end, { desc = "ABAP: Abrir objeto en SAP GUI" })
 
-  -- Activar objeto ABAP (con jump-to-error en quickfix)
+  -- Activar objeto ABAP. Para objetos remotos sube antes (push) implícitamente,
+  -- igual que la extensión de VSCode al guardar; errores/warnings al quickfix.
   vim.keymap.set("n", "<leader>aa", function()
-    require("sap-nvim.core.adt").activate_current()
-  end, { desc = "ABAP: Activar objeto (jump-to-error)" })
+    require("sap-nvim.core.source").activate()
+  end, { desc = "ABAP: Activar objeto (sube antes si es remoto, jump-to-error)" })
 
   -- Where-used list
   vim.keymap.set("n", "<leader>aw", function()

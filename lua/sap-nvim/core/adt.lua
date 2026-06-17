@@ -147,55 +147,74 @@ function M.select_connection(name)
   end
 end
 
--- Parse sapcli activation error output into quickfix entries.
--- Tries multiple line-number formats from SAP ADT responses.
-function M._parse_activation_errors(lines, filename)
+-- Parse sapcli activation / write output into quickfix entries.
+--
+-- sapcli emite los hallazgos de activación en bloques:
+--     -- Programa ZCAR_X            <- línea de contexto (objeto/include)
+--        E: The statement "FOO" is invalid. ...   <- error
+--        W: incorrect syntax.                      <- warning
+-- SIN número de línea. Para poder saltar, si el mensaje trae un token entre
+-- comillas ("FOO") y se pasa `bufnr`, se busca ese token en el buffer y se usa
+-- esa línea. Se mantienen además los formatos clásicos con número de línea.
+--
+-- Devuelve entradas de quickfix con type "E" (error) o "W" (warning).
+function M._parse_activation_errors(lines, filename, bufnr)
   local qf = {}
+  local context = nil
 
-  -- Patterns ordered from most specific to least specific.
-  -- Each returns (lnum_string, message_string) or nil.
-  local patterns = {
-    -- "Line 42: message" / "line 42: message"
+  -- Formatos clásicos con número de línea (fallback).
+  local num_patterns = {
     function(l) return l:match("[Ll]ine%s+(%d+):%s*(.+)") end,
-    -- "Row 42: message" / "row 42: message"
     function(l) return l:match("[Rr]ow%s+(%d+):%s*(.+)") end,
-    -- "(42,3): message" or "(42): message"  ← ADT JSON format
     function(l) return l:match("%((%d+),%d+%):%s*(.+)") end,
     function(l) return l:match("%((%d+)%):%s*(.+)") end,
-    -- "error at line 42 column 3"
     function(l)
       local n = l:match("[Ee]rror%s+at%s+[Ll]ine%s+(%d+)")
       if n then return n, l end
     end,
-    -- "syntax error in program .* line 42"
-    function(l)
-      local n = l:match("[Ss]yntax%s+error.+[Ll]ine%s+(%d+)")
-      if n then return n, l end
-    end,
-    -- "at row 42" anywhere in the line
-    function(l)
-      local n = l:match("[Aa]t%s+[Rr]ow%s+(%d+)")
-      if n then return n, l end
-    end,
-    -- Leading number with colon: "  42: message"
     function(l) return l:match("^%s*(%d+):%s+(.+)") end,
   }
 
-  for _, line in ipairs(lines) do
-    local lnum, text
-    for _, pat in ipairs(patterns) do
-      lnum, text = pat(line)
-      if lnum then break end
+  -- Busca el token entre comillas del mensaje en el buffer -> nº de línea (o 0).
+  local function find_lnum(message)
+    if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then return 0 end
+    local tok = message:match('"([^"]+)"')
+    if not tok or tok == "" then return 0 end
+    local blines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+    for i, l in ipairs(blines) do
+      if l:find(tok, 1, true) then return i end
     end
+    return 0
+  end
 
-    if lnum then
-      table.insert(qf, {
-        filename = filename,
-        lnum     = tonumber(lnum),
-        col      = 1,
-        text     = vim.trim(text or line),
-        type     = "E",
-      })
+  for _, line in ipairs(lines) do
+    local ctx = line:match("^%s*%-%-%s+(.+)$")
+    if ctx then
+      context = vim.trim(ctx)
+    else
+      local sev, msg = line:match("^%s*([EWew]):%s+(.+)$")
+      if sev then
+        local up = sev:upper()
+        local text = (context and (context .. " — ") or "") .. vim.trim(msg)
+        table.insert(qf, {
+          filename = filename,
+          lnum     = up == "E" and find_lnum(msg) or 0,
+          col      = 1,
+          text     = text,
+          type     = up,
+        })
+      else
+        for _, pat in ipairs(num_patterns) do
+          local lnum, t = pat(line)
+          if lnum then
+            table.insert(qf, {
+              filename = filename, lnum = tonumber(lnum), col = 1,
+              text = vim.trim(t or line), type = "E",
+            })
+            break
+          end
+        end
+      end
     end
   end
 
@@ -208,8 +227,11 @@ function M.activate_current()
   local bufnr      = vim.api.nvim_get_current_buf()
   local filename   = vim.api.nvim_buf_get_name(bufnr)
   local objtype    = require("sap-nvim.core.objtype")
-  local group      = objtype.group(filename)
-  local obj_name   = objtype.name(filename)
+  -- Si el buffer es un objeto remoto abierto por source.lua, fiarse de su metadata;
+  -- si no, deducir group/name del nombre de archivo.
+  local meta       = vim.b[bufnr].sap_obj
+  local group      = meta and meta.group or objtype.group(filename)
+  local obj_name   = meta and meta.name or objtype.name(filename)
 
   if obj_name == "" then
     vim.notify("[sap-nvim] No hay un objeto ABAP para activar", vim.log.levels.WARN)
@@ -246,12 +268,12 @@ function M.activate_current()
           return
         end
 
-        -- Merge stdout + stderr and try to parse line numbers
+        -- Merge stdout + stderr and parse (E:/W: format + line-number fallback)
         local all = {}
         for _, l in ipairs(out) do table.insert(all, l) end
         for _, l in ipairs(err) do table.insert(all, l) end
 
-        local qf = M._parse_activation_errors(all, filename)
+        local qf = M._parse_activation_errors(all, filename, bufnr)
 
         vim.b[bufnr].sap_activation_status = "ERR"
         if #qf > 0 then

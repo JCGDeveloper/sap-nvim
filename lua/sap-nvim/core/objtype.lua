@@ -82,4 +82,21 @@ function M.atc_type(group)
   return ATC_TYPES[group] or "program"
 end
 
+-- Inverse of DOUBLE/SINGLE: sapcli group -> abapGit-style extension.
+-- Used to name the local cache file so filetype/treesitter/abaplint pick up.
+local GROUP_TO_EXT = {
+  class         = "clas.abap",
+  interface     = "intf.abap",
+  program       = "prog.abap",
+  functionmodule = "func.abap",
+  functiongroup = "fugr.abap",
+  include       = "abap",
+}
+
+-- abapGit-style file name for an object, e.g. ("class","ZCL_X") -> "zcl_x.clas.abap".
+function M.gitfile(group, name)
+  local ext = GROUP_TO_EXT[group] or "abap"
+  return name:lower() .. "." .. ext
+end
+
 return M

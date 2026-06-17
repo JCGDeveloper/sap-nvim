@@ -3,6 +3,7 @@
 
 local M = {}
 local adt = require("sap-nvim.core.adt")
+local source = require("sap-nvim.core.source")
 
 local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
@@ -14,16 +15,15 @@ end
 -- con una fila de cabecera y una de guiones. El nombre real es la COLUMNA 2.
 -- La columna 1 es el tipo ADT (p.ej. "PROG/I", "CLAS/OC", "PROG/P").
 
--- Tipos de checkout que sapcli soporta como objeto suelto.
-local CHECKOUTABLE = { class = true, program = true, interface = true, function_group = true }
-
--- Prefijo de tipo ADT -> grupo de objeto de sapcli.
+-- Prefijo de tipo ADT -> grupo de sapcli (el que entiende `<group> read`).
+-- Nota: PROG/I (include) va a "include", que SÍ soporta read (a diferencia del
+-- viejo `checkout`, que no bajaba includes sueltos).
 local TYPE_PREFIX_TO_GROUP = {
   CLAS = "class",
   INTF = "interface",
   PROG = "program",
-  FUGR = "function_group",
-  FUGS = "function_group",
+  FUGR = "functiongroup",
+  FUGS = "functiongroup",
 }
 
 -- Divide "a | b | c" en columnas, con trim de cada una.
@@ -62,141 +62,29 @@ local function type_token(line)
   return line:match("^(%S+)") or ""
 end
 
--- True si la fila es un include de programa (PROG/I): no se baja suelto.
-local function is_include(line)
-  return type_token(line):match("^PROG/I") ~= nil
-end
-
--- Grupo de checkout implicito en el tipo ADT (o nil si no aplica / es include).
+-- Grupo de sapcli implícito en el tipo ADT (o nil si no se reconoce).
+-- PROG/I (include de programa) -> "include".
 local function type_group(line)
   local prefix, sub = type_token(line):match("(%u+)/(%u+)")
   if not prefix then return nil end
-  if prefix == "PROG" and sub == "I" then return nil end
+  if prefix == "PROG" and sub == "I" then return "include" end
   return TYPE_PREFIX_TO_GROUP[prefix]
 end
 
--- Directorio donde sapcli escribe los archivos del checkout. sapcli NO admite un
--- flag de directorio para objetos sueltos (solo `checkout package` lo tiene), así
--- que fijamos el cwd del job explícitamente y abrimos la ruta exacta que reporta.
-local function checkout_dir()
-  return vim.fn.getcwd()
-end
-
--- sapcli escribe en formato abapGit: "<nombre>.<tipo>.abap" (+ .xml y, en clases,
--- ".clas.locals_def.abap", ".clas.testclasses.abap", etc.). El archivo "principal"
--- es el de menos segmentos: "zcl_x.clas.abap" antes que "zcl_x.clas.locals_def.abap".
-local function pick_main_abap(files)
-  local best, best_dots
-  for _, f in ipairs(files) do
-    if f:match("%.abap$") then
-      local _, dots = f:gsub("%.", "")
-      if not best or dots < best_dots then
-        best, best_dots = f, dots
-      end
-    end
-  end
-  return best
-end
-
--- Busca un .abap ya descargado para `obj_name` en el dir de checkout.
-local function find_local_abap(obj_name, dir)
-  local matches = vim.fn.glob(dir .. "/" .. obj_name:lower() .. ".*.abap", false, true)
-  return pick_main_abap(matches)
-end
-
-local function open_path(path)
-  vim.cmd("edit " .. vim.fn.fnameescape(path))
-end
-
--- Abre el objeto si ya está descargado localmente; si no, ofrece checkout desde SAP.
-local function open_or_checkout(obj_name, hint_group, include)
-  local dir = checkout_dir()
-
-  local existing = find_local_abap(obj_name, dir)
-  if existing then
-    open_path(existing)
-    return
-  end
-
-  if include then
-    notify(
-      "'" .. obj_name .. "' es un INCLUDE de programa: sapcli no lo baja suelto. "
-        .. "Baja el programa padre (fila PROG/P) o usa :SapCheckout sobre el paquete.",
-      vim.log.levels.WARN
-    )
-    return
-  end
-
-  -- Lanza el checkout y abre la RUTA EXACTA que sapcli reporta por stdout
-  -- ("- <archivo>"). Sin recursión: si el checkout no crea ningún .abap, avisa y
-  -- para — nunca se vuelve a llamar a sí mismo "a ciegas".
-  local function do_checkout(otype)
-    if not otype then return end
-    notify("Haciendo checkout de " .. obj_name .. " (" .. otype .. ")...")
-    local created, stderr = {}, {}
-    vim.fn.jobstart({ "sapcli", "checkout", otype, obj_name }, {
-      cwd = dir,
-      on_stdout = function(_, data)
-        for _, l in ipairs(data) do
-          -- Filas de archivo creado: "- zcl_x.clas.abap". La 1ª línea es el
-          -- nombre del objeto (sin "-") y se ignora.
-          local file = l:match("^%s*%-%s+(.+)%s*$")
-          if file then table.insert(created, vim.trim(file)) end
-        end
-      end,
-      on_stderr = function(_, data)
-        for _, l in ipairs(data) do
-          if vim.trim(l) ~= "" then table.insert(stderr, vim.trim(l)) end
-        end
-      end,
-      on_exit = function(_, code)
-        vim.schedule(function()
-          if code ~= 0 then
-            local msg = #stderr > 0 and stderr[1] or ("Checkout fallido (code " .. code .. ")")
-            notify("Checkout fallido para " .. obj_name .. ": " .. msg, vim.log.levels.ERROR)
-            return
-          end
-          local main = pick_main_abap(created) or find_local_abap(obj_name, dir)
-          if not main then
-            notify(
-              "Checkout de " .. obj_name .. " OK pero no se encontró ningún .abap en " .. dir,
-              vim.log.levels.WARN
-            )
-            return
-          end
-          local path = main:match("^/") and main or (dir .. "/" .. main)
-          notify("Checkout OK: " .. obj_name .. ". Abriendo " .. vim.fn.fnamemodify(path, ":t"))
-          open_path(path)
-        end)
-      end,
-    })
-  end
-
-  vim.ui.select(
-    { "Checkout desde el sistema SAP", "Cancelar" },
-    { prompt = "'" .. obj_name .. "' no existe localmente:" },
-    function(choice)
-      if not choice or choice:match("Cancelar") then return end
-      if hint_group and CHECKOUTABLE[hint_group] then
-        do_checkout(hint_group)
-        return
-      end
-      vim.ui.select(
-        { "class", "program", "interface", "function_group" },
-        { prompt = "Tipo de objeto para checkout de " .. obj_name .. ":" },
-        do_checkout
-      )
-    end
-  )
-end
-
--- Resuelve la fila elegida en el picker y dispara open_or_checkout.
+-- Resuelve la fila elegida en el picker y abre el objeto remoto leyéndolo de SAP
+-- (sapcli <group> read) a la caché local, vía source.open.
 local function on_pick(choice)
   if not choice or not is_data_row(choice) then return end
   local obj = extract_name(choice)
-  if obj and obj ~= "" then
-    open_or_checkout(obj, type_group(choice), is_include(choice))
+  if not obj or obj == "" then return end
+
+  local group = type_group(choice)
+  if not group then
+    notify("Tipo de objeto no soportado para '" .. obj .. "' (fila: " .. type_token(choice) .. ")",
+      vim.log.levels.WARN)
+    return
   end
+  source.open(obj, group)
 end
 
 -- Search SAP objects by name pattern (like Ctrl+Shift+A in Eclipse)
