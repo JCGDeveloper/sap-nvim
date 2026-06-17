@@ -22,12 +22,37 @@ local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
--- ~/.cache/sap-nvim/<current-context>/ — se crea si no existe.
+-- abaplint.json RELAJADO para la caché. Los objetos remotos se editan EN AISLADO (sin las
+-- clases estándar de SAP ni el resto del proyecto), así que la regla `check_syntax` de
+-- abaplint da FALSOS POSITIVOS ("Super class X not found", "redefinition", tipos
+-- desconocidos). SAP ya hace el check real al activar; aquí solo queremos estilo. Por eso
+-- desactivamos check_syntax y dejamos reglas que funcionan en aislado.
+local CACHE_ABAPLINT = [[{
+  "global": { "files": "/**/*.*" },
+  "syntax": { "version": "v750", "errorNamespace": "." },
+  "rules": {
+    "check_syntax": false,
+    "parser_error": true,
+    "sequential_blank": { "lines": 4 },
+    "contains_tab": true,
+    "whitespace_end": true,
+    "line_length": { "length": 255 }
+  }
+}
+]]
+
+-- ~/.cache/nvim/sap-nvim/<current-context>/ — se crea si no existe, con un abaplint.json
+-- relajado (ver arriba) para que el linter (sap-nvim o el LSP del usuario, si respeta el
+-- abaplint.json más cercano) no marque falsos "redefinition"/"class not found".
 function M.cache_dir()
   local ctx = adt.get_current_context()
   local name = (ctx and ctx.name) or "default"
   local dir = vim.fn.stdpath("cache") .. "/sap-nvim/" .. name
   vim.fn.mkdir(dir, "p")
+  local cfg = dir .. "/abaplint.json"
+  if vim.fn.filereadable(cfg) == 0 then  -- no sobreescribir si el usuario lo personaliza
+    pcall(vim.fn.writefile, vim.split(CACHE_ABAPLINT, "\n"), cfg)
+  end
   return dir
 end
 
