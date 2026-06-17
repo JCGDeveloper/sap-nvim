@@ -65,6 +65,14 @@ sap-nvim atajos:
   <leader>aw   Where-used list → quickfix
   <leader>aD   Diff local vs sistema SAP (:SapDiff)
 
+  INTELIGENCIA ADT (como VSCode):
+  (auto)       Completado al escribir clase/metodo (desplegable solo, blink)
+  <C-x><C-o>   Completado manual (:SapComplete)
+  K            Hover: firma + documentacion (2a K entra, hjkl scroll) (:SapHover)
+  gd           Ir a definicion (incluye clases/metodos del sistema, ADT)
+  gy           Ir al TIPO del dato (:SapGotoType)
+  gr           Referencias del simbolo → picker (:SapReferences)
+
   DATOS / TABLAS:
   <leader>avt  Ver definicion DDIC de tabla (:SapTable)
   <leader>avd  Ver datos de tabla SELECT * (:SapTableData)

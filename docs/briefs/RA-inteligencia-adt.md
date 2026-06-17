@@ -17,19 +17,23 @@ el source en el body → XML `<SCC_COMPLETION>` con `<IDENTIFIER>`.
   Conoce los miembros de la clase que llamas. Falta integrarlo con `blink.cmp` para
   completado automático mientras escribes.
 
-## Pendiente (mismo cliente ADT) — endpoints de la extensión de VSCode
-- **R-A2b Completado automático:** fuente `blink.cmp` async que llame `intel.proposals`
-  (debounce; no bloquear). Hoy es omnifunc (on-demand, sync).
-- **R-A5 Hover/elementinfo (Shift-K):** `POST /sap/bc/adt/abapsource/codecompletion/elementinfo`
-  → firma + documentación del símbolo bajo el cursor. Ventana flotante; doble Shift-K la
-  fija y se navega con hjkl.
-- **R-A4/R-A1 Go-to-def del sistema + go-to-type:** `/sap/bc/adt/navigation/target`
-  (navigation) → URI+posición del símbolo → abrir con `source.open`. Cubre ir a la
-  definición de clases/métodos/tipos del sistema (no solo Z).
-- **R-A3 Referencias (gr):** `/sap/bc/adt/repository/informationsystem/usageReferences`
-  → lista de usos; mostrar en picker (Telescope/snacks) con Enter para navegar.
-- **Keywords contextuales (R-A1):** el propio completion de ADT ya propone IMPORTING/
-  EXPORTING/RETURNING según contexto — al integrar R-A2b se obtiene gratis.
+## HECHO (mismo cliente ADT) — paridad con la extensión de VSCode
+- **R-A2b Completado automático ✅:** fuente `blink.cmp` async
+  (`integrations/adt_completion.lua`). Salta solo al escribir nombres de clase/tipo (≥2
+  chars) y tras acceso a miembro (`=>`/`->`/`~`). Keywords contextuales (IMPORTING/
+  EXPORTING/RETURNING) vienen del propio completion ADT.
+- **R-A5 Hover/elementinfo (K) ✅:** `intel.hover` → firma + propiedades + documentación
+  (limpia). Flotante bloqueable (2ª K entra, hjkl scroll).
+- **R-A4/R-A1 Go-to-def del sistema + go-to-type ✅:** `intel.goto_definition` (navigation/
+  target), integrado en `gd`; `gy` para el tipo. Resuelve clases/métodos/tipos del sistema.
+- **R-A3 Referencias (gr) ✅:** `intel.references` (usageReferences) → picker, Enter abre.
+
+## Pendiente / mejoras futuras
+- **Kinds/iconos en el completado:** mapear `<KIND>` del proposal a método/clase/atributo.
+- **Doc en el completado (resolve):** mostrar firma del item resaltado (elementinfo lazy).
+- **Signature help:** al escribir `meth( ` mostrar los parámetros.
+- **adt_http async total:** hover/def/refs son sync (on-demand, aceptable); migrar a
+  jobstart si se quiere 0 bloqueo.
 
 ## Arquitectura
 Un solo `adt_http` async (migrar de sync a jobstart para no bloquear), parseo de los XML de
