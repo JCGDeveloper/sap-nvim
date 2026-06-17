@@ -123,6 +123,46 @@ function M.request(opts)
   end
 end
 
+-- ── Petición ASYNC (para completado en cada tecla, sin bloquear) ─────────────
+-- Construye los argumentos de curl (compartido con la versión sync).
+local function build_args(c, opts)
+  local url = c.base .. opts.path
+  local sep = opts.path:find("?") and "&" or "?"
+  url = url .. sep .. "sap-client=" .. c.client
+  if opts.query then
+    for k, v in pairs(opts.query) do url = url .. "&" .. k .. "=" .. v end
+  end
+  local args = { "curl", "-sk", "-u", c.user .. ":" .. c.pass, "-b", cookie_file() }
+  if opts.accept then vim.list_extend(args, { "-H", "Accept: " .. opts.accept }) end
+  local bodyfile
+  if (opts.method or "GET"):upper() == "POST" then
+    local token = ensure_token(c) -- sync, cacheado tras la 1ª vez (GET rápido)
+    if token then vim.list_extend(args, { "-H", "X-CSRF-Token: " .. token }) end
+    vim.list_extend(args, { "-H", "Content-Type: " .. (opts.content_type or "text/plain") })
+    bodyfile = vim.fn.tempname()
+    vim.fn.writefile(vim.split(opts.body or "", "\n"), bodyfile)
+    vim.list_extend(args, { "--data-binary", "@" .. bodyfile })
+  end
+  vim.list_extend(args, { url })
+  return args, bodyfile
+end
+
+-- cb(body|nil). No bloquea (jobstart). Devuelve el job id (para cancelar).
+function M.request_async(opts, cb)
+  local c = M.creds()
+  if not c then cb(nil); return end
+  local args, bodyfile = build_args(c, opts)
+  local out = {}
+  return vim.fn.jobstart(args, {
+    stdout_buffered = true,
+    on_stdout = function(_, data) for _, l in ipairs(data) do out[#out + 1] = l end end,
+    on_exit = function()
+      if bodyfile then pcall(os.remove, bodyfile) end
+      cb(table.concat(out, "\n"))
+    end,
+  })
+end
+
 -- Invalida el token (p.ej. si un POST devuelve 403 CSRF). El siguiente lo re-obtiene.
 function M.reset_token() state.token = nil end
 

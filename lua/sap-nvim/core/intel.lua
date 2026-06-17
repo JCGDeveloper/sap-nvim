@@ -60,8 +60,13 @@ function M.proposals(bufnr, line, col)
     }) or ""
   end
 
+  return M.parse(body)
+end
+
+-- Parsea el XML de propuestas de ADT -> lista { {word}, ... }.
+function M.parse(body)
   local items = {}
-  -- Cada <SCC_COMPLETION> trae IDENTIFIER y KIND. Emparejamos por bloque.
+  if not body then return items end
   for block in body:gmatch("<SCC_COMPLETION>(.-)</SCC_COMPLETION>") do
     local id = block:match("<IDENTIFIER>([^<]*)</IDENTIFIER>")
     if id and id ~= "" and id ~= "@end" then
@@ -69,6 +74,32 @@ function M.proposals(bufnr, line, col)
     end
   end
   return items
+end
+
+-- Versión ASYNC para el completado automático (blink). cb(items).
+function M.proposals_async(bufnr, line, col, cb)
+  if not adt_http.is_available() then cb({}); return end
+  local uri = object_uri(bufnr)
+  if not uri then cb({}); return end
+  local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+  local q = { uri = uri .. "%23start=" .. line .. "," .. col, signalCompleteness = "true" }
+  adt_http.request_async({
+    method = "POST",
+    path = "/sap/bc/adt/abapsource/codecompletion/proposal",
+    query = q,
+    body = src,
+  }, function(body)
+    if not body or not body:find("SCC_COMPLETION") then
+      adt_http.reset_token()
+      adt_http.request_async({
+        method = "POST",
+        path = "/sap/bc/adt/abapsource/codecompletion/proposal",
+        query = q, body = src,
+      }, function(body2) cb(M.parse(body2)) end)
+    else
+      cb(M.parse(body))
+    end
+  end)
 end
 
 -- omnifunc (Ctrl-X Ctrl-O): completado ADT en buffers ABAP.
