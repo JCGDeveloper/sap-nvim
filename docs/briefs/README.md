@@ -34,4 +34,17 @@ Lanzar con `isolation: worktree` (copia aislada del repo) y pasarle:
 | F19 | Revisiones / comparar versiones | pendiente |
 | F20 | CDS preview | pendiente |
 
-F0–F11, F16 ya implementados (ver SDD).
+F0–F11, F13, F14, F16 ya implementados (ver SDD y `PLAN-MAESTRO.md §1`).
+
+### Nuevos (sesión 2026-06-17 — capturas del usuario, ver `PLAN-MAESTRO.md §3`)
+
+| Brief | Feature | Tipo |
+|---|---|---|
+| RB  | Formateo inteligente al guardar (pretty printer real) | pulido (alta prioridad) |
+| RD1 | SE91: crear texto de mensaje directo | innovación |
+| RD2 | Plantillas dinámicas estilo Eclipse | innovación |
+
+Pendientes de brief (especificados en `PLAN-MAESTRO.md §3`): keywords contextuales (R-A1),
+ADT completion de sistema (R-A2), `gr` referencias (R-A3), go-to-type (R-A4), hover
+bloqueable (R-A5), nav rápida buffers (R-A6), SE16N flotante (R-C1), debugging nvim-dap
+(R-E, ver también F18).
