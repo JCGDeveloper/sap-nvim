@@ -205,15 +205,18 @@ function M.preview_select()
   local sub = {}
   for i = s, e do sub[#sub + 1] = lines[i] end
   local stmt = table.concat(sub, " ")
-  stmt = stmt:gsub("%-%-.*$", "")            -- quita comentarios de línea sueltos
-  stmt = stmt:gsub("%.%s*$", "")             -- quita el punto final
-  stmt = stmt:gsub("[Ii][Nn][Tt][Oo]%s+.*$", "") -- quita INTO ...
+  -- Empezar en SELECT (descarta lo de antes) y cortar en el primer punto: un statement
+  -- OpenSQL no tiene puntos dentro (campos/tablas/host-vars no llevan '.'), así garantizamos
+  -- que NO llegue ningún '.' a osql ("'.' is invalid here").
+  stmt = stmt:match("[Ss][Ee][Ll][Ee][Cc][Tt].*") or stmt
+  stmt = stmt:match("^([^.]*)") or stmt
+  stmt = stmt:gsub("[Ii][Nn][Tt][Oo]%s.*$", "")  -- quita INTO ...
   if stmt:find("@") then
-    stmt = stmt:gsub("[Ww][Hh][Ee][Rr][Ee]%s+.*$", "")
+    stmt = stmt:gsub("[Ww][Hh][Ee][Rr][Ee]%s.*$", "") -- filtros con host-vars no evaluables
     notify("Filtros con variables (@) omitidos en la preview.", vim.log.levels.WARN)
   end
   stmt = vim.trim(stmt:gsub("%s+", " "))
-  if stmt == "" then notify("SELECT vacío tras limpiar.", vim.log.levels.WARN); return end
+  if not stmt:upper():match("^SELECT") then notify("No se pudo extraer el SELECT.", vim.log.levels.WARN); return end
   M.preview(stmt)
 end
 
