@@ -175,38 +175,101 @@ function M.preview_cursor()
   end
 end
 
--- Tipos de objeto cuya definición se puede leer (en orden de intento).
-local DEF_READERS = { "table", "ddl", "structure", "dataelement", "domain", "view" }
+-- Previsualiza los datos del SELECT bajo el cursor. Extrae el statement (multi-línea hasta
+-- el punto), quita el `INTO ...` y, si hay variables de host (@s_curso, @var), quita el
+-- WHERE (no se pueden evaluar fuera del programa) y avisa. Ejecuta el resto con osql.
+function M.preview_select()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local row = vim.api.nvim_win_get_cursor(0)[1]
 
--- Muestra la definición de tabla / CDS (DDL) / estructura / data element / dominio.
--- Prueba los tipos en orden hasta que uno responde (así una CDS se lee con `ddl read`).
-function M.read_definition(name, idx)
+  -- inicio: hacia atrás hasta una línea con SELECT
+  local s = row
+  while s > 1 and not lines[s]:upper():match("%f[%w]SELECT%f[%W]") do s = s - 1 end
+  if not (lines[s] or ""):upper():match("%f[%w]SELECT%f[%W]") then
+    notify("No hay un SELECT bajo el cursor.", vim.log.levels.WARN); return
+  end
+  -- fin: hacia delante hasta una línea que acabe en '.'
+  local e = row
+  while e < #lines and not lines[e]:match("%.%s*$") do e = e + 1 end
+
+  local sub = {}
+  for i = s, e do sub[#sub + 1] = lines[i] end
+  local stmt = table.concat(sub, " ")
+  stmt = stmt:gsub("%-%-.*$", "")            -- quita comentarios de línea sueltos
+  stmt = stmt:gsub("%.%s*$", "")             -- quita el punto final
+  stmt = stmt:gsub("[Ii][Nn][Tt][Oo]%s+.*$", "") -- quita INTO ...
+  if stmt:find("@") then
+    stmt = stmt:gsub("[Ww][Hh][Ee][Rr][Ee]%s+.*$", "")
+    notify("Filtros con variables (@) omitidos en la preview.", vim.log.levels.WARN)
+  end
+  stmt = vim.trim(stmt:gsub("%s+", " "))
+  if stmt == "" then notify("SELECT vacío tras limpiar.", vim.log.levels.WARN); return end
+  M.preview(stmt)
+end
+
+-- Prefijo de tipo ADT (de `abap find`) -> grupo de sapcli para leer la definición.
+local TYPE_TO_GROUP = {
+  TABL = "table", DDLS = "ddl", STRU = "structure", DTEL = "dataelement", DOMA = "domain",
+}
+
+-- Lee y muestra la definición de `group`/`real_name`.
+local function read_and_show(group, real_name)
+  local out = {}
+  vim.fn.jobstart({ "sapcli", group, "read", real_name }, {
+    on_stdout = function(_, data) for _, l in ipairs(data) do out[#out + 1] = l end end,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        if code ~= 0 or #out == 0 or (out[1] or ""):match("Exception") then
+          notify("No se pudo leer " .. real_name .. " (" .. group .. ").", vim.log.levels.ERROR)
+          return
+        end
+        if out[#out] == "" then table.remove(out) end
+        show_scratch("sap-def://" .. real_name, "abap", out)
+      end)
+    end,
+  })
+end
+
+-- Muestra la definición de tabla / CDS / estructura / data element / dominio. Resuelve el
+-- tipo y el NOMBRE REAL con `abap find` (clave para CDS: el nombre de la entidad
+-- -p.ej. ZCDS_JCG_CALE- difiere del DDL source -ZCDS_JCG_CALENDARIO-).
+function M.read_definition(name)
   if not adt.is_configured() then
     notify("No hay conexión SAP. Usa :SapSetup primero.", vim.log.levels.WARN)
     return
   end
   name = name:upper()
-  idx = idx or 1
-  local group = DEF_READERS[idx]
-  if not group then
-    notify("No se encontró definición para " .. name .. " (tabla/CDS/estructura/...).", vim.log.levels.WARN)
-    return
-  end
-  if idx == 1 then notify("Leyendo definición de " .. name .. "...") end
-
-  local out = {}
-  vim.fn.jobstart({ "sapcli", group, "read", name }, {
-    on_stdout = function(_, data) for _, l in ipairs(data) do out[#out + 1] = l end end,
-    on_exit = function(_, code)
-      vim.schedule(function()
-        -- Éxito si exit 0 y hay contenido que no sea una excepción ADT.
-        local ok = code == 0 and #out > 0 and not (out[1] or ""):match("Exception")
-        if ok then
-          if out[#out] == "" then table.remove(out) end
-          show_scratch("sap-def://" .. name, "abap", out)
-        else
-          M.read_definition(name, idx + 1) -- probar el siguiente tipo
+  notify("Resolviendo " .. name .. "...")
+  local rows = {}
+  vim.fn.jobstart({ "sapcli", "abap", "find", name }, {
+    on_stdout = function(_, data)
+      for _, l in ipairs(data) do
+        if l:find("|") and not l:find("Object type") then
+          local cols = {}
+          for c in (l .. "|"):gmatch("%s*(.-)%s*|") do cols[#cols + 1] = c end
+          local prefix = (cols[1] or ""):match("^(%u+)")
+          if prefix and cols[2] and cols[2] ~= "" then
+            rows[#rows + 1] = { prefix = prefix, name = cols[2], group = TYPE_TO_GROUP[prefix] }
+          end
         end
+      end
+    end,
+    on_exit = function(_, _code)
+      vim.schedule(function()
+        -- 1) coincidencia exacta de nombre con tipo leíble.
+        for _, r in ipairs(rows) do
+          if r.group and r.name:upper() == name then return read_and_show(r.group, r.name) end
+        end
+        -- 2) CDS: si el nombre exacto era la entidad, leer el primer DDL source.
+        for _, r in ipairs(rows) do
+          if r.group == "ddl" then return read_and_show("ddl", r.name) end
+        end
+        -- 3) primer objeto leíble.
+        for _, r in ipairs(rows) do
+          if r.group then return read_and_show(r.group, r.name) end
+        end
+        notify("No se encontró definición para " .. name .. " (tabla/CDS/estructura/...).", vim.log.levels.WARN)
       end)
     end,
   })
@@ -244,6 +307,9 @@ function M.setup()
     if a.args ~= "" then M.preview(a.args) else prompt("OpenSQL (sin punto): ", "SELECT * FROM ", M.preview) end
   end, { desc = "sap-nvim: Ejecutar OpenSQL y ver resultados", nargs = "?" })
 
+  vim.api.nvim_create_user_command("SapSelectPreview", function() M.preview_select() end,
+    { desc = "sap-nvim: Previsualizar el SELECT bajo el cursor (quita INTO y filtros @)" })
+
   vim.keymap.set("n", "<leader>avt", function() M.read_definition_cursor() end,
     { desc = "ABAP: Ver definición (tabla/CDS/estructura) bajo el cursor" })
   -- Datos de la tabla bajo el cursor (o pregunta si no hay palabra).
@@ -252,6 +318,8 @@ function M.setup()
   vim.keymap.set("n", "<leader>avq", function()
     prompt("OpenSQL (sin punto): ", "SELECT * FROM ", M.preview)
   end, { desc = "ABAP: Ejecutar OpenSQL" })
+  vim.keymap.set("n", "<leader>avs", function() M.preview_select() end,
+    { desc = "ABAP: Previsualizar el SELECT bajo el cursor" })
   -- Nota: en buffers ABAP, <leader>avd lo mapea keymaps.lua (buffer-local) a :SapTableData,
   -- que ahora usa la tabla bajo el cursor.
 end
