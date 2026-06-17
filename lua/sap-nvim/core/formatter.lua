@@ -322,6 +322,37 @@ function M.format_cds()
   vim.notify("[sap-nvim] CDS formatted.", vim.log.levels.INFO)
 end
 
+-- ─── Pretty Printer REAL de SAP (ADT) ───────────────────────────────────────
+-- Es el mismo formateador que SE80/ADT y la extensión de VSCode: capitaliza keywords
+-- (incl. compuestos como CLASS-METHODS), mantiene identificadores, respeta la nueva
+-- sintaxis. Muy superior al formateador por regex. Se usa para objetos remotos
+-- (con conexión); si falla o no hay conexión, cae al formateador nativo.
+function M.format_via_adt()
+  local adt_http = require("sap-nvim.core.adt_http")
+  if not adt_http.is_available() then return false end
+  local bufnr = vim.api.nvim_get_current_buf()
+  local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+
+  local body = adt_http.request({
+    method = "POST",
+    path = "/sap/bc/adt/abapsource/prettyprinter",
+    body = src,
+    content_type = "text/plain",
+  })
+  -- Respuesta válida = código formateado (texto plano). Una excepción ADT trae '<exc:' o
+  -- '<?xml' de error: en ese caso no tocamos el buffer.
+  if not body or body == "" or body:match("^%s*<") then return false end
+
+  local view = vim.fn.winsaveview()
+  -- ADT puede devolver \r\n o \r: normalizamos a \n antes de partir en líneas.
+  local norm = body:gsub("\r\n", "\n"):gsub("\r", "\n")
+  local lines = vim.split(norm:gsub("\n$", ""), "\n")
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  vim.fn.winrestview(view)
+  vim.notify("[sap-nvim] Formateado con el Pretty Printer de SAP.", vim.log.levels.INFO)
+  return true
+end
+
 -- ─── Dispatcher ────────────────────────────────────────────────────────────
 
 local CDS_EXTS = { ddls = true, dcl = true, bdef = true, ddlx = true, asddls = true, cds = true }
@@ -330,9 +361,11 @@ function M.format_file()
   local ext = vim.fn.expand("%:e"):lower()
   if CDS_EXTS[ext] then
     M.format_cds()
-  else
-    M.format_abap()
+    return
   end
+  -- ABAP: intentar el Pretty Printer de SAP (objeto remoto + conexión); si no, regex nativo.
+  if vim.b.sap_obj and M.format_via_adt() then return end
+  M.format_abap()
 end
 
 function M.setup() end
