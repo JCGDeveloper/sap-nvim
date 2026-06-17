@@ -163,6 +163,49 @@ function M.request_async(opts, cb)
   })
 end
 
+-- ── Petición CRUDA flexible (para lock/PUT/unlock de text elements, etc.) ────
+-- opts: { method, path, query, body, accept, content_type, stateful, headers={..} }
+-- Devuelve body (string), headers (string), http_code (number). Sync.
+function M.raw(opts)
+  local c = M.creds()
+  if not c then return nil, nil, 0 end
+  local url = c.base .. opts.path
+  local sep = opts.path:find("?") and "&" or "?"
+  url = url .. sep .. "sap-client=" .. c.client
+  if opts.query then for k, v in pairs(opts.query) do url = url .. "&" .. k .. "=" .. v end end
+
+  local method = (opts.method or "GET"):upper()
+  local args = { "curl", "-sk", "-u", c.user .. ":" .. c.pass, "-b", cookie_file(), "-c", cookie_file() }
+  vim.list_extend(args, { "-X", method })
+  if method ~= "GET" then
+    local token = ensure_token(c)
+    if token then vim.list_extend(args, { "-H", "X-CSRF-Token: " .. token }) end
+  end
+  if opts.stateful then vim.list_extend(args, { "-H", "X-sap-adt-sessiontype: stateful" }) end
+  if opts.accept then vim.list_extend(args, { "-H", "Accept: " .. opts.accept }) end
+  if opts.content_type then vim.list_extend(args, { "-H", "Content-Type: " .. opts.content_type }) end
+  for _, h in ipairs(opts.headers or {}) do vim.list_extend(args, { "-H", h }) end
+
+  local bodyfile
+  if opts.body then
+    bodyfile = vim.fn.tempname()
+    vim.fn.writefile(vim.split(opts.body, "\n"), bodyfile)
+    vim.list_extend(args, { "--data-binary", "@" .. bodyfile })
+  end
+  local hdrfile = vim.fn.tempname()
+  vim.list_extend(args, { "-D", hdrfile, url })
+
+  local body = vim.fn.system(args)
+  local headers, code = "", 0
+  pcall(function()
+    headers = table.concat(vim.fn.readfile(hdrfile), "\n")
+    code = tonumber(headers:match("HTTP/[%d%.]+%s+(%d+)")) or 0
+  end)
+  if bodyfile then pcall(os.remove, bodyfile) end
+  pcall(os.remove, hdrfile)
+  return body, headers, code
+end
+
 -- Invalida el token (p.ej. si un POST devuelve 403 CSRF). El siguiente lo re-obtiene.
 function M.reset_token() state.token = nil end
 

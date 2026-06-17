@@ -100,73 +100,44 @@ end
 
 -- Ejecuta OpenSQL (-o json) y muestra los datos en una tabla alineada. JSON evita la
 -- desalineación de `-o human` (que omite celdas vacías de forma inconsistente).
-function M.preview(sql, rows, _retry)
+function M.preview(sql, rows)
   if not adt.is_configured() then
     notify("No hay conexión SAP. Usa :SapSetup primero.", vim.log.levels.WARN)
     return
   end
   rows = rows or require("sap-nvim.core.config").data().rows or 100
-  if not _retry then notify("Consultando: " .. sql .. " (máx " .. rows .. " filas)...") end
+  notify("Consultando: " .. sql .. " (máx " .. rows .. " filas)...")
 
-  local out, err = {}, {}
-  local finished = false
-  local job = vim.fn.jobstart({ "sapcli", "datapreview", "osql", sql, "--rows", tostring(rows), "-o", "json" }, {
-    on_stdout = function(_, data)
-      for _, l in ipairs(data) do out[#out + 1] = l end
-    end,
-    on_stderr = function(_, data)
-      for _, l in ipairs(data) do if vim.trim(l) ~= "" then err[#err + 1] = vim.trim(l) end end
-    end,
-    on_exit = function(_, code)
-      finished = true
-      vim.schedule(function()
-        if code == 143 then
-          notify("Consulta cancelada por timeout (SAP no respondió a tiempo).", vim.log.levels.WARN)
-          return
-        end
-        local raw = table.concat(out, "\n")
-        local ok, decoded = pcall(vim.json.decode, raw)
-        if code ~= 0 or not ok or type(decoded) ~= "table" then
-          -- osql falla a veces de forma transitoria vía jobstart: reintentar UNA vez.
-          if not _retry and code ~= 143 then
-            return M.preview(sql, rows, true)
-          end
-          -- Mostrar el motivo COMPLETO (la 1ª línea suele ser "Exception (ADTError):" y el
-          -- detalle va en las siguientes). Errores de sapcli osql salen por stderr y/o stdout.
-          local detail = vim.trim(table.concat(err, " "))
-          if detail == "" then detail = vim.trim(raw) end
-          if detail == "" then detail = "code " .. code .. " (sin salida; ¿timeout o conexión?)" end
-          notify("Consulta fallida: " .. detail:sub(1, 400), vim.log.levels.ERROR)
-          return
-        end
-        if #decoded == 0 then notify("Sin filas para: " .. sql); return end
+  -- IMPORTANTE: vim.fn.system() (síncrono), NO jobstart: `datapreview osql` SE CUELGA vía
+  -- jobstart (proceso colgado para siempre), pero con system() responde bien. Bloquea
+  -- brevemente, aceptable para una consulta on-demand con --rows limitado.
+  local raw = vim.fn.system({ "sapcli", "datapreview", "osql", sql, "--rows", tostring(rows), "-o", "json" })
+  local ok, decoded = pcall(vim.json.decode, raw)
+  if vim.v.shell_error ~= 0 or not ok or type(decoded) ~= "table" then
+    -- Mostrar el motivo COMPLETO (la 1ª línea suele ser "Exception (ADTError): <detalle>").
+    notify("Consulta fallida: " .. vim.trim(raw):sub(1, 400), vim.log.levels.ERROR)
+    return
+  end
+  if #decoded == 0 then notify("Sin filas para: " .. sql); return end
 
-        local cols, seen = column_order(raw)
-        for _, row in ipairs(decoded) do  -- añadir columnas extra que no salieran en la 1ª
-          for k in pairs(row) do if not seen[k] then seen[k] = true; cols[#cols + 1] = k end end
-        end
+  local cols, seen = column_order(raw)
+  for _, row in ipairs(decoded) do  -- añadir columnas extra que no salieran en la 1ª
+    for k in pairs(row) do if not seen[k] then seen[k] = true; cols[#cols + 1] = k end end
+  end
 
-        local cells = { cols }
-        for _, row in ipairs(decoded) do
-          local vals = {}
-          for i, c in ipairs(cols) do
-            local v = row[c]
-            vals[i] = (v ~= nil) and tostring(v) or ""
-          end
-          cells[#cells + 1] = vals
-        end
+  local cells = { cols }
+  for _, row in ipairs(decoded) do
+    local vals = {}
+    for i, c in ipairs(cols) do
+      local v = row[c]
+      vals[i] = (v ~= nil) and tostring(v) or ""
+    end
+    cells[#cells + 1] = vals
+  end
 
-        local lines = { "-- " .. sql .. "  (" .. #decoded .. " filas, máx " .. rows .. ")", "" }
-        vim.list_extend(lines, render_cells(cells))
-        show_scratch("sap-data://" .. sql:gsub("%s+", "_"):sub(1, 40), nil, lines)
-      end)
-    end,
-  })
-
-  -- Timeout: si sapcli/SAP no responde, matar el job para no colgar la consulta.
-  vim.defer_fn(function()
-    if not finished and job and job > 0 then pcall(vim.fn.jobstop, job) end
-  end, 25000)
+  local lines = { "-- " .. sql .. "  (" .. #decoded .. " filas, máx " .. rows .. ")", "" }
+  vim.list_extend(lines, render_cells(cells))
+  show_scratch("sap-data://" .. sql:gsub("%s+", "_"):sub(1, 40), nil, lines)
 end
 
 -- Atajo: datos de una tabla -> SELECT * FROM NAME.
