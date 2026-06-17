@@ -284,7 +284,18 @@ function M.goto_definition()
     return
   end
 
-  -- 3) Definición en otros archivos de la caché (includes del programa ya descargados).
+  -- 3) ADT navigation: resuelve clases/métodos/tipos del SISTEMA y cross-object (como
+  --    VSCode). Solo si el buffer es un objeto remoto (tiene sap_obj).
+  if vim.b[bufnr].sap_obj then
+    local ok, intel = pcall(require, "sap-nvim.core.intel")
+    if ok then
+      push_here()
+      if intel.goto_definition(false) then return end
+      table.remove(M._back) -- no navegó: deshacer el push
+    end
+  end
+
+  -- 4) Definición en otros archivos de la caché (includes del programa ya descargados).
   local source = require("sap-nvim.core.source")
   local curpath = vim.api.nvim_buf_get_name(bufnr)
   for _, path in ipairs(vim.fn.glob(source.cache_dir() .. "/*.abap", false, true)) do

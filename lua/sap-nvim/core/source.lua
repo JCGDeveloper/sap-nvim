@@ -57,7 +57,9 @@ function M.cache_dir()
 end
 
 -- Abre un objeto remoto: lo lee de SAP, lo cachea y lo muestra en un buffer.
-function M.open(name, group)
+-- opts.line / opts.col (opcional): salta a esa posición tras abrir (para go-to-definition).
+function M.open(name, group, opts)
+  opts = opts or {}
   if not group then
     notify("Tipo de objeto desconocido para '" .. name .. "'", vim.log.levels.WARN)
     return
@@ -94,6 +96,10 @@ function M.open(name, group)
         local bufnr = vim.api.nvim_get_current_buf()
         vim.b[bufnr].sap_obj = { name = name, group = group }
         vim.bo[bufnr].filetype = "abap"
+        if opts.line then
+          pcall(vim.api.nvim_win_set_cursor, 0, { opts.line, opts.col or 0 })
+          vim.cmd("normal! zz")
+        end
         notify(name .. " abierto (" .. group .. "). :SapPush para subir, :SapActivate para activar.")
         -- Programa: prefetch de sus includes a la caché (en segundo plano) para que
         -- `gd` navegue forms/variables entre includes sin abrirlos antes.
