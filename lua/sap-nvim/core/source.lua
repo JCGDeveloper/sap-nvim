@@ -138,8 +138,8 @@ function M.prefetch_includes(lines)
 end
 
 -- Resuelve el transporte a usar para el push y llama cb(corrnr_or_nil).
--- corrnr = nil  -> objeto local ($TMP), sin orden.
-local function resolve_transport(cb)
+-- corrnr = nil  -> objeto local ($TMP), sin orden. Público para reusar (message.lua, etc.).
+function M.resolve_transport(cb)
   if session_transport == LOCAL then return cb(nil) end
   if session_transport then return cb(session_transport) end
 
@@ -181,7 +181,7 @@ function M.push(bufnr, activate)
   pcall(vim.cmd, "write") -- vuelca la caché a disco
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
-  resolve_transport(function(corrnr)
+  M.resolve_transport(function(corrnr)
     local args = { "sapcli", obj.group, "write", obj.name, "-" }
     if corrnr then vim.list_extend(args, { "--corrnr", corrnr }) end
     if activate then table.insert(args, "-a") end
@@ -256,7 +256,7 @@ function M.delete(bufnr)
     function(choice)
       if not choice or not choice:match("^Sí") then return end
 
-      resolve_transport(function(corrnr)
+      M.resolve_transport(function(corrnr)
         local args = { "sapcli", obj.group, "delete", obj.name }
         if corrnr then vim.list_extend(args, { "--corrnr", corrnr }) end
 
