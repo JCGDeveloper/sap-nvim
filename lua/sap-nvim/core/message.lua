@@ -127,15 +127,185 @@ function M.create_from_cursor()
     end)
 end
 
+-- ── Gestión de una clase de mensajes (ver / editar / borrar / crear) ──────────────
+-- Permite CORREGIR un mensaje creado por error: abre la clase, lista sus mensajes y deja
+-- editar/borrar/crear sobre la línea. Lecturas vía sapcli; escrituras seguras (§7).
+
+-- §7 S1: solo objetos propios (Z/Y o namespace /XXX/). Bloquea tocar estándar SAP.
+local function is_own(name)
+  local n = (name or ""):upper()
+  return n:match("^[ZY]") ~= nil or n:match("^/%w+/") ~= nil
+end
+
+-- Lee la clase entera (JSON). system() porque `messageclass read` se cuelga vía jobstart.
+local function read_class(name)
+  local res = vim.fn.system({ "sapcli", "messageclass", "read", name, "--output", "JSON" })
+  if vim.v.shell_error ~= 0 or not res or res == "" then return nil, res end
+  local ok, data = pcall(vim.json.decode, res)
+  if not ok or type(data) ~= "table" then return nil, res end
+  return data
+end
+
+-- Estado por buffer de gestión: { name, by_no = { ["001"] = {text, selfexplanatory} } }.
+local manage_state = {}
+
+local function render_manage(buf, name, data)
+  local lines = { "Clase de mensajes " .. name
+    .. "   —   e:editar  d:borrar  a:nuevo  r:refrescar  q:cerrar", "" }
+  if data.header and data.header.description then
+    lines[#lines + 1] = "  " .. data.header.description
+    lines[#lines + 1] = ""
+  end
+  local by_no = {}
+  for _, m in ipairs(data.messages or {}) do
+    by_no[m.number] = { text = m.text, selfexplanatory = m.selfexplanatory }
+    lines[#lines + 1] = string.format("  %s  %s", m.number, m.text or "")
+  end
+  if not next(by_no) then lines[#lines + 1] = "  (sin mensajes)" end
+  manage_state[buf] = { name = name, by_no = by_no }
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+end
+
+-- Relee la clase y repinta el buffer de gestión.
+local function refresh_manage(buf)
+  local st = manage_state[buf]; if not st then return end
+  local data = read_class(st.name)
+  if data then render_manage(buf, st.name, data) end
+end
+
+-- Nº de mensaje (3 dígitos) de la línea bajo el cursor, o nil.
+local function msgno_under_cursor()
+  return vim.api.nvim_get_current_line():match("^%s*(%d%d%d)%s")
+end
+
+-- Escribe/actualiza un mensaje (write = update; create para uno nuevo). cb() al terminar OK.
+local function write_message(verb, name, msgno, text, selfexpl, cb)
+  require("sap-nvim.core.source").resolve_transport(function(corrnr)
+    local args = { "sapcli", "messageclass", "message", verb, name, msgno, text }
+    if selfexpl ~= nil then vim.list_extend(args, { "--selfexplanatory", selfexpl and "true" or "false" }) end
+    if corrnr then vim.list_extend(args, { "--corrnr", corrnr }) end
+    notify((verb == "create" and "Creando" or "Actualizando") .. " mensaje " .. name .. "/" .. msgno .. "...")
+    local err = {}
+    vim.fn.jobstart(args, {
+      on_stderr = function(_, d) for _, l in ipairs(d) do if vim.trim(l) ~= "" then err[#err + 1] = l end end end,
+      on_exit = function(_, code)
+        vim.schedule(function()
+          if code == 0 then notify("Mensaje " .. name .. "/" .. msgno .. " guardado."); if cb then cb() end
+          else notify("No se pudo guardar el mensaje: " .. (err[1] or ("code " .. code)), vim.log.levels.ERROR) end
+        end)
+      end,
+    })
+  end)
+end
+
+-- Edita el texto del mensaje bajo el cursor.
+local function manage_edit(buf)
+  local st = manage_state[buf]; if not st then return end
+  local no = msgno_under_cursor()
+  if not no or not st.by_no[no] then notify("Pon el cursor en una línea de mensaje.", vim.log.levels.WARN); return end
+  if not is_own(st.name) then notify("Solo se pueden editar clases propias (Z/Y). " .. st.name .. " es estándar SAP.", vim.log.levels.WARN); return end
+  local cur = st.by_no[no]
+  vim.ui.input({ prompt = "Texto del mensaje " .. no .. ": ", default = cur.text or "" }, function(text)
+    if not text or text == "" or text == cur.text then return end
+    write_message("write", st.name, no, text, cur.selfexplanatory, function() refresh_manage(buf) end)
+  end)
+end
+
+-- Borra el mensaje bajo el cursor (con confirmación, §7 S2).
+local function manage_delete(buf)
+  local st = manage_state[buf]; if not st then return end
+  local no = msgno_under_cursor()
+  if not no or not st.by_no[no] then notify("Pon el cursor en una línea de mensaje.", vim.log.levels.WARN); return end
+  if not is_own(st.name) then notify("Solo se pueden borrar clases propias (Z/Y). " .. st.name .. " es estándar SAP.", vim.log.levels.WARN); return end
+  vim.ui.select({ "Sí, borrar " .. st.name .. "/" .. no, "No" },
+    { prompt = 'Borrar el mensaje ' .. no .. ' ("' .. (st.by_no[no].text or "") .. '")?' },
+    function(ch)
+      if not ch or ch:match("^No") then return end
+      require("sap-nvim.core.source").resolve_transport(function(corrnr)
+        local args = { "sapcli", "messageclass", "message", "delete", st.name, no }
+        if corrnr then vim.list_extend(args, { "--corrnr", corrnr }) end
+        notify("Borrando mensaje " .. st.name .. "/" .. no .. "...")
+        local err = {}
+        vim.fn.jobstart(args, {
+          on_stderr = function(_, d) for _, l in ipairs(d) do if vim.trim(l) ~= "" then err[#err + 1] = l end end end,
+          on_exit = function(_, code)
+            vim.schedule(function()
+              if code == 0 then notify("Mensaje " .. no .. " borrado."); refresh_manage(buf)
+              else notify("No se pudo borrar: " .. (err[1] or ("code " .. code)), vim.log.levels.ERROR) end
+            end)
+          end,
+        })
+      end)
+    end)
+end
+
+-- Crea un mensaje nuevo en la clase abierta.
+local function manage_new(buf)
+  local st = manage_state[buf]; if not st then return end
+  if not is_own(st.name) then notify("Solo se pueden modificar clases propias (Z/Y).", vim.log.levels.WARN); return end
+  vim.ui.input({ prompt = "Número del nuevo mensaje (3 dígitos): " }, function(no)
+    if not no or not no:match("^%d+$") then return end
+    no = string.format("%03d", tonumber(no))
+    if st.by_no[no] then notify("El mensaje " .. no .. " ya existe (usa e para editarlo).", vim.log.levels.WARN); return end
+    vim.ui.input({ prompt = "Texto del mensaje " .. no .. ": " }, function(text)
+      if not text or text == "" then return end
+      write_message("create", st.name, no, text, nil, function() refresh_manage(buf) end)
+    end)
+  end)
+end
+
+-- Abre el gestor de la clase de mensajes `name` (interactivo).
+function M.manage(name)
+  if not require("sap-nvim.core.adt").is_configured() then
+    notify("No hay conexión SAP. Usa :SapSetup primero.", vim.log.levels.WARN); return
+  end
+  name = (name or ""):upper()
+  if name == "" then return end
+  notify("Leyendo clase de mensajes " .. name .. "...")
+  local data, raw = read_class(name)
+  if not data then
+    notify("No se pudo leer la clase " .. name .. (raw and (": " .. vim.trim(raw)) or ""), vim.log.levels.ERROR); return
+  end
+  local buf = vim.api.nvim_create_buf(true, true)
+  vim.bo[buf].buftype = "nofile"
+  pcall(vim.api.nvim_buf_set_name, buf, "sap-se91://" .. name)
+  render_manage(buf, name, data)
+  vim.cmd("botright split")
+  vim.api.nvim_win_set_buf(0, buf)
+  pcall(vim.api.nvim_win_set_height, 0, 22)
+  local opts = { buffer = buf, nowait = true }
+  vim.keymap.set("n", "e", function() manage_edit(buf) end, opts)
+  vim.keymap.set("n", "d", function() manage_delete(buf) end, opts)
+  vim.keymap.set("n", "a", function() manage_new(buf) end, opts)
+  vim.keymap.set("n", "r", function() refresh_manage(buf) end, opts)
+  vim.keymap.set("n", "q", "<cmd>close<cr>", opts)
+  vim.keymap.set("n", "-", "<cmd>close<cr>", opts)
+  vim.api.nvim_create_autocmd("BufWipeout", { buffer = buf, once = true,
+    callback = function() manage_state[buf] = nil end })
+end
+
 function M.setup()
   vim.api.nvim_create_user_command("SapMessage", function() M.create_from_cursor() end,
     { desc = "sap-nvim: Crear el texto del mensaje (SE91/elemento de texto) y reescribir la línea" })
+  vim.api.nvim_create_user_command("SapMessageManage", function(a)
+    if a.args ~= "" then M.manage(a.args)
+    else vim.ui.input({ prompt = "Clase de mensajes (SE91): " }, function(v) if v and v ~= "" then M.manage(v) end end) end
+  end, { desc = "sap-nvim: Gestionar una clase de mensajes (ver/editar/borrar/crear)", nargs = "?" })
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "abap",
     group = vim.api.nvim_create_augroup("sap_nvim_message", { clear = true }),
     callback = function(ev)
       vim.keymap.set("n", "<leader>am", function() M.create_from_cursor() end,
         { buffer = ev.buf, desc = "ABAP: Crear mensaje/texto desde el MESSAGE" })
+      -- Gestionar la clase de mensajes bajo el cursor (cword) o preguntar.
+      vim.keymap.set("n", "<leader>aM", function()
+        local w = vim.fn.expand("<cword>")
+        if w and w ~= "" and (w:upper():match("^[ZY]") or w:upper():match("^/%w+/")) then M.manage(w)
+        else vim.ui.input({ prompt = "Clase de mensajes (SE91): ", default = (w ~= "" and w or "") },
+          function(v) if v and v ~= "" then M.manage(v) end end) end
+      end, { buffer = ev.buf, desc = "ABAP: Gestionar clase de mensajes (editar/borrar/crear)" })
     end,
   })
 end
