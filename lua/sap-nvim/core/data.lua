@@ -216,8 +216,8 @@ function M.setup()
   end, { desc = "sap-nvim: Ver definición DDIC de una tabla", nargs = "?" })
 
   vim.api.nvim_create_user_command("SapTableData", function(a)
-    if a.args ~= "" then M.preview_table(a.args) else prompt("Tabla (datos): ", "", M.preview_table) end
-  end, { desc = "sap-nvim: Ver datos de una tabla (SELECT *)", nargs = "?" })
+    if a.args ~= "" then M.preview_table(a.args) else M.preview_cursor() end
+  end, { desc = "sap-nvim: Ver datos de una tabla (cursor o SELECT *)", nargs = "?" })
 
   vim.api.nvim_create_user_command("SapData", function(a)
     if a.args ~= "" then M.preview(a.args) else prompt("OpenSQL (sin punto): ", "SELECT * FROM ", M.preview) end
@@ -232,16 +232,8 @@ function M.setup()
   vim.keymap.set("n", "<leader>avq", function()
     prompt("OpenSQL (sin punto): ", "SELECT * FROM ", M.preview)
   end, { desc = "ABAP: Ejecutar OpenSQL" })
-
-  -- En buffers ABAP, atajo directo gd-style: <leader>av sobre una tabla -> sus datos.
-  vim.api.nvim_create_autocmd("FileType", {
-    pattern = "abap",
-    group = vim.api.nvim_create_augroup("sap_nvim_data", { clear = true }),
-    callback = function(ev)
-      vim.keymap.set("n", "<leader>avd", function() M.preview_cursor() end,
-        { buffer = ev.buf, desc = "ABAP: Datos de la tabla bajo el cursor" })
-    end,
-  })
+  -- Nota: en buffers ABAP, <leader>avd lo mapea keymaps.lua (buffer-local) a :SapTableData,
+  -- que ahora usa la tabla bajo el cursor.
 end
 
 return M
