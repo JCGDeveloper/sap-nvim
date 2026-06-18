@@ -166,40 +166,17 @@ end
 -- Si el daemon falla una vez en la sesión, lo desactivamos para no pagar el timeout cada vez.
 local daemon_disabled = false
 
--- Calienta la conexión persistente (arranca el daemon y hace login) para que la PRIMERA
--- petición ya vaya caliente — como VSCode al abrir el FS remoto. Idempotente.
-function M.warmup()
-  if daemon_disabled then return end
-  local ok, daemon = pcall(require, "sap-nvim.core.adt_daemon")
-  if ok and daemon and daemon.available() then pcall(daemon.ensure) end
-end
+-- (no-op) El daemon persistente quedó fuera del camino caliente por fiabilidad; se mantiene
+-- la función para no romper llamadas existentes. La 1ª petición CSRF sí se cachea (ensure_token).
+function M.warmup() end
 
--- cb(body|nil). No bloquea. Usa la conexión PERSISTENTE (daemon, como VSCode) si está
--- disponible; si una petición no responde en 20s cae a curl SOLO esa vez (no desactiva el
--- daemon: el arranque en frío puede tardar en redes lentas, pero en caliente va rápido).
--- Si el daemon ni siquiera arranca, se marca como desactivado y se usa curl. Nunca rompe nada.
+-- cb(body|nil). No bloquea. Usa curl (fiable). NOTA: el daemon persistente resultó poco
+-- fiable en algunos sistemas (devolvía respuestas vacías y dejaba el completado sin items),
+-- así que NO está en el camino caliente; la sensación "instantánea" se logra con el filtrado
+-- local de blink (la lista traída se filtra al teclear, sin re-consultar). El daemon queda
+-- disponible (adt_daemon) para usos futuros opt-in, pero no aquí.
 function M.request_async(opts, cb)
-  local c = M.creds()
-  if not c then cb(nil); return end
-
-  local ok, daemon = pcall(require, "sap-nvim.core.adt_daemon")
-  if ok and daemon and not daemon_disabled and daemon.available() then
-    if pcall(daemon.ensure) == false then daemon_disabled = true; curl_request_async(opts, cb); return end
-    local answered = false
-    -- Guardián amplio (20s): cubre el arranque en frío sin matar el daemon en redes lentas.
-    vim.defer_fn(function()
-      if answered then return end
-      answered = true
-      curl_request_async(opts, cb) -- fallback puntual; el daemon sigue activo para la próxima
-    end, 20000)
-    daemon.request_async(opts, function(body)
-      if answered then return end
-      answered = true
-      if body then cb(body) else curl_request_async(opts, cb) end
-    end)
-    return
-  end
-
+  if not M.creds() then cb(nil); return end
   curl_request_async(opts, cb)
 end
 
