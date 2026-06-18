@@ -196,11 +196,20 @@ class AdtDaemon:
                 pass
 
     def _serve(self, req):
+        t = time.time()
+        path = (req.get("path") or "")
+        # marca corta del tipo de petición para el log
+        tag = "completion" if "codecompletion/proposal" in path else (
+            "check" if "checkruns" in path else (
+            "hover" if "elementinfo" in path else path[-24:]))
+        log("REQ id=%s %s" % (req.get("id"), tag))
         try:
             resp = self.handle(req)
+            log("RESP id=%s status=%s len=%s %.0fms" % (resp.get("id"), resp.get("status"),
+                len(resp.get("body") or ""), (time.time() - t) * 1000))
         except Exception as e:
             resp = {"id": req.get("id"), "status": 0, "body": str(e)}
-            log("HANDLE EXC " + repr(e))
+            log("HANDLE EXC id=%s %s" % (req.get("id"), repr(e)))
         self._respond(resp)
 
     def _keepalive_loop(self):

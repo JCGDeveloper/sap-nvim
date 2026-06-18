@@ -611,6 +611,26 @@ function M.daemon_test()
 end
 
 function M.setup()
+  -- Diagnósticos del syntax-check SAP: mostrarlos TAMBIÉN en modo insert (como VSCode). Por
+  -- defecto nvim no los pinta hasta salir de insert (update_in_insert=false).
+  pcall(vim.diagnostic.config, { update_in_insert = true }, CHECK_NS)
+
+  -- `K` -> hover ADT. abaplint (LSP) mapea K=vim.lsp.buf.hover en LspAttach (DESPUÉS de nuestro
+  -- FileType) y nos lo machaca. Re-asignamos K (diferido) cuando el LSP se engancha a un buffer
+  -- ABAP, para que gane el nuestro.
+  vim.api.nvim_create_autocmd("LspAttach", {
+    group = vim.api.nvim_create_augroup("sap_nvim_intel_lsp", { clear = true }),
+    callback = function(ev)
+      if vim.bo[ev.buf].filetype ~= "abap" then return end
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(ev.buf) then
+          pcall(vim.keymap.set, "n", "K", function() M.hover() end,
+            { buffer = ev.buf, desc = "ABAP: Hover ADT (firma/doc)" })
+        end
+      end)
+    end,
+  })
+
   vim.api.nvim_create_user_command("SapDaemonTest", function() M.daemon_test() end,
     { desc = "sap-nvim: Probar la conexión persistente (daemon) — count + latencia" })
   vim.api.nvim_create_user_command("SapDiag", function() M.diag() end,
