@@ -24,6 +24,7 @@ local TYPES = {
   { key = "cds_view",       label = "CDS View (DDL)",       group = "ddl" },
   { key = "transaction",    label = "Transacción",         group = "transaction" },
   { key = "message_class",  label = "Message Class",        group = "messageclass" },
+  { key = "package",        label = "Paquete (DEVC)",       group = "package" },
 }
 
 -- ─── Lanzar la creación en SAP y abrir ──────────────────────────────────────
@@ -51,6 +52,74 @@ local function do_create(spec, name, desc, pkg, corrnr, fgroup)
         end
         notify(name .. " creado. Abriendo para editar...")
         require("sap-nvim.core.source").open(name, spec.group)
+      end)
+    end,
+  })
+end
+
+-- ─── Creadores específicos: transacción y paquete ──────────────────────────
+-- Estos objetos tienen firmas sapcli propias y NO son código editable, así que
+-- no llaman a source.open (a diferencia del do_create genérico).
+
+-- Crea una transacción (firma: transaction create NAME DESC PKG -t TYPE [--report-name PROG] [--corrnr T]).
+local function create_transaction(name, desc, pkg, corrnr, ttype, prog)
+  -- Seguridad §7: aviso si el nombre no parece de cliente (Z/Y o namespace /).
+  if not name:match("^[ZY]") and not name:match("^/") then
+    notify("Aviso: '" .. name .. "' no empieza por Z/Y; SAP puede rechazarlo.", vim.log.levels.WARN)
+  end
+  local args = { "sapcli", "transaction", "create", name, desc, pkg, "-t", ttype }
+  if prog and prog ~= "" then vim.list_extend(args, { "--report-name", prog }) end
+  if corrnr and corrnr ~= "" then vim.list_extend(args, { "--corrnr", corrnr }) end
+
+  notify("Creando transacción " .. name .. " en " .. pkg .. "...")
+  local err = {}
+  vim.fn.jobstart(args, {
+    on_stderr = function(_, data)
+      for _, l in ipairs(data) do if vim.trim(l) ~= "" then err[#err + 1] = vim.trim(l) end end
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        if code ~= 0 then
+          notify("No se pudo crear " .. name .. ": " .. (err[1] or ("code " .. code)), vim.log.levels.ERROR)
+          return
+        end
+        -- Una transacción no es código editable: no abrimos source.open.
+        notify(name .. " (transacción) creada.")
+      end)
+    end,
+  })
+end
+
+-- Crea un paquete (firma: package create NAME DESC [--super-package SUPER] [--corrnr T]).
+local function create_package(name, desc, super, corrnr)
+  -- Seguridad §7: aviso si el nombre no parece de cliente (Z/Y o namespace /).
+  if not name:match("^[ZY]") and not name:match("^/") then
+    notify("Aviso: '" .. name .. "' no empieza por Z/Y; SAP puede rechazarlo.", vim.log.levels.WARN)
+  end
+  local args = { "sapcli", "package", "create", name, desc }
+  if super and super ~= "" then vim.list_extend(args, { "--super-package", super:upper() }) end
+  if corrnr and corrnr ~= "" then vim.list_extend(args, { "--corrnr", corrnr }) end
+
+  notify("Creando paquete " .. name .. "...")
+  local err = {}
+  vim.fn.jobstart(args, {
+    on_stderr = function(_, data)
+      for _, l in ipairs(data) do if vim.trim(l) ~= "" then err[#err + 1] = vim.trim(l) end end
+    end,
+    on_exit = function(_, code)
+      vim.schedule(function()
+        if code ~= 0 then
+          notify("No se pudo crear " .. name .. ": " .. (err[1] or ("code " .. code)), vim.log.levels.ERROR)
+          return
+        end
+        -- Un paquete no es código: no abrimos source.open. Ofrecemos explorarlo.
+        notify(name .. " (paquete) creado.")
+        vim.ui.select({ "Sí, explorar " .. name, "No" }, { prompt = "¿Explorar el paquete?" },
+          function(ch)
+            if ch and ch:match("^Sí") then
+              pcall(function() require("sap-nvim.core.browser").browse_package(name) end)
+            end
+          end)
       end)
     end,
   })
@@ -155,6 +224,42 @@ function M.new_object()
           vim.ui.input({ prompt = "Function Group destino: ", default = cfg.function_group or "Z" }, function(fg)
             if not fg or fg == "" then return end
             do_create(spec, name, desc, nil, nil, fg:upper())
+          end)
+          return
+        end
+
+        -- Transacción: tras el paquete y el transporte, pide el TIPO (y el programa
+        -- si es de tipo report). Firma propia de sapcli (-t obligatorio).
+        if spec.group == "transaction" then
+          ask_package(function(pkg)
+            local function pick_type(corrnr)
+              vim.ui.select({ "report", "parameter", "dialog", "oo", "variant" },
+                { prompt = "Tipo de transacción:" }, function(ttype)
+                  ttype = ttype or "report"
+                  if ttype == "report" then
+                    vim.ui.input({ prompt = "Programa (report) de la transacción: ", default = "" },
+                      function(prog)
+                        create_transaction(name, desc, pkg, corrnr, ttype, prog)
+                      end)
+                  else
+                    create_transaction(name, desc, pkg, corrnr, ttype, nil)
+                  end
+                end)
+            end
+            if pkg == "$TMP" then
+              pick_type("")
+            else
+              ask_transport(function(corrnr) pick_type(corrnr) end)
+            end
+          end)
+          return
+        end
+
+        -- Paquete: no se crea DENTRO de otro paquete por este flujo. Pregunta un
+        -- super-paquete opcional y el transporte, y llama a create_package.
+        if spec.group == "package" then
+          vim.ui.input({ prompt = "Super-paquete (vacío = ninguno): ", default = "" }, function(super)
+            ask_transport(function(corrnr) create_package(name, desc, super, corrnr) end)
           end)
           return
         end

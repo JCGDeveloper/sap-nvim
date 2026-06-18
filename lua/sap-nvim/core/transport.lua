@@ -131,6 +131,97 @@ function M.release_transport()
   end)
 end
 
+-- Borrar una orden de transporte (muestra selector y confirma; §7 destructivo)
+function M.delete_transport()
+  if not adt.is_configured() then
+    notify("No hay conexión SAP configurada.", vim.log.levels.WARN)
+    return
+  end
+
+  notify("Obteniendo órdenes de transporte...")
+  adt.fetch_transport_orders(function(transports, err)
+    vim.schedule(function()
+      if not transports or #transports == 0 then
+        notify((err or "No hay órdenes abiertas para borrar."), vim.log.levels.WARN)
+        return
+      end
+
+      vim.ui.select(transports, {
+        prompt = "Seleccionar orden a BORRAR (irreversible):",
+        format_item = function(item) return item end,
+      }, function(choice)
+        if not choice then return end
+        local id = extract_id(choice)
+        if not id then return end
+
+        vim.ui.select({ "No", "Sí, borrar " .. id }, {
+          prompt = "Confirmar borrado (irreversible):",
+        }, function(confirm)
+          if not confirm or not confirm:match("^Sí") then return end
+
+          notify("Borrando " .. id .. "...")
+          vim.fn.jobstart({ "sapcli", "cts", "delete", "transport", id }, {
+            on_exit = function(_, code)
+              vim.schedule(function()
+                if code == 0 then
+                  notify("Orden borrada: " .. id)
+                else
+                  notify("Error borrando " .. id, vim.log.levels.ERROR)
+                end
+              end)
+            end,
+          })
+        end)
+      end)
+    end)
+  end)
+end
+
+-- Reasignar una orden de transporte a otro owner
+function M.reassign_transport()
+  if not adt.is_configured() then
+    notify("No hay conexión SAP configurada.", vim.log.levels.WARN)
+    return
+  end
+
+  notify("Obteniendo órdenes de transporte...")
+  adt.fetch_transport_orders(function(transports, err)
+    vim.schedule(function()
+      if not transports or #transports == 0 then
+        notify((err or "No hay órdenes abiertas para reasignar."), vim.log.levels.WARN)
+        return
+      end
+
+      vim.ui.select(transports, {
+        prompt = "Seleccionar orden a REASIGNAR:",
+        format_item = function(item) return item end,
+      }, function(choice)
+        if not choice then return end
+        local id = extract_id(choice)
+        if not id then return end
+
+        vim.ui.input({ prompt = "Nuevo owner para " .. id .. ": " }, function(owner)
+          if not owner or vim.trim(owner) == "" then return end
+          owner = vim.trim(owner)
+
+          notify("Reasignando " .. id .. " a " .. owner .. "...")
+          vim.fn.jobstart({ "sapcli", "cts", "reassign", "transport", id, owner }, {
+            on_exit = function(_, code)
+              vim.schedule(function()
+                if code == 0 then
+                  notify("Orden " .. id .. " reasignada a " .. owner)
+                else
+                  notify("Error reasignando " .. id, vim.log.levels.ERROR)
+                end
+              end)
+            end,
+          })
+        end)
+      end)
+    end)
+  end)
+end
+
 function M.setup()
   vim.api.nvim_create_user_command("SapTransports", function()
     M.list_transports()
@@ -144,9 +235,19 @@ function M.setup()
     M.release_transport()
   end, { desc = "sap-nvim: Liberar orden de transporte" })
 
-  vim.keymap.set("n", "<leader>atl", M.list_transports,   { desc = "ABAP: Listar transportes" })
-  vim.keymap.set("n", "<leader>atc", M.create_transport,  { desc = "ABAP: Crear transporte" })
-  vim.keymap.set("n", "<leader>atr", M.release_transport, { desc = "ABAP: Liberar transporte" })
+  vim.api.nvim_create_user_command("SapTransportDelete", function()
+    M.delete_transport()
+  end, { desc = "sap-nvim: Borrar orden de transporte" })
+
+  vim.api.nvim_create_user_command("SapTransportReassign", function()
+    M.reassign_transport()
+  end, { desc = "sap-nvim: Reasignar orden de transporte" })
+
+  vim.keymap.set("n", "<leader>atl", M.list_transports,    { desc = "ABAP: Listar transportes" })
+  vim.keymap.set("n", "<leader>atc", M.create_transport,   { desc = "ABAP: Crear transporte" })
+  vim.keymap.set("n", "<leader>atr", M.release_transport,  { desc = "ABAP: Liberar transporte" })
+  vim.keymap.set("n", "<leader>atd", M.delete_transport,   { desc = "ABAP: Borrar transporte" })
+  vim.keymap.set("n", "<leader>ato", M.reassign_transport, { desc = "ABAP: Reasignar transporte (owner)" })
 end
 
 return M
