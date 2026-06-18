@@ -147,21 +147,16 @@ function M.proposals_async(bufnr, line, col, cb)
   local uri = object_uri(bufnr)
   if not uri then cb({}); return end
   local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
-  local q = { uri = uri .. "%23start=" .. line .. "," .. col, signalCompleteness = "true" }
+  -- ?context para includes (cross-include: completar TYPES/vars del TOP, etc.). Sin reintento:
+  -- duplicaba peticiones en posiciones vacías y manoseaba el token (el daemon ya lo gestiona).
+  local q = { uri = uri .. context_suffix(bufnr) .. "%23start=" .. line .. "," .. col, signalCompleteness = "true" }
   adt_http.request_async({
     method = "POST",
     path = "/sap/bc/adt/abapsource/codecompletion/proposal",
     query = q,
     body = src,
   }, function(body)
-    if not body or not body:find("SCC_COMPLETION") then
-      adt_http.reset_token()
-      adt_http.request_async({
-        method = "POST",
-        path = "/sap/bc/adt/abapsource/codecompletion/proposal",
-        query = q, body = src,
-      }, function(body2) cb(M.parse(body2)) end)
-    else
+    do
       cb(M.parse(body))
     end
   end)
@@ -618,17 +613,22 @@ function M.setup()
   -- `K` -> hover ADT. abaplint (LSP) mapea K=vim.lsp.buf.hover en LspAttach (DESPUÉS de nuestro
   -- FileType) y nos lo machaca. Re-asignamos K (diferido) cuando el LSP se engancha a un buffer
   -- ABAP, para que gane el nuestro.
-  vim.api.nvim_create_autocmd("LspAttach", {
-    group = vim.api.nvim_create_augroup("sap_nvim_intel_lsp", { clear = true }),
-    callback = function(ev)
-      if vim.bo[ev.buf].filetype ~= "abap" then return end
-      vim.schedule(function()
-        if vim.api.nvim_buf_is_valid(ev.buf) then
-          pcall(vim.keymap.set, "n", "K", function() M.hover() end,
-            { buffer = ev.buf, desc = "ABAP: Hover ADT (firma/doc)" })
-        end
-      end)
-    end,
+  -- Re-asignar K en LspAttach Y en BufEnter (robusto): gana al hover de LSP pase lo que pase
+  -- con el orden de carga. Solo en buffers ABAP.
+  local function reassert_K(buf)
+    if not vim.api.nvim_buf_is_valid(buf) or vim.bo[buf].filetype ~= "abap" then return end
+    vim.schedule(function()
+      if vim.api.nvim_buf_is_valid(buf) then
+        pcall(vim.keymap.set, "n", "K", function() M.hover() end,
+          { buffer = buf, desc = "ABAP: Hover ADT (firma/doc)" })
+      end
+    end)
+  end
+  local g = vim.api.nvim_create_augroup("sap_nvim_intel_lsp", { clear = true })
+  vim.api.nvim_create_autocmd("LspAttach", { group = g, callback = function(ev) reassert_K(ev.buf) end })
+  vim.api.nvim_create_autocmd({ "BufEnter", "InsertLeave" }, {
+    group = g, pattern = "*",
+    callback = function(ev) if vim.bo[ev.buf].filetype == "abap" then reassert_K(ev.buf) end end,
   })
 
   vim.api.nvim_create_user_command("SapDaemonTest", function() M.daemon_test() end,
