@@ -1,23 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
-# adt_daemon.py - Daemon de larga vida que mantiene UNA conexion HTTPS keep-alive
-# contra la API ADT de SAP y la reutiliza para todas las peticiones (replica el
-# mecanismo de `abap-adt-api` de la extension de VSCode).
+# adt_daemon.py - Daemon de larga vida que mantiene un POOL de conexiones HTTPS keep-alive
+# contra la API ADT de SAP y las reutiliza, atendiendo peticiones EN PARALELO (como hace la
+# extension de VSCode con axios/HTTP keep-alive multiplexado). Asi el completado NO espera en
+# cola detras del syntax-check ni de otras peticiones -> instantaneo.
 #
-# Idea clave: el handshake TLS y el login (CSRF + cookies) se hacen UNA sola vez
-# al arrancar. Despues cada peticion ADT viaja por la MISMA conexion ya abierta,
-# asi que no se paga handshake por llamada. Un hilo de keep-alive hace ping cada
-# 120s a /sap/bc/adt/compatibility/graph para no perder la sesion del servidor.
+# Idea clave: login UNA vez (CSRF + cookies). Despues, varias conexiones calientes en un pool;
+# cada peticion entrante se atiende en su propio hilo con una conexion del pool (sin pagar
+# handshake). stdout se escribe bajo lock. Protocolo: JSON por linea en stdin/stdout.
+#   IN : {"id":int,"method":..,"path":..,"query":{..}?,"body":..?,"accept":..?,"content_type":..?,"stateful":bool?}
+#   OUT: {"id":int,"status":int,"body":".."}
 #
-# Protocolo: linea-a-linea por stdin/stdout, un objeto JSON por linea.
-#   IN : {"id":int,"method":"GET|POST|PUT","path":"/sap/bc/adt/...",
-#         "query":{k:v}?, "body":"..."?, "accept":"..."?, "content_type":"..."?,
-#         "stateful":bool?}
-#   OUT: {"id":int,"status":int,"body":"..."}
-#
-# Solo stdlib. El daemon NUNCA termina por una peticion fallida; solo termina si
-# stdin se cierra (EOF).
+# Lanzar con `python3 -u` (sin buffer) — el cliente Lua lo hace.
 
 import base64
 import http.client
@@ -28,11 +23,10 @@ import sys
 import threading
 import time
 
-# ── Endpoint usado para login y keep-alive (igual que abap-adt-api) ───────────
 GRAPH_PATH = "/sap/bc/adt/compatibility/graph"
 KEEPALIVE_SECS = 120
+POOL_MAX = 6  # nº máx de conexiones calientes simultáneas
 
-# Log a fichero (legible desde fuera para depurar en el nvim real del usuario).
 _LOG = os.path.expanduser("~/.cache/nvim/sap-nvim/daemon.log")
 
 
@@ -47,44 +41,30 @@ def log(msg):
 
 class AdtDaemon:
     def __init__(self):
-        # Credenciales via entorno (las inyecta el cliente Lua).
         base = os.environ.get("ADT_BASE", "")
         self.client = os.environ.get("ADT_CLIENT", "")
         user = os.environ.get("ADT_USER", "")
         password = os.environ.get("ADT_PASS", "")
-
-        # Parsear ADT_BASE -> host/port y si es https.
         self.host, self.port, self.is_https = self._parse_base(base)
-
-        # Cabecera de autenticacion basica para TODAS las peticiones.
         token = base64.b64encode(("%s:%s" % (user, password)).encode("utf-8"))
         self.authorization = "Basic " + token.decode("ascii")
-
-        # Contexto SSL que NO verifica el cert (el sistema usa self-signed).
         self.ctx = ssl._create_unverified_context()
 
-        # Estado de la sesion.
-        self.conn = None
         self.csrf = None
-        self.cookies = None  # string ya listo para la cabecera Cookie
+        self.cookies = None
+        self.state_lock = threading.Lock()   # protege csrf/cookies
+        self.pool = []                        # conexiones libres
+        self.pool_lock = threading.Lock()
+        self.out_lock = threading.Lock()      # serializa SOLO la escritura a stdout
 
-        # Un unico lock para serializar el uso de la conexion (peticiones y ping
-        # no deben solaparse en la misma conexion HTTP).
-        self.lock = threading.Lock()
-
-    # ── Helpers ───────────────────────────────────────────────────────────────
     @staticmethod
     def _parse_base(base):
-        """Devuelve (host, port, is_https) a partir de 'https://host:44310'."""
         is_https = True
         rest = base
         if rest.startswith("https://"):
             rest = rest[len("https://"):]
-            is_https = True
         elif rest.startswith("http://"):
-            rest = rest[len("http://"):]
-            is_https = False
-        # Quitar cualquier path sobrante.
+            rest = rest[len("http://"):]; is_https = False
         slash = rest.find("/")
         if slash != -1:
             rest = rest[:slash]
@@ -95,19 +75,37 @@ class AdtDaemon:
             except ValueError:
                 port = 443 if is_https else 80
         else:
-            host = rest
-            port = 443 if is_https else 80
+            host, port = rest, (443 if is_https else 80)
         return host, port, is_https
 
     def _new_conn(self):
-        """Crea una conexion nueva (https o http) segun ADT_BASE. timeout: un fallo de red
-        no debe colgar el daemon para siempre (se reconecta y reintenta)."""
         if self.is_https:
             return http.client.HTTPSConnection(self.host, self.port, context=self.ctx, timeout=30)
         return http.client.HTTPConnection(self.host, self.port, timeout=30)
 
+    def _get_conn(self):
+        with self.pool_lock:
+            if self.pool:
+                return self.pool.pop()
+        return self._new_conn()
+
+    def _release_conn(self, conn, ok):
+        if not ok:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return
+        with self.pool_lock:
+            if len(self.pool) < POOL_MAX:
+                self.pool.append(conn)
+            else:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
     def _build_url(self, path, query):
-        """Anade sap-client y query params al path."""
         url = path
         sep = "&" if ("?" in url) else "?"
         url = url + sep + "sap-client=" + self.client
@@ -116,200 +114,131 @@ class AdtDaemon:
                 url = url + "&" + str(k) + "=" + str(v)
         return url
 
-    def _store_cookies(self, resp):
-        """Guarda las cookies de las cabeceras set-cookie de la respuesta."""
-        pairs = []
-        # getheaders() devuelve lista de tuplas; recogemos TODAS las set-cookie.
-        for name, value in resp.getheaders():
-            if name.lower() == "set-cookie":
-                # Nos quedamos solo con la parte 'k=v' (antes del primer ';').
-                cookie = value.split(";", 1)[0].strip()
-                if cookie:
-                    pairs.append(cookie)
-        if pairs:
-            self.cookies = "; ".join(pairs)
+    def _store_session(self, resp):
+        with self.state_lock:
+            pairs = []
+            for name, value in resp.getheaders():
+                ln = name.lower()
+                if ln == "set-cookie":
+                    c = value.split(";", 1)[0].strip()
+                    if c:
+                        pairs.append(c)
+                elif ln == "x-csrf-token":
+                    v = (value or "").strip()
+                    if v and v.lower() not in ("required", "fetch"):
+                        self.csrf = v
+            if pairs:
+                self.cookies = "; ".join(pairs)
 
-    def _store_csrf(self, resp):
-        """Actualiza el token CSRF si el servidor manda uno nuevo."""
-        for name, value in resp.getheaders():
-            if name.lower() == "x-csrf-token":
-                v = (value or "").strip()
-                # El server puede mandar 'Required' o vacio; solo guardamos tokens reales.
-                if v and v.lower() not in ("required", "fetch"):
-                    self.csrf = v
-                return
-
-    # ── Login: abre conexion y obtiene CSRF + cookies ──────────────────────────
     def login(self):
-        """Abre/reabre la conexion y hace el login (CSRF fetch + cookies)."""
-        try:
-            if self.conn is not None:
-                try:
-                    self.conn.close()
-                except Exception:
-                    pass
-            self.conn = self._new_conn()
+        conn = self._new_conn()
+        with self.state_lock:
             self.csrf = None
             self.cookies = None
-            url = self._build_url(GRAPH_PATH, None)
-            headers = {
-                "Authorization": self.authorization,
-                "x-csrf-token": "fetch",
-                "Accept": "application/*",
-            }
-            self.conn.request("GET", url, headers=headers)
-            resp = self.conn.getresponse()
-            self._store_csrf(resp)
-            self._store_cookies(resp)
-            resp.read()  # vaciar el body para reutilizar la conexion
-            return True
-        except Exception:
-            return False
+        url = self._build_url(GRAPH_PATH, None)
+        conn.request("GET", url, headers={
+            "Authorization": self.authorization, "x-csrf-token": "fetch", "Accept": "application/*",
+        })
+        resp = conn.getresponse()
+        self._store_session(resp)
+        resp.read()
+        with self.pool_lock:
+            self.pool.append(conn)
+        return True
 
-    # ── Una peticion HTTP sobre la conexion persistente ────────────────────────
-    def _do_request(self, method, url, headers, body):
-        """Lanza una peticion y devuelve (status, body_str). Puede lanzar excepcion."""
-        self.conn.request(method, url, body=body, headers=headers)
-        resp = self.conn.getresponse()
-        raw = resp.read()
-        # Actualizar estado de sesion desde la respuesta.
-        self._store_cookies(resp)
-        self._store_csrf(resp)
-        text = raw.decode("utf-8", errors="replace")
-        return resp.status, text
+    def _headers(self, method, accept, content_type, stateful):
+        with self.state_lock:
+            csrf, cookies = self.csrf, self.cookies
+        h = {"Authorization": self.authorization}
+        if cookies:
+            h["Cookie"] = cookies
+        h["Accept"] = accept or "*/*"  # ADT exige Accept; curl manda */* por defecto.
+        if content_type:
+            h["Content-Type"] = content_type
+        if method != "GET" and csrf:
+            h["x-csrf-token"] = csrf
+        if stateful:
+            h["X-sap-adt-sessiontype"] = "stateful"
+        return h
 
     def handle(self, req):
-        """Procesa una peticion del cliente. Devuelve dict respuesta."""
         rid = req.get("id")
         method = (req.get("method") or "GET").upper()
-        path = req.get("path") or "/"
-        query = req.get("query")
+        url = self._build_url(req.get("path") or "/", req.get("query"))
         body = req.get("body")
-        accept = req.get("accept")
-        content_type = req.get("content_type")
-        stateful = req.get("stateful")
+        body_bytes = body.encode("utf-8") if body is not None else None
+        headers = self._headers(method, req.get("accept"), req.get("content_type"), req.get("stateful"))
 
-        url = self._build_url(path, query)
-
-        # Body a bytes (http.client lo prefiere asi).
-        body_bytes = None
-        if body is not None:
-            body_bytes = body.encode("utf-8")
-
-        def build_headers():
-            headers = {"Authorization": self.authorization}
-            if self.cookies:
-                headers["Cookie"] = self.cookies
-            # ADT EXIGE un Accept; curl manda '*/*' por defecto y por eso funcionaba.
-            # http.client NO añade ninguno -> el server responde 400 "Accept header missing".
-            headers["Accept"] = accept or "*/*"
-            if content_type:
-                headers["Content-Type"] = content_type
-            if method != "GET" and self.csrf:
-                headers["x-csrf-token"] = self.csrf
-            if stateful:
-                headers["X-sap-adt-sessiontype"] = "stateful"
-            return headers
-
-        with self.lock:
-            # Asegurar que hay conexion (primer uso / tras caida).
-            if self.conn is None:
-                self.login()
+        last_err = None
+        for attempt in (1, 2):  # reintento con conexión nueva si la del pool estaba muerta
+            conn = self._get_conn()
             try:
-                status, text = self._do_request(method, url, build_headers(), body_bytes)
-                return {"id": rid, "status": status, "body": text}
-            except (http.client.CannotSendRequest,
-                    http.client.BadStatusLine,
-                    http.client.ResponseNotReady,
-                    ConnectionError,
-                    OSError):
-                # Conexion caida: reconectar + re-login y REINTENTAR una vez.
-                try:
-                    self.login()
-                    status, text = self._do_request(method, url, build_headers(), body_bytes)
-                    return {"id": rid, "status": status, "body": text}
-                except Exception as e2:
-                    return {"id": rid, "status": 0, "body": "reconnect failed: " + str(e2)}
+                conn.request(method, url, body=body_bytes, headers=headers)
+                resp = conn.getresponse()
+                raw = resp.read()
+                self._store_session(resp)
+                self._release_conn(conn, True)
+                return {"id": rid, "status": resp.status, "body": raw.decode("utf-8", errors="replace")}
             except Exception as e:
-                return {"id": rid, "status": 0, "body": str(e)}
-
-    # ── Hilo de keep-alive ─────────────────────────────────────────────────────
-    def _keepalive_loop(self):
-        """Ping periodico para no perder la sesion del servidor."""
-        stop = threading.Event()
-        url = self._build_url(GRAPH_PATH, None)
-        while not stop.wait(KEEPALIVE_SECS):
-            with self.lock:
-                if self.conn is None:
+                last_err = e
+                self._release_conn(conn, False)
+                if attempt == 1:
                     continue
-                try:
-                    headers = {"Authorization": self.authorization}
-                    if self.cookies:
-                        headers["Cookie"] = self.cookies
-                    headers["Accept"] = "application/*"
-                    self.conn.request("GET", url, headers=headers)
-                    resp = self.conn.getresponse()
-                    self._store_cookies(resp)
-                    self._store_csrf(resp)
-                    resp.read()
-                except Exception:
-                    # Si el ping falla, intentamos reconectar para la proxima.
-                    try:
-                        self.login()
-                    except Exception:
-                        pass
+        return {"id": rid, "status": 0, "body": "request failed: " + str(last_err)}
 
-    def start_keepalive(self):
-        t = threading.Thread(target=self._keepalive_loop, name="adt-keepalive")
-        t.daemon = True
-        t.start()
+    def _respond(self, obj):
+        line = json.dumps(obj) + "\n"
+        with self.out_lock:
+            try:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+            except Exception:
+                pass
 
-    # ── Bucle principal ────────────────────────────────────────────────────────
+    def _serve(self, req):
+        try:
+            resp = self.handle(req)
+        except Exception as e:
+            resp = {"id": req.get("id"), "status": 0, "body": str(e)}
+            log("HANDLE EXC " + repr(e))
+        self._respond(resp)
+
+    def _keepalive_loop(self):
+        while True:
+            time.sleep(KEEPALIVE_SECS)
+            try:
+                conn = self._get_conn()
+                conn.request("GET", self._build_url(GRAPH_PATH, None), headers=self._headers("GET", "application/*", None, None))
+                r = conn.getresponse(); self._store_session(r); r.read()
+                self._release_conn(conn, True)
+            except Exception:
+                pass  # se recupera en la próxima petición real
+
     def run(self):
-        log("START host=%s port=%s https=%s" % (self.host, self.port, self.is_https))
-        # Login inicial (si falla, igualmente seguimos; cada peticion reintenta).
+        log("START host=%s port=%s pool=%d" % (self.host, self.port, POOL_MAX))
         try:
             t = time.time()
-            ok = self.login()
-            log("LOGIN ok=%s csrf=%s cookies=%s %.0fms" % (ok, bool(self.csrf), bool(self.cookies), (time.time() - t) * 1000))
+            self.login()
+            log("LOGIN csrf=%s cookies=%s %.0fms" % (bool(self.csrf), bool(self.cookies), (time.time() - t) * 1000))
         except Exception as e:
             log("LOGIN EXC " + repr(e))
-        self.start_keepalive()
+        threading.Thread(target=self._keepalive_loop, daemon=True).start()
 
-        # IMPORTANTE: usar readline() en bucle, NO `for line in sys.stdin` (este aplica
-        # buffering de lectura adelantada y NO entrega cada linea al recibirla por un pipe
-        # -> las respuestas no salian hasta acumular buffer/EOF). readline() entrega ya.
+        # Lee peticiones y atiende CADA UNA EN SU HILO (paralelo, como VSCode). readline()
+        # entrega línea a línea (con `python3 -u`).
         while True:
             line = sys.stdin.readline()
             if not line:
-                break  # EOF -> fin del daemon
+                break
             line = line.strip()
             if not line:
                 continue
             try:
                 req = json.loads(line)
             except Exception:
-                # JSON invalido: respondemos sin morir. No tenemos id fiable.
                 self._respond({"id": None, "status": 0, "body": "bad request"})
                 continue
-            log("REQ id=%s %s %s" % (req.get("id"), req.get("method"), (req.get("path") or "")[:60]))
-            t = time.time()
-            try:
-                resp = self.handle(req)
-                log("RESP id=%s status=%s len=%s %.0fms" % (resp.get("id"), resp.get("status"),
-                    len(resp.get("body") or ""), (time.time() - t) * 1000))
-            except Exception as e:
-                resp = {"id": req.get("id"), "status": 0, "body": str(e)}
-                log("HANDLE EXC " + repr(e))
-            self._respond(resp)
-
-    @staticmethod
-    def _respond(obj):
-        try:
-            sys.stdout.write(json.dumps(obj) + "\n")
-            sys.stdout.flush()
-        except Exception:
-            pass
+            threading.Thread(target=self._serve, args=(req,), daemon=True).start()
 
 
 def main():
