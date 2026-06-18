@@ -306,66 +306,57 @@ function M.document_highlight()
 	end
 end
 
--- ── HOVER (elementinfo): firma + documentación del símbolo bajo el cursor ─────
+-- Variable global (privada al módulo) para rastrear la ventana flotante
+local hover_win = nil
+
 function M.hover()
+	-- Si la ventana ya existe y es válida, saltamos dentro de ella
+	if hover_win and vim.api.nvim_win_is_valid(hover_win) then
+		vim.api.nvim_set_current_win(hover_win)
+		return
+	end
+
+	local adt_http = require("sap-nvim.core.adt_http")
 	if not adt_http.is_available() then
-		notify("ADT no disponible.", vim.log.levels.WARN)
 		return
 	end
+
 	local bufnr = vim.api.nvim_get_current_buf()
-	local uri = object_uri(bufnr)
-	if not uri then
-		notify("No es un objeto SAP abierto con sap-nvim.", vim.log.levels.WARN)
-		return
-	end
-	local row, col = unpack(vim.api.nvim_win_get_cursor(0))
-	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
-
-	local body = adt_http.request({
-		method = "POST",
-		path = "/sap/bc/adt/abapsource/codecompletion/elementinfo",
-		query = { uri = uri .. context_suffix(bufnr) .. "%23start=" .. row .. "," .. col },
-		body = src,
-	})
-	if not body or not body:find("elementInfo") then
-		notify("Sin información aquí.")
+	local target =
+		M.definition_target(bufnr, vim.api.nvim_win_get_cursor(0)[1], vim.api.nvim_win_get_cursor(0)[2], "definition")
+	if not target then
 		return
 	end
 
-	local name = body:match('adtcore:name="([^"]*)"')
-	local typ = body:match('adtcore:type="([^"]*)"')
-	local md = { "## " .. (name or "?") .. (typ and ("  `" .. typ .. "`") or "") }
-	-- Propiedades SOLO del elemento principal (primer bloque <properties>), no de cada
-	-- método/atributo anidado (que serían cientos).
-	local first_props = body:match("<abapsource:properties>(.-)</abapsource:properties>")
-	if first_props then
-		local props = {}
-		for k, v in first_props:gmatch('abapsource:key="([^"]*)"[^>]*>([^<]*)</abapsource:entry>') do
-			props[#props + 1] = k .. ": " .. v
-		end
-		if #props > 0 then
-			md[#md + 1] = "_" .. table.concat(props, " · ") .. "_"
-		end
-	end
-	-- Documentación (1ª, sin tags HTML, sin duplicar).
-	local seen = {}
-	for doc in body:gmatch("<abapsource:documentation[^>]*>(.-)</abapsource:documentation>") do
-		doc = vim.trim(unxml(doc):gsub("<[^>]->", "")) -- quita <p ...> etc.
-		if doc ~= "" and not seen[doc] then
-			seen[doc] = true
-			md[#md + 1] = ""
-			md[#md + 1] = doc
-		end
+	local source_uri = target.uri or ("/sap/bc/adt/oo/classes/" .. target.name:lower() .. "/source/main")
+	local body = adt_http.request({ method = "GET", path = source_uri, accept = "text/plain" })
+	if not body then
+		return
 	end
 
-	-- open_floating_preview con focus_id => 2ª pulsación de K entra en la ventana y se
-	-- navega con hjkl (bloqueable, como VSCode).
-	vim.lsp.util.open_floating_preview(md, "markdown", {
-		focus_id = "sap_hover",
+	body = body:gsub("\r", "")
+	local lines = vim.split(body, "\n")
+	local preview = {}
+	for i = 1, math.min(#lines, 40) do
+		preview[#preview + 1] = lines[i]
+	end
+
+	-- Abrimos la ventana y guardamos el ID en 'hover_win'
+	local win, _ = vim.lsp.util.open_floating_preview(preview, "abap", {
 		border = "rounded",
 		focusable = true,
-		max_width = 90,
+		width = 100,
+		height = 25,
 	})
+	hover_win = win
+
+	-- Mapeo local dentro de la ventana de hover para cerrar al pulsar 'q'
+	vim.keymap.set("n", "q", function()
+		if hover_win and vim.api.nvim_win_is_valid(hover_win) then
+			vim.api.nvim_win_close(hover_win, true)
+			hover_win = nil
+		end
+	end, { buffer = vim.api.nvim_win_get_buf(win) })
 end
 
 -- ── GO-TO-DEFINITION / TYPE (navigation/target): abre la definición del símbolo ──
@@ -806,115 +797,96 @@ function M.daemon_test()
 end
 
 function M.setup()
-	-- Diagnósticos del syntax-check SAP: mostrarlos TAMBIÉN en modo insert (como VSCode). Por
-	-- defecto nvim no los pinta hasta salir de insert (update_in_insert=false).
+	-- Diagnósticos del syntax-check SAP
 	pcall(vim.diagnostic.config, { update_in_insert = true }, CHECK_NS)
 
-	-- `K` -> hover ADT. abaplint (LSP) mapea K=vim.lsp.buf.hover en LspAttach (DESPUÉS de nuestro
-	-- FileType) y nos lo machaca. Re-asignamos K (diferido) cuando el LSP se engancha a un buffer
-	-- ABAP, para que gane el nuestro.
-	-- Re-asignar K en LspAttach Y en BufEnter (robusto): gana al hover de LSP pase lo que pase
-	-- con el orden de carga. Solo en buffers ABAP.
-	local function reassert_K(buf)
-		if not vim.api.nvim_buf_is_valid(buf) or vim.bo[buf].filetype ~= "abap" then
-			return
-		end
-		vim.schedule(function()
-			if vim.api.nvim_buf_is_valid(buf) then
-				pcall(vim.keymap.set, "n", "K", function()
-					M.hover()
-				end, { buffer = buf, desc = "ABAP: Hover ADT (firma/doc)" })
-			end
-		end)
+	-- Función auxiliar para blindar la tecla K contra otros LSPs
+	local function set_k_mapping(buf)
+		vim.keymap.set("n", "K", function()
+			M.hover()
+		end, { buffer = buf, desc = "ABAP: Hover/Navegar", nowait = true })
 	end
+
 	local g = vim.api.nvim_create_augroup("sap_nvim_intel_lsp", { clear = true })
-	vim.api.nvim_create_autocmd("LspAttach", {
+
+	-- Blindaje en LspAttach y BufEnter
+	vim.api.nvim_create_autocmd({ "LspAttach", "BufEnter" }, {
 		group = g,
-		callback = function(ev)
-			reassert_K(ev.buf)
-		end,
-	})
-	vim.api.nvim_create_autocmd({ "BufEnter", "InsertLeave" }, {
-		group = g,
-		pattern = "*",
 		callback = function(ev)
 			if vim.bo[ev.buf].filetype == "abap" then
-				reassert_K(ev.buf)
+				set_k_mapping(ev.buf)
 			end
 		end,
 	})
 
+	-- ... [Tus otros comandos SapDaemonTest, SapDiag, etc. se quedan igual aquí] ...
 	vim.api.nvim_create_user_command("SapDaemonTest", function()
 		M.daemon_test()
-	end, { desc = "sap-nvim: Probar la conexión persistente (daemon) — count + latencia" })
+	end, { desc = "sap-nvim: Probar daemon" })
 	vim.api.nvim_create_user_command("SapDiag", function()
 		M.diag()
-	end, { desc = "sap-nvim: Diagnóstico del completado (filetype/sap_obj/URI/ADT/propuestas)" })
+	end, { desc = "sap-nvim: Diagnóstico" })
 	vim.api.nvim_create_user_command("SapSetMainProgram", function()
 		M.change_include()
-	end, { desc = "sap-nvim: Fijar el programa principal del include (gd/hover cross-include)" })
+	end, { desc = "sap-nvim: Fijar programa principal" })
 	vim.api.nvim_create_user_command("SapComplete", function()
 		M.complete()
-	end, { desc = "sap-nvim: Completado ADT (métodos/atributos del sistema)" })
+	end, { desc = "sap-nvim: Completado ADT" })
 	vim.api.nvim_create_user_command("SapCheck", function()
 		M.check_syntax()
-	end, { desc = "sap-nvim: Syntax check de SAP (diagnósticos con posición exacta)" })
+	end, { desc = "sap-nvim: Syntax check" })
 	vim.api.nvim_create_user_command("SapHover", function()
 		M.hover()
-	end, { desc = "sap-nvim: Hover ADT (firma + documentación)" })
+	end, { desc = "sap-nvim: Hover ADT" })
 	vim.api.nvim_create_user_command("SapReferences", function()
 		M.references()
-	end, { desc = "sap-nvim: Referencias del símbolo (usageReferences)" })
+	end, { desc = "sap-nvim: Referencias" })
 	vim.api.nvim_create_user_command("SapGotoType", function()
 		M.goto_definition("typeDefinition")
-	end, { desc = "sap-nvim: Ir al tipo del símbolo bajo el cursor" })
+	end, { desc = "sap-nvim: Ir al tipo" })
 	vim.api.nvim_create_user_command("SapGotoImpl", function()
 		if not M.goto_definition("implementation") then
 			notify("Sin implementación.")
 		end
-	end, { desc = "sap-nvim: Ir a la implementación del método/interfaz" })
+	end, { desc = "sap-nvim: Ir a implementación" })
 	vim.api.nvim_create_user_command("SapTypeHierarchy", function()
 		M.type_hierarchy(false)
-	end, { desc = "sap-nvim: Subtipos del tipo bajo el cursor (jerarquía de tipos)" })
+	end, { desc = "sap-nvim: Subtipos" })
 	vim.api.nvim_create_user_command("SapSuperTypes", function()
 		M.type_hierarchy(true)
-	end, { desc = "sap-nvim: Supertipos del tipo bajo el cursor (jerarquía de tipos)" })
+	end, { desc = "sap-nvim: Supertipos" })
 
+	-- Autocmd principal para configuraciones ABAP
 	vim.api.nvim_create_autocmd("FileType", {
 		pattern = "abap",
 		group = vim.api.nvim_create_augroup("sap_nvim_intel", { clear = true }),
 		callback = function(ev)
 			local b = ev.buf
 			vim.bo[b].omnifunc = "v:lua.require'sap-nvim.core.intel'.omnifunc"
-			-- K (Shift-K): hover ADT (bloqueable: 2ª K entra a la ventana, hjkl para scroll).
-			vim.keymap.set("n", "K", function()
-				M.hover()
-			end, { buffer = b, desc = "ABAP: Hover ADT (firma/doc)" })
-			-- gr: referencias del símbolo (picker).
+
+			-- Asignamos K y otros mapeos de navegación
+			set_k_mapping(b)
 			vim.keymap.set("n", "gr", function()
 				M.references()
-			end, { buffer = b, desc = "ABAP: Referencias (usageReferences)" })
-			-- gy: ir al tipo del dato bajo el cursor.
+			end, { buffer = b, desc = "ABAP: Referencias" })
 			vim.keymap.set("n", "gy", function()
 				if not M.goto_definition("typeDefinition") then
-					notify("Sin tipo para el símbolo.")
+					notify("Sin tipo.")
 				end
-			end, { buffer = b, desc = "ABAP: Ir al tipo del dato" })
-			-- gI: ir a la implementación (de un método de interfaz, etc.).
+			end, { buffer = b, desc = "ABAP: Ir al tipo" })
 			vim.keymap.set("n", "gI", function()
 				if not M.goto_definition("implementation") then
 					notify("Sin implementación.")
 				end
 			end, { buffer = b, desc = "ABAP: Ir a la implementación" })
-			-- gh / gH: jerarquía de tipos (subtipos / supertipos).
 			vim.keymap.set("n", "gh", function()
 				M.type_hierarchy(false)
-			end, { buffer = b, desc = "ABAP: Subtipos (type hierarchy)" })
+			end, { buffer = b, desc = "ABAP: Subtipos" })
 			vim.keymap.set("n", "gH", function()
 				M.type_hierarchy(true)
-			end, { buffer = b, desc = "ABAP: Supertipos (type hierarchy)" })
+			end, { buffer = b, desc = "ABAP: Supertipos" })
 
-			-- Document highlights: resaltar apariciones del símbolo al reposar el cursor.
+			-- Highlight y resto de lógica (CursorHold, SyntaxCheck, etc.) igual que tenías
 			vim.api.nvim_create_autocmd("CursorHold", {
 				buffer = b,
 				callback = function()
@@ -928,19 +900,13 @@ function M.setup()
 				end,
 			})
 
-			-- Calienta la conexión persistente (daemon) al abrir el objeto, para que el primer
-			-- completado/hover ya vaya CALIENTE (instantáneo, como VSCode al abrir el FS remoto).
 			if vim.b[b].sap_obj then
 				pcall(function()
 					adt_http.warmup()
 				end)
-			end
-
-			-- Syntax check de SAP EN VIVO (como VSCode): al escribir (debounce) y al guardar.
-			-- Solo para objetos remotos (sap_obj).
-			if vim.b[b].sap_obj then
 				M.check_syntax(b)
 			end
+
 			vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
 				buffer = b,
 				callback = function()
