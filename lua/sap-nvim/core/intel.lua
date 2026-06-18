@@ -26,6 +26,11 @@ local function object_uri(bufnr)
   local meta = vim.b[bufnr].sap_obj
   local group = meta and meta.group or objtype.group(vim.api.nvim_buf_get_name(bufnr))
   local name = meta and meta.name or objtype.name(vim.api.nvim_buf_get_name(bufnr))
+  -- Módulo de función: su URI cuelga del grupo de funciones, no hay plantilla en ADT_URI.
+  if meta and meta.group == "functionmodule" and meta.fgroup then
+    return "/sap/bc/adt/functions/groups/" .. meta.fgroup:lower()
+      .. "/fmodules/" .. meta.name:lower() .. "/source/main"
+  end
   local tmpl = group and ADT_URI[group]
   if not tmpl or not name or name == "" then return nil end
   return tmpl:format(name:lower())

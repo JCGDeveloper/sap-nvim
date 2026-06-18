@@ -69,11 +69,28 @@ function M.open(name, group, opts)
     return
   end
 
+  -- Los módulos de función necesitan su GRUPO de funciones: `functionmodule read GROUP NAME`.
+  -- Si no nos lo pasaron, lo pedimos y reintentamos open con opts.fgroup puesto.
+  local fgroup = opts.fgroup
+  if group == "functionmodule" and (not fgroup or fgroup == "") then
+    vim.ui.input({ prompt = "Grupo de funciones: " }, function(input)
+      if not input or input == "" then return end
+      opts.fgroup = vim.trim(input)
+      M.open(name, group, opts)
+    end)
+    return
+  end
+
   local path = M.cache_dir() .. "/" .. objtype.gitfile(group, name)
   notify("Leyendo " .. name .. " (" .. group .. ") desde SAP...")
 
+  -- Comando de lectura: el FM lleva GRUPO antes del nombre; el resto, el nombre a secas.
+  local read_args = (group == "functionmodule")
+    and { "sapcli", "functionmodule", "read", fgroup, name }
+    or { "sapcli", group, "read", name }
+
   local out, err = {}, {}
-  vim.fn.jobstart({ "sapcli", group, "read", name }, {
+  vim.fn.jobstart(read_args, {
     on_stdout = function(_, data)
       for _, l in ipairs(data) do table.insert(out, l) end
     end,
@@ -94,7 +111,7 @@ function M.open(name, group, opts)
         vim.fn.writefile(out, path)
         vim.cmd("edit! " .. vim.fn.fnameescape(path))
         local bufnr = vim.api.nvim_get_current_buf()
-        vim.b[bufnr].sap_obj = { name = name, group = group }
+        vim.b[bufnr].sap_obj = { name = name, group = group, fgroup = fgroup }
         vim.bo[bufnr].filetype = "abap"
         if opts.line then
           pcall(vim.api.nvim_win_set_cursor, 0, { opts.line, opts.col or 0 })
@@ -182,7 +199,10 @@ function M.push(bufnr, activate)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
   M.resolve_transport(function(corrnr)
-    local args = { "sapcli", obj.group, "write", obj.name, "-" }
+    -- El FM mete su GRUPO de funciones antes del nombre: `functionmodule write GROUP NAME -`.
+    local args = (obj.group == "functionmodule")
+      and { "sapcli", "functionmodule", "write", obj.fgroup, obj.name, "-" }
+      or { "sapcli", obj.group, "write", obj.name, "-" }
     if corrnr then vim.list_extend(args, { "--corrnr", corrnr }) end
     if activate then table.insert(args, "-a") end
 
@@ -316,6 +336,17 @@ function M.setup()
   vim.api.nvim_create_user_command("SapDelete", function()
     M.delete(nil)
   end, { desc = "sap-nvim: Borrar el objeto actual del sistema (con confirmación)" })
+
+  vim.api.nvim_create_user_command("SapOpenFunction", function()
+    -- Un módulo de función necesita GRUPO + NOMBRE: pedimos ambos y abrimos.
+    vim.ui.input({ prompt = "Grupo de funciones: " }, function(grupo)
+      if not grupo or grupo == "" then return end
+      vim.ui.input({ prompt = "Módulo de función: " }, function(nombre)
+        if not nombre or nombre == "" then return end
+        M.open(vim.trim(nombre), "functionmodule", { fgroup = vim.trim(grupo) })
+      end)
+    end)
+  end, { desc = "sap-nvim: Abrir un módulo de función (pide grupo y nombre)" })
 
   vim.keymap.set("n", "<leader>au", function() M.push(nil, false) end,
     { desc = "ABAP: Subir (push) objeto a SAP sin activar" })
