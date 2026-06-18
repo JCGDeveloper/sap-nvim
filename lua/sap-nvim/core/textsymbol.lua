@@ -35,18 +35,39 @@ local function show(bufname, lines)
   vim.keymap.set("n", "-", "<cmd>close<cr>", { buffer = b, nowait = true })
 end
 
--- VER los elementos de texto del programa (cursor o nombre dado).
+-- Las 3 categorías de elementos de texto que expone ADT (igual que la extensión de VSCode
+-- `getTextElements`): símbolos de texto (TEXT-xxx), textos de selección (PARAMETERS/
+-- SELECT-OPTIONS) y encabezados de lista. Cada una con su Accept propio.
+local CATEGORIES = {
+  { cat = "symbols",    label = "Símbolos de texto (TEXT-xxx)" },
+  { cat = "selections", label = "Textos de selección (PARAMETERS / SELECT-OPTIONS)" },
+  { cat = "headings",   label = "Encabezados de lista" },
+}
+
+-- VER los elementos de texto del programa (cursor o nombre dado): las 3 categorías juntas.
 function M.open(progname)
   local name = progname or program_of_buffer()
   if not name then notify("Abre el programa o indica su nombre.", vim.log.levels.WARN); return end
   name = name:lower()
-  local sym_uri = "/sap/bc/adt/textelements/programs/" .. name .. "/source/symbols"
   notify("Leyendo elementos de texto de " .. name:upper() .. "...")
-  local body = adt_http.raw({ path = sym_uri, accept = SYM_CT })
-  if not body or body == "" or body:match("Exception") or body:match("<html") then
+  local lines = {}
+  local any = false
+  for _, c in ipairs(CATEGORIES) do
+    local uri = "/sap/bc/adt/textelements/programs/" .. name .. "/source/" .. c.cat
+    local body = adt_http.raw({ path = uri, accept = "application/vnd.sap.adt.textelements." .. c.cat .. ".v1" })
+    lines[#lines + 1] = "── " .. c.label .. " ──"
+    if body and body ~= "" and not body:match("Exception") and not body:match("<html") then
+      any = true
+      for _, l in ipairs(vim.split(body:gsub("%s+$", ""), "\n")) do lines[#lines + 1] = l end
+    else
+      lines[#lines + 1] = "(ninguno)"
+    end
+    lines[#lines + 1] = ""
+  end
+  if not any then
     notify("Sin elementos de texto o no accesibles para " .. name:upper(), vim.log.levels.WARN); return
   end
-  show("sap-textsymbols://" .. name:upper(), vim.split(body, "\n"))
+  show("sap-textelements://" .. name:upper(), lines)
 end
 
 -- Creación desde un MESSAGE — pendiente (ver cabecera). Avisa con claridad.
