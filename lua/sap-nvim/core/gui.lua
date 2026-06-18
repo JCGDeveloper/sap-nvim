@@ -76,6 +76,42 @@ function M.run_program(progname)
   end
 end
 
+-- Muestra texto en un split de solo lectura (q/- cierra).
+local function show(bufname, lines)
+  local b = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
+  vim.bo[b].modifiable = false; vim.bo[b].buftype = "nofile"
+  pcall(vim.api.nvim_buf_set_name, b, bufname)
+  vim.cmd("botright split"); vim.api.nvim_win_set_buf(0, b)
+  pcall(vim.api.nvim_win_set_height, 0, math.min(20, math.max(6, #lines + 1)))
+  vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = b, nowait = true })
+  vim.keymap.set("n", "-", "<cmd>close<cr>", { buffer = b, nowait = true })
+end
+
+-- Ejecuta una CLASE (runClass / F9 de VSCode): corre if_oo_adt_classrun~main y muestra la
+-- salida (out->write). `sapcli class execute NAME`. Usa la clase del buffer o pregunta.
+function M.run_class(name)
+  local meta = vim.b.sap_obj
+  name = name or (meta and meta.group == "class" and meta.name) or nil
+  local function go(c)
+    c = (c or ""):upper(); if c == "" then return end
+    notify("Ejecutando clase " .. c .. " (if_oo_adt_classrun~main)...")
+    local out = {}
+    vim.fn.jobstart({ "sapcli", "class", "execute", c }, {
+      on_stdout = function(_, d) for _, l in ipairs(d) do out[#out + 1] = l end end,
+      on_stderr = function(_, d) for _, l in ipairs(d) do if vim.trim(l) ~= "" then out[#out + 1] = l end end end,
+      on_exit = function(_, code)
+        vim.schedule(function()
+          if code ~= 0 and #out == 0 then notify("No se pudo ejecutar " .. c, vim.log.levels.ERROR); return end
+          show("sap-runclass://" .. c, out)
+        end)
+      end,
+    })
+  end
+  if name then go(name) else vim.ui.input({ prompt = "Clase a ejecutar: " }, function(v) if v then go(v) end end)
+  end
+end
+
 function M.setup()
   vim.api.nvim_create_user_command("SapRunTransaction", function(a)
     if a.args ~= "" then
@@ -95,6 +131,10 @@ function M.setup()
     M.web_gui()
   end, { desc = "sap-nvim: Abrir WebGUI" })
 
+  vim.api.nvim_create_user_command("SapRunClass", function(a)
+    M.run_class(a.args ~= "" and a.args or nil)
+  end, { desc = "sap-nvim: Ejecutar clase (if_oo_adt_classrun~main)", nargs = "?" })
+
   -- Atajos: <leader>ax ejecutar transacción, <leader>aR ejecutar el programa del buffer.
   vim.keymap.set("n", "<leader>ax", function()
     local w = vim.fn.expand("<cword>")
@@ -103,6 +143,8 @@ function M.setup()
   end, { desc = "ABAP: Ejecutar transacción (WebGUI)" })
   vim.keymap.set("n", "<leader>aR", function() M.run_program() end,
     { desc = "ABAP: Ejecutar el programa/report (WebGUI)" })
+  vim.keymap.set("n", "<leader>aE", function() M.run_class() end,
+    { desc = "ABAP: Ejecutar clase (classrun)" })
 end
 
 return M
