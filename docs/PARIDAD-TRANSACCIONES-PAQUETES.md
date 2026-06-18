@@ -61,6 +61,54 @@ Mecanismo de ejecución (verificado): `GET <base>/sap/bc/gui/sap/its/webgui?sap-
    `:SapTransportDelete` / `:SapTransportReassign`.
 4. **core/data.lua o new.lua** — `:SapPackageInfo` (`package stat`).
 
+## 6. CATÁLOGO EXHAUSTIVO por sección (todo lo que puede hacer)
+
+> Fuente: TODOS los métodos del `ADTClient` de abap-adt-api + capacidades de sapcli. Estado:
+> ✅ hecho · ➕ gap a implementar · ⏸ avanzado/diferido.
+
+### 6.1 Transacciones (sapcli `transaction` — la extensión VSCode NO las gestiona)
+- ✅ **Crear** (`create`, con tipo report/parameter/dialog/oo/variant) — `:SapNew`.
+- ✅ **Ejecutar** (WebGUI) — `:SapRunTransaction`/`<leader>ax`.
+- ➕ **Ver/leer** (`read`) — mostrar la definición de la transacción.
+- ➕ **Borrar** (`delete`) — con confirmación §7.
+- ➕ **Dónde se usa** (`whereused`).
+- (write/activate existen en sapcli; poco habituales para una transacción.)
+
+### 6.2 Órdenes de transporte / CTS (AdtClient transport*)
+- ✅ transportInfo ≈ `resolve_transport` (qué orden usar al guardar).
+- ✅ userTransports → **listar** (`<leader>atl`).
+- ✅ createTransport → **crear** (`<leader>atc`).
+- ✅ transportRelease → **liberar** (`<leader>atr`).
+- ✅ transportDelete → **borrar** (`<leader>atd`).
+- ✅ transportSetOwner → **reasignar dueño** (`<leader>ato`).
+- ➕ transportDetails → **ver contenido** de una orden (objetos/tareas): `cts list transport NUM -r`.
+- ⏸ transportAddUser → añadir usuario/tarea (sapcli no lo expone; ADT directo).
+- ⏸ transportReference → localizar la orden de un objeto (ADT directo).
+- ⏸ transportConfigurations/getTransportConfiguration/setTransportsConfig/createTransportsConfig/
+  transportsByConfig → configuraciones de búsqueda de transportes (avanzado, niche).
+
+### 6.3 Paquetes (AdtClient nodeContents/createObject/packageSearchHelp + sapcli package)
+- ✅ **Crear** (`createObject` pak:package / `package create`) — `:SapNew`.
+- ✅ **Explorar contenido** (`nodeContents` / `package list`) — `:SapBrowse`/`<leader>afb`.
+- ✅ packageSearchHelp → buscar paquetes (ya se usa en el picker de crear, `adt.fetch_packages`).
+- ➕ **Info/estado** (`package stat`) — `:SapPackageInfo`.
+- ⏸ Explorar recursivo (sub-paquetes) — `package list -r` (disponible, no expuesto).
+- ⏸ activate/check de paquete (`package activate`/`check`) — masivo, con cuidado §7.
+
+### 6.4 Ejecución / running (AdtClient run*)
+- ✅ runUnitTest → ABAP Unit (`:SapAUnit`).
+- ✅ runQuery ≈ data preview OpenSQL (`:SapData`/`:SapTableData`).
+- ✅ Ejecutar transacción / programa (WebGUI) — `:SapRunTransaction`/`:SapRun`.
+- ➕ runClass → **ejecutar una clase** (F9, su método main/test) — vía WebGUI (SE24/ejecutar) o ADT.
+- ✅ inactiveObjects → objetos inactivos (`:SapInactive`).
+
+### 6.5 Ciclo de vida de objetos (transversal, ya cubierto)
+- ✅ create/delete/activate/lock/unLock/getObjectSource/setObjectSource (vía sapcli en `source.lua`/
+  `new.lua`); validateNewObject (➕ se podría usar para validar el nombre antes de crear).
+- ✅ searchObject (`:SapSearch`), objectStructure (outline local), revisions (⏸ comparar versiones).
+
+---
+
 Seguridad §7: crear/borrar transacción y paquete = solo objetos Z/Y, confirmación en borrado,
 transporte vía selector. Ejecutar/abrir GUI = solo lectura (no modifica). Todo async / system con
 timeout. La ejecución abre el navegador del usuario (no expone credenciales en claro).
