@@ -407,7 +407,30 @@ local function schedule_check(bufnr)
   end))
 end
 
+-- :SapDiag — diagnóstico del completado en el buffer actual (¿por qué no salen propuestas?).
+function M.diag()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  local meta = vim.b[bufnr].sap_obj
+  local uri = object_uri(bufnr)
+  local out = {
+    "── sap-nvim diag (completado) ──",
+    "filetype        : " .. vim.bo[bufnr].filetype .. (vim.bo[bufnr].filetype == "abap" and "  ✓" or "  ✗ (debe ser 'abap')"),
+    "vim.b.sap_obj   : " .. (meta and ("name=" .. tostring(meta.name) .. " group=" .. tostring(meta.group)
+      .. (meta.fgroup and (" fgroup=" .. meta.fgroup) or "")) or "NIL  ✗ (abre el objeto con :SapOpen/:SapBrowse)"),
+    "URI ADT         : " .. (uri or "NIL  ✗ (sin objeto SAP resoluble -> ADT no tiene contexto)"),
+    "ADT disponible  : " .. tostring(adt_http.is_available()) .. (adt_http.is_available() and "  ✓" or "  ✗ (curl/creds)"),
+  }
+  if uri and adt_http.is_available() then
+    local n = #M.proposals(bufnr, row, col)
+    out[#out + 1] = "Propuestas aquí : " .. n .. (n > 0 and "  ✓ (el motor funciona)" or "  ✗ (0 en esta posición)")
+  end
+  vim.notify(table.concat(out, "\n"), vim.log.levels.INFO)
+end
+
 function M.setup()
+  vim.api.nvim_create_user_command("SapDiag", function() M.diag() end,
+    { desc = "sap-nvim: Diagnóstico del completado (filetype/sap_obj/URI/ADT/propuestas)" })
   vim.api.nvim_create_user_command("SapComplete", function() M.complete() end,
     { desc = "sap-nvim: Completado ADT (métodos/atributos del sistema)" })
   vim.api.nvim_create_user_command("SapCheck", function() M.check_syntax() end,
