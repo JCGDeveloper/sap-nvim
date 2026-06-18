@@ -36,6 +36,9 @@ local function object_uri(bufnr)
   return tmpl:format(name:lower())
 end
 
+-- Expuesto para otros módulos (quickfix, etc.): URI ADT del buffer.
+M.object_uri = object_uri
+
 -- Programa principal (master program) de un INCLUDE. ADT lo necesita como
 -- ?context=<uri> para resolver símbolos cross-include (variables del TOP, FORMs de otro
 -- include, etc.) — igual que la extensión de VSCode: findDefinition(..., mainProgram) ->
