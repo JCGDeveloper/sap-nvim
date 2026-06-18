@@ -635,6 +635,10 @@ function M.setup()
         buffer = b, callback = function() M.clear_highlight(b) end,
       })
 
+      -- Calienta la conexión persistente (daemon) al abrir el objeto, para que el primer
+      -- completado/hover ya vaya CALIENTE (instantáneo, como VSCode al abrir el FS remoto).
+      if vim.b[b].sap_obj then pcall(function() adt_http.warmup() end) end
+
       -- Syntax check de SAP EN VIVO (como VSCode): al escribir (debounce) y al guardar.
       -- Solo para objetos remotos (sap_obj).
       if vim.b[b].sap_obj then M.check_syntax(b) end

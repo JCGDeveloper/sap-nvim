@@ -92,8 +92,10 @@ function source:get_completions(ctx, callback)
       callback({
         items = items,
         is_incomplete_backward = not member,
-        -- Miembro: lista fija (filtra local). Identificador suelto: re-consulta al crecer.
-        is_incomplete_forward = not member,
+        -- INSTANTÁNEO como VSCode: al teclear hacia delante NO re-consultamos a SAP; blink
+        -- filtra localmente la lista ya traída (en redes lentas, re-consultar por tecla da
+        -- lag). Al borrar (backward) sí re-consulta para ampliar.
+        is_incomplete_forward = false,
       })
     end)
   end)
