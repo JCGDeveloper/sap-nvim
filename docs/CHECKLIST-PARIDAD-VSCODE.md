@@ -1,74 +1,123 @@
-# Checklist maestro de paridad con la extensión VSCode `abap-remote-fs`
+# Mapeo COMPLETO extensión VSCode `abap-remote-fs` → sap-nvim
 
-> Objetivo: tener EN NEOVIM **cada función** que tiene la extensión de VSCode, con el MISMO
-> comportamiento. Columna vertebral del proyecto. Fuente: TODOS los métodos de `ADTClient`
-> (abap-adt-api) + los comandos de la extensión. Estado: ✅ hecho · ~ parcial/mejorar ·
-> ➕ falta · ⏸ diferido/niche. Se trabaja SECCIÓN a SECCIÓN: para cada una se saca el catálogo
-> completo, se compara, y se replica función a función verificando en vivo.
-> Detalle por área en: `PARIDAD-EDICION-CODIGO.md`, `PARIDAD-TRANSACCIONES-PAQUETES.md`.
+> Objetivo: que programar en Neovim sea IDÉNTICO a VSCode. Aquí están **las 92 funciones**
+> que registra la extensión (`client/src/commands/registry.ts`, objeto `AbapFsCommands`),
+> mapeadas 1:1 contra lo que sap-nvim tiene HOY (inventario real del repo).
+> Estado: ✅ hecho · ~ parcial/mejorar · ➕ FALTA (a implementar) · ⏸ nicho/diferido · N/A no aplica a nvim.
+> Detalle por área: `PARIDAD-EDICION-CODIGO.md`, `PARIDAD-TRANSACCIONES-PAQUETES.md`.
 
-## A. Conexión / sesión
-- ✅ Login básico + sap-client + CSRF + cookies (`adt_http`).
-- ✅ Conexión persistente keep-alive (daemon, como VSCode) + ping 120s (`adt_daemon`).
-- ➕ Sesión stateful para lock+PUT (text elements/edición ADT) — daemon ya lo permite, falta usarlo.
+## Conexión / setup (7)
+| # | VSCode cmd | nvim | Estado |
+|---|---|---|---|
+|1|abapfs.connect|`:SapSetup` use-context|✅|
+|2|abapfs.disconnect|—|➕ (menor)|
+|3|abapfs.createConnection|`:SapSetup` crear contexto|✅|
+|4|abapfs.connectionManager|`:SapSetup` gestionar|✅|
+|5|abapfs.clearPassword|creds en config.yml|⏸|
+|6|abapfs.changePassword|—|⏸|
+|7|abapfs.selectDB|`:SapSetup` use-context|✅|
 
-## B. Navegación / abrir objetos (FS remoto)
-- ✅ Abrir/editar/guardar con lock+transporte (`source.lua`, sapcli).
-- ~ **Go-to-definition (`gd`)**: local ✅, sistema vía ADT ✅, PERO **cross-include (variable del
-  TOP) FALLA** porque ADT `findDefinition` en un include necesita el **mainProgram** (contexto del
-  programa principal) y aún no se pasa → BUG a corregir (ver §F navegación).
-- ✅ Go-to-type (`gy`), go-to-implementation (`gI`) — verificar que `gd` sobre un tipo lleva al tipo.
-- ✅ Referencias (`gr`, usageReferences). ~ falta usageSnippets (línea de contexto).
-- ✅ Type hierarchy (`gh`/`gH`). ✅ Outline (`<leader>ao`).
-- ➕ Navegación a buffers/objetos abiertos (quickpick). ⏸ findObjectPath (ruta del objeto).
+## Código (16)
+| # | VSCode cmd | nvim | Estado |
+|---|---|---|---|
+|8|abapfs.activate|`:SapActivate`/`<leader>aa`|✅|
+|9|abapfs.activateMultiple|—|➕ (activar paquete: `package activate`)|
+|10|abapfs.search|`:SapSearch`/`<leader>afs` (NO en vivo)|~ → **búsqueda en vivo**|
+|11|abapfs.create|`:SapNew`/`<leader>an`|✅|
+|12|abapfs.createInEditor|crear + abrir|✅|
+|13|abapfs.execute|`:SapRun`/`<leader>aR`|✅|
+|14|abapfs.runInGui|`:SapRunTransaction`/SAP GUI|✅|
+|15|abapfs.runInEmbeddedGui|(webview)|N/A (abrimos navegador)|
+|16|abapfs.runTransaction|`:SapRunTransaction`/`<leader>ax`|✅|
+|17|abapfs.quickfix|—|➕ **code actions / quick fixes (alto valor)**|
+|18|abapfs.changeInclude|—|➕ **fijar programa principal del include (arregla `gd` cross-include)**|
+|19|abapfs.showdocu|hover (`K`) parcial|~ (ABAP Doc completo)|
+|20|abapfs.showObject|`source.open`/`gd`|✅|
+|21|abapfs.extractMethod|—|➕ refactor extract method|
+|22|abapfs.cleanCode|pretty printer (`<leader>aF`)|~ (clean code/cleaner)|
+|23|abapfs.setupCleaner|—|⏸|
 
-## C. Edición inteligente (escribir código)
-- ✅ Completado automático ADT (clases/métodos/atributos del sistema, keywords) — `sap_adt`.
-- ✅ Completado LOCAL instantáneo (keywords + 51 plantillas) — `abap_local`.
-- ✅ Hover (`K`), syntax check en vivo, pretty printer real, document highlights.
-- ➕ codeCompletionFull/insertion (insertar método con params al aceptar).
-- ➕ Quick fixes / code actions (fixProposals + fixEdits). ➕ Rename/refactor (refactorings).
-- ⏸ extractMethod, changePackage, ABAP Doc completo, semantic tokens.
+## Test / calidad (14)
+| # | VSCode cmd | nvim | Estado |
+|---|---|---|---|
+|24|abapfs.unittest|`:SapAUnit`/`<leader>aT`|✅|
+|25|abapfs.createtestinclude|—|➕ crear include de test|
+|26|abapfs.atcChecks|`<leader>aK` (ATC run)|✅|
+|27-37|atcIgnore/atcRefresh/atcRequestExemption(+All)/atcShowDocumentation/atcAutoRefreshOn/Off/atcDocHistoryFwd/Back/atcFilterExemptOn/Off|—|➕ **gestión completa de ATC (worklist, exenciones, navegación)**|
 
-## D. Búsqueda de objetos  ← (sección pedida; ver §G)
-- ~ `:SapSearch` (sapcli `abap find`) — funciona pero NO en tiempo real al escribir.
-- ➕ **Búsqueda unificada en vivo** (searchObject, quickpick que consulta al teclear) — el "mejor"
-  de VSCode. Es el gap principal de esta sección.
-- ✅ packageSearchHelp (se usa en el picker de crear paquete).
+## Favoritos / organización (3)
+|38|abapfs.addfavourite|—|➕ favoritos|
+|39|abapfs.deletefavourite|—|➕|
+|40|abapfs.manageTextElements|`:SapTextElements`/`:SapMessageManage`|~ (ver sí; editar text symbols por ADT pendiente)|
 
-## E. Paquetes / repositorio
-- ✅ Explorar paquete (`:SapBrowse`), crear paquete, info (`:SapPackageInfo`).
-- ⏸ Árbol de repositorio navegable (nodeContents anidado, expandir sub-paquetes), favoritos.
+## Clase / jerarquía (4)
+|41|abapfs.refreshHierarchy|`gh`/`gH` type hierarchy|✅|
+|42|abapfs.pickObject|`:SapSearch` parcial|~ (picker de objeto)|
+|43|abapfs.pickAdtRootConn|—|⏸ (UI)|
+|44|abapfs.runClass|—|➕ ejecutar clase (F9)|
 
-## F. Transportes (CTS)
-- ✅ listar/crear/liberar/borrar/reasignar/ver-contenido + selección al guardar.
-- ⏸ addUser, reference, configuraciones de búsqueda.
+## Revisiones / diff / merge (14)
+|45-58|clearScmGroup/filterScmGroup/openrevstate/opendiff/opendiffNormalized/togglediffNormalize/prevRevLeft/nextRevLeft/prevRevRight/nextRevRight/changequickdiff/remotediff/comparediff/openMergeEditor|`:SapDiff` (local vs activo)|~ → ➕ **revisiones de servidor + comparar/normalizar/merge** (comparediff/remotediff alto valor; resto nicho)|
 
-## G. Transacciones
-- ✅ crear, ejecutar (WebGUI). ~ ver/where-used (sapcli 404 en IAM/Fiori). ✅ borrar.
+## Transportes (13)
+|59|abapfs.transportObjectDiff|—|⏸|
+|60|abapfs.openTransportObject|—|➕ abrir objeto desde la orden|
+|61|abapfs.openLocation|—|⏸|
+|62|abapfs.deleteTransport|`:SapTransportDelete`/`<leader>atd`|✅|
+|63|abapfs.refreshtransports|`:SapTransports`/`<leader>atl`|✅|
+|64|abapfs.releaseTransport|`:SapTransportRelease`/`<leader>atr`|✅|
+|65|abapfs.transportOwner|`:SapTransportReassign`/`<leader>ato`|✅|
+|66|abapfs.transportAddUser|—|➕ añadir usuario a la orden|
+|67|abapfs.transportRevision|—|⏸|
+|68|abapfs.transportUser|`cts list --owner`|~|
+|69|abapfs.transportCopyNumber|copia ID al portapapeles|✅|
+|70|abapfs.transportRunAtc|—|⏸|
+|71|abapfs.transportOpenGui|—|~ (abrir en GUI)|
 
-## H. Ejecución
-- ✅ AUnit, OpenSQL/data preview, ejecutar transacción/programa (WebGUI — abre navegador).
-- ➕ runClass (ejecutar clase F9). ⏸ runQuery avanzado.
+## abapGit (14)
+|72-85|refreshrepos/revealPackage/openRepo/pullRepo/createRepo/unlinkRepo/registerSCM/refreshAbapGit/pullAbapGit/pushAbapGit/addAbapGit/removeAbapGit/resetAbapGitPwd/switchBranch|`:SapCheckout` (solo bajar)|➕ **abapGit completo (sapcli `abapgit`/`gcts`): pull/push/repos/branch**|
 
-## I. Calidad / ciclo de vida
-- ✅ ATC, activar, objetos inactivos, crear/borrar objetos, where-used, diff local.
-- ⏸ revisions (comparar versiones del servidor), validateNewObject (validar nombre antes de crear).
+## Trazas / diagnóstico (6)
+|86-91|refreshTraces/deleteTrace/showDump/refreshDumps/activateCommLog/deactivateCommLog|—|⏸ (trazas SAT / dumps ST22 — nicho)|
 
-## J. Innovaciones propias (NO en VSCode — mantener y ampliar luego)
-- ✅ SE91 mensaje directo + gestión (ver/editar/borrar/crear), elementos de texto (3 categorías),
-  plantillas/snippets con nomenclatura configurable.
+## Datos / utilidades (4)
+|—|abapfs.tableContents|`:SapTableData`/`:SapData`|✅|
+|—|abapfs.exportToJson|(json interno)|➕ exportar datos a JSON|
+|—|abapfs.showWalkThrough|—|N/A (tutorial)|
+|—|abapfs.createObjectProgrammatically|`:SapNew`|✅|
+
+## Feeds (8) ⏸ nicho (noticias/feeds ADT)
+configureFeeds/refreshFeedInbox/viewFeedEntry/markAllFeedsRead/markFeedFolderRead/deleteFeedEntry/clearFeedFolder/showFeedInbox → ⏸
+
+## Blame / sistema (3)
+|—|showBlame/hideBlame|—|➕ blame (autor por línea, de revisiones) — nicho|
+|—|refreshSystemInfoCache|—|⏸|
+
+## RAP / S/4HANA (11)
+|—|rapGenFromEditor|snippet RAP|~ (generador RAP)|
+|—|publishServiceBinding/testServiceBinding|—|➕ service bindings (OData)|
+|—|s4hLoad/Refresh/OpenObject/RunAtc/AskCopilot/OpenNote/Filter/ClearFilter|—|⏸ (S/4 Cloud / copilot, nicho)|
 
 ---
 
-## Plan de ejecución (sección a sección, "desde 0" pero sin tirar lo que ya funciona y está verificado)
-1. **Navegación (§B)** — corregir `gd` cross-include (mainProgram context para includes), confirmar
-   gd-sobre-tipo. Es un bug reportado y es núcleo.
-2. **Búsqueda (§D)** — búsqueda unificada en vivo (searchObject as-you-type) con el picker del usuario.
-3. **Edición (§C)** — quick fixes/code actions, codeCompletionFull, rename.
-4. **Repositorio (§E)** — árbol navegable + favoritos.
-5. Resto (runClass, revisions, usageSnippets, etc.) según prioridad.
+## Resumen (de 92)
+- **✅ hecho:** ~26 (núcleo de edición, navegación, transacciones, transportes, paquetes, AUnit/ATC-run, datos, crear/borrar, activar).
+- **~ parcial/mejorar:** ~10 (búsqueda→en vivo, showdocu, cleanCode, manageTextElements, pickObject, transportUser, diff→revisiones, rapGen).
+- **➕ FALTA (a implementar):** ~20 núcleo: quickfix, changeInclude, extractMethod, runClass, createtestinclude, gestión ATC, favoritos, comparediff/remotediff/revisiones, abapGit (pull/push/repos/branch), transportAddUser/openTransportObject, exportToJson, showdocu completo.
+- **⏸ nicho/diferido:** ~30 (feeds, trazas, dumps, blame, S4H copilot, GUI embebida, walkthrough, setupCleaner, transportObjectDiff/openLocation/RunAtc/Revision, clearPassword/changePassword).
+- **N/A:** runInEmbeddedGui (webview), showWalkThrough.
 
-Cada paso: sacar el catálogo de la sección de `abap-adt-api`, replicar el comportamiento exacto en
-nvim, verificar en vivo con objetos JCG del usuario, commit. El validador y el auditor de seguridad
-(subagentes) revisan; el orquestador hace lo que necesita red/SAP (los subagentes no tienen red).
+## Orden de ejecución para "idéntico" (núcleo primero)
+1. **changeInclude** → fijar programa principal del include (arregla `gd` cross-include). [BUG]
+2. **search en vivo** (searchObject as-you-type).
+3. **quickfix / code actions** (fixProposals + fixEdits).
+4. **extractMethod**, **runClass**, **createtestinclude**.
+5. **gestión ATC** (exenciones, navegación, refresh).
+6. **revisiones/comparediff/remotediff** (versiones de servidor).
+7. **abapGit** (pull/push/repos/branch vía sapcli).
+8. **favoritos**, transportAddUser/openTransportObject/transportUser, exportToJson, showdocu completo, cleanCode.
+9. Nicho (feeds/trazas/dumps/blame/S4H/service bindings) al final, según interés.
+
+Método por función: el orquestador (con red) saca de `abap-adt-api`/sapcli el endpoint exacto y
+lo verifica en vivo; los subagentes implementan y auditan (código/§7). Verificar SIEMPRE con
+objetos JCG del usuario.
