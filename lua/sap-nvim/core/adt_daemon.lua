@@ -87,7 +87,9 @@ function M.ensure()
   local c = require("sap-nvim.core.adt_http").creds()
   if not c then return nil end
 
-  state.job = vim.fn.jobstart({ "python3", script_path() }, {
+  -- `-u`: python SIN buffer en stdin/stdout. CLAVE: sin esto, el pipe se bufferiza y las
+  -- peticiones/respuestas no se entregan al instante -> el daemon "se queda pillado".
+  state.job = vim.fn.jobstart({ "python3", "-u", script_path() }, {
     env = {
       ADT_BASE = c.base,
       ADT_CLIENT = c.client or "",

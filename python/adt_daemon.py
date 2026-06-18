@@ -26,10 +26,23 @@ import os
 import ssl
 import sys
 import threading
+import time
 
 # ── Endpoint usado para login y keep-alive (igual que abap-adt-api) ───────────
 GRAPH_PATH = "/sap/bc/adt/compatibility/graph"
 KEEPALIVE_SECS = 120
+
+# Log a fichero (legible desde fuera para depurar en el nvim real del usuario).
+_LOG = os.path.expanduser("~/.cache/nvim/sap-nvim/daemon.log")
+
+
+def log(msg):
+    try:
+        os.makedirs(os.path.dirname(_LOG), exist_ok=True)
+        with open(_LOG, "a") as f:
+            f.write("%.3f %s\n" % (time.time(), msg))
+    except Exception:
+        pass
 
 
 class AdtDaemon:
@@ -87,10 +100,11 @@ class AdtDaemon:
         return host, port, is_https
 
     def _new_conn(self):
-        """Crea una conexion nueva (https o http) segun ADT_BASE."""
+        """Crea una conexion nueva (https o http) segun ADT_BASE. timeout: un fallo de red
+        no debe colgar el daemon para siempre (se reconecta y reintenta)."""
         if self.is_https:
-            return http.client.HTTPSConnection(self.host, self.port, context=self.ctx)
-        return http.client.HTTPConnection(self.host, self.port)
+            return http.client.HTTPSConnection(self.host, self.port, context=self.ctx, timeout=30)
+        return http.client.HTTPConnection(self.host, self.port, timeout=30)
 
     def _build_url(self, path, query):
         """Anade sap-client y query params al path."""
@@ -252,11 +266,14 @@ class AdtDaemon:
 
     # ── Bucle principal ────────────────────────────────────────────────────────
     def run(self):
+        log("START host=%s port=%s https=%s" % (self.host, self.port, self.is_https))
         # Login inicial (si falla, igualmente seguimos; cada peticion reintenta).
         try:
-            self.login()
-        except Exception:
-            pass
+            t = time.time()
+            ok = self.login()
+            log("LOGIN ok=%s csrf=%s cookies=%s %.0fms" % (ok, bool(self.csrf), bool(self.cookies), (time.time() - t) * 1000))
+        except Exception as e:
+            log("LOGIN EXC " + repr(e))
         self.start_keepalive()
 
         # IMPORTANTE: usar readline() en bucle, NO `for line in sys.stdin` (este aplica
@@ -275,10 +292,15 @@ class AdtDaemon:
                 # JSON invalido: respondemos sin morir. No tenemos id fiable.
                 self._respond({"id": None, "status": 0, "body": "bad request"})
                 continue
+            log("REQ id=%s %s %s" % (req.get("id"), req.get("method"), (req.get("path") or "")[:60]))
+            t = time.time()
             try:
                 resp = self.handle(req)
+                log("RESP id=%s status=%s len=%s %.0fms" % (resp.get("id"), resp.get("status"),
+                    len(resp.get("body") or ""), (time.time() - t) * 1000))
             except Exception as e:
                 resp = {"id": req.get("id"), "status": 0, "body": str(e)}
+                log("HANDLE EXC " + repr(e))
             self._respond(resp)
 
     @staticmethod
