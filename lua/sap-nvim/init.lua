@@ -3,8 +3,22 @@
 
 local M = {}
 
+-- Marcador de versión: para confirmar QUÉ código carga nvim (caché/clon viejo). Súbelo al editar.
+M.VERSION = "2026-06-18-T2245-daemonpool-K-ctx-v3"
+
 function M.setup(opts)
   opts = opts or {}
+
+  -- :SapVersion -> versión + de DÓNDE carga el plugin (detecta clon/caché viejos).
+  vim.api.nvim_create_user_command("SapVersion", function()
+    local src = debug.getinfo(M.setup, "S").source:gsub("^@", "")
+    local iok, intel = pcall(require, "sap-nvim.core.intel")
+    local isrc = iok and intel.hover and debug.getinfo(intel.hover, "S").source:gsub("^@", "") or "?"
+    vim.notify("sap-nvim " .. M.VERSION
+      .. "\ninit.lua: " .. src
+      .. "\nintel.lua: " .. isrc
+      .. "\nK reasignado: " .. tostring(iok and intel.change_include ~= nil), vim.log.levels.INFO)
+  end, { desc = "sap-nvim: versión y rutas cargadas (diagnóstico de caché/clon)" })
 
   local modules = {
     "sap-nvim.core.config",
