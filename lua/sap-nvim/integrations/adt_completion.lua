@@ -68,16 +68,25 @@ function source:get_completions(ctx, callback)
   local bufnr = ctx.bufnr or vim.api.nvim_get_current_buf()
   local row = ctx.cursor[1]
 
+  local Fmt = vim.lsp.protocol.InsertTextFormat
   intel.proposals_async(bufnr, row, col, function(props)
     local items = {}
     for _, p in ipairs(props) do
-      items[#items + 1] = {
+      local it = {
         label = p.word,
         insertText = p.word,
         kind = KIND_MAP[p.kind or ""] or Kind.Text,
         labelDetails = { description = KIND_LABEL[p.kind or ""] or "SAP" },
         source_name = "SAP",
       }
+      -- "code completion full": al aceptar un MÉTODO (kind 3), insertar `nombre( | )` con el
+      -- cursor dentro de los paréntesis y el espaciado que exige ABAP — como VSCode. La ayuda
+      -- de parámetros se dispara al entrar en `(`. (Solo en acceso a miembro `->`/`=>`/`~`.)
+      if p.kind == "3" and member then
+        it.insertText = p.word .. "( $0 )"
+        it.insertTextFormat = Fmt.Snippet
+      end
+      items[#items + 1] = it
     end
     vim.schedule(function()
       callback({
