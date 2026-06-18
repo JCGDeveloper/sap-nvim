@@ -246,10 +246,27 @@ function M.definition_target(bufnr, row, col, filter)
   local uri = object_uri(bufnr)
   if not uri then return nil end
   local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+  -- Rango de la PALABRA bajo el cursor (identificador ABAP: [%w_/]) -> col inicio/fin.
+  -- Replica a VSCode/abap-adt-api, que envía `start=<line>,<colIni>;end=<line>,<colFin>`
+  -- (el rango de la palabra), no solo la posición del cursor: el go-to es más fiable.
+  local cstart, cend = col, col
+  local line = vim.api.nvim_buf_get_lines(bufnr, row - 1, row, false)[1]
+  if line and #line > 0 then
+    -- col es 0-based; trabajamos sobre índices 1-based de Lua (i = col+1).
+    local cur = col + 1
+    if cur <= #line and line:sub(cur, cur):match("[%w_/]") then
+      local i = cur
+      while i > 1 and line:sub(i - 1, i - 1):match("[%w_/]") do i = i - 1 end
+      local j = cur
+      while j < #line and line:sub(j + 1, j + 1):match("[%w_/]") do j = j + 1 end
+      cstart = i - 1            -- offset 0-based del primer carácter
+      cend = j - 1 + 1          -- offset 0-based tras el último (fin exclusivo, como VSCode)
+    end
+  end
   local body = adt_http.request({
     method = "POST",
     path = "/sap/bc/adt/navigation/target",
-    query = { uri = uri .. "%23start=" .. row .. "," .. col, filter = filter or "definition" },
+    query = { uri = uri .. "%23start=" .. row .. "," .. cstart .. ";end=" .. row .. "," .. cend, filter = filter or "definition" },
     body = src,
   })
   if not body then return nil end
