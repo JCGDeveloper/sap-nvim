@@ -147,8 +147,8 @@ local function build_args(c, opts)
   return args, bodyfile
 end
 
--- cb(body|nil). No bloquea (jobstart). Devuelve el job id (para cancelar).
-function M.request_async(opts, cb)
+-- Implementación con curl (un proceso por llamada). Fallback del daemon persistente.
+local function curl_request_async(opts, cb)
   local c = M.creds()
   if not c then cb(nil); return end
   local args, bodyfile = build_args(c, opts)
@@ -161,6 +161,37 @@ function M.request_async(opts, cb)
       cb(table.concat(out, "\n"))
     end,
   })
+end
+
+-- Si el daemon falla una vez en la sesión, lo desactivamos para no pagar el timeout cada vez.
+local daemon_disabled = false
+
+-- cb(body|nil). No bloquea. Usa la conexión PERSISTENTE (daemon, como VSCode) si está
+-- disponible; si no responde en ~9s o falla, cae a curl automáticamente (y desactiva el
+-- daemon esta sesión). Seguro: nunca rompe el completado.
+function M.request_async(opts, cb)
+  local c = M.creds()
+  if not c then cb(nil); return end
+
+  local ok, daemon = pcall(require, "sap-nvim.core.adt_daemon")
+  if ok and daemon and not daemon_disabled and daemon.available() then
+    local answered = false
+    local function fallback()
+      if answered then return end
+      answered = true
+      daemon_disabled = true
+      curl_request_async(opts, cb)
+    end
+    vim.defer_fn(fallback, 9000) -- guardián: si el daemon no responde, curl.
+    daemon.request_async(opts, function(body)
+      if answered then return end
+      answered = true
+      if body then cb(body) else daemon_disabled = true; curl_request_async(opts, cb) end
+    end)
+    return
+  end
+
+  curl_request_async(opts, cb)
 end
 
 -- ── Petición CRUDA flexible (para lock/PUT/unlock de text elements, etc.) ────
