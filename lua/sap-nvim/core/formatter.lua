@@ -58,6 +58,9 @@ local KEYWORDS = {
   "respecting", "blanks", "no-gaps", "lines", "next",
 }
 
+-- Exporto la lista para reutilizarla en el completado local instantáneo (abap_local).
+M.keywords = KEYWORDS
+
 local BLOCK_START = {
   "if", "do", "while", "loop", "at",
   "method", "form", "module", "function", "class", "interface",
