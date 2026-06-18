@@ -578,7 +578,33 @@ function M.diag()
   vim.notify(table.concat(out, "\n"), vim.log.levels.INFO)
 end
 
+-- :SapDaemonTest — prueba la conexión persistente (daemon) en TU nvim: una propuesta por el
+-- daemon, reporta cuántas devuelve y en cuánto (frío vs caliente). Verificación en vivo.
+function M.daemon_test()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local uri = object_uri(bufnr)
+  if not uri then notify("Abre un objeto SAP (con sap_obj) para probar.", vim.log.levels.WARN); return end
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+  notify("Probando el daemon (la 1ª vez calienta; espera unos segundos)...")
+  adt_http.daemon_self_test({
+    method = "POST",
+    path = "/sap/bc/adt/abapsource/codecompletion/proposal",
+    query = { uri = uri .. context_suffix(bufnr) .. "%23start=" .. row .. "," .. col, signalCompleteness = "true" },
+    content_type = "text/plain",
+    body = src,
+  }, function(body, info)
+    if not body then notify("Daemon: SIN respuesta (" .. tostring(info) .. ")", vim.log.levels.WARN); return end
+    local n = 0; for _ in body:gmatch("<SCC_COMPLETION>") do n = n + 1 end
+    notify("Daemon: " .. n .. " propuestas en " .. tostring(info)
+      .. (n > 0 and "  → repítelo: la 2ª debe ir MÁS rápida (caliente)" or "  (0 → avísame)"),
+      n > 0 and vim.log.levels.INFO or vim.log.levels.WARN)
+  end)
+end
+
 function M.setup()
+  vim.api.nvim_create_user_command("SapDaemonTest", function() M.daemon_test() end,
+    { desc = "sap-nvim: Probar la conexión persistente (daemon) — count + latencia" })
   vim.api.nvim_create_user_command("SapDiag", function() M.diag() end,
     { desc = "sap-nvim: Diagnóstico del completado (filetype/sap_obj/URI/ADT/propuestas)" })
   vim.api.nvim_create_user_command("SapSetMainProgram", function() M.change_include() end,

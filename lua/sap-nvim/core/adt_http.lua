@@ -163,21 +163,56 @@ local function curl_request_async(opts, cb)
   })
 end
 
--- Si el daemon falla una vez en la sesión, lo desactivamos para no pagar el timeout cada vez.
-local daemon_disabled = false
+-- Solo se desactiva si el daemon NI ARRANCA (no por un timeout puntual).
+local daemon_dead = false
 
--- (no-op) El daemon persistente quedó fuera del camino caliente por fiabilidad; se mantiene
--- la función para no romper llamadas existentes. La 1ª petición CSRF sí se cachea (ensure_token).
-function M.warmup() end
+local function daemon_mod()
+  if daemon_dead then return nil end
+  local ok, d = pcall(require, "sap-nvim.core.adt_daemon")
+  if ok and d and d.available() then return d end
+  return nil
+end
 
--- cb(body|nil). No bloquea. Usa curl (fiable). NOTA: el daemon persistente resultó poco
--- fiable en algunos sistemas (devolvía respuestas vacías y dejaba el completado sin items),
--- así que NO está en el camino caliente; la sensación "instantánea" se logra con el filtrado
--- local de blink (la lista traída se filtra al teclear, sin re-consultar). El daemon queda
--- disponible (adt_daemon) para usos futuros opt-in, pero no aquí.
+-- Calienta la CONEXIÓN PERSISTENTE (arranca el daemon + login) al abrir un objeto, para que
+-- la 1ª propuesta ya vaya caliente y con el token CSRF establecido — como VSCode al abrir el
+-- FS remoto. Resuelve TANTO la latencia como el "0 intermitente" (token frío) del completado.
+function M.warmup()
+  local d = daemon_mod()
+  if d and pcall(d.ensure) == false then daemon_dead = true end
+end
+
+-- cb(body|nil). No bloquea. Prefiere la conexión PERSISTENTE (daemon, como VSCode): token
+-- CSRF + cookies una vez, socket caliente -> rápido y SIN el 0 intermitente del token frío.
+-- Si el daemon no responde a tiempo o devuelve nil, cae a curl SOLO esa vez (el daemon sigue
+-- activo). Si ni arranca, se marca muerto y se usa curl. Nunca rompe el completado.
 function M.request_async(opts, cb)
   if not M.creds() then cb(nil); return end
-  curl_request_async(opts, cb)
+  local d = daemon_mod()
+  if not d then curl_request_async(opts, cb); return end
+  if pcall(d.ensure) == false then daemon_dead = true; curl_request_async(opts, cb); return end
+
+  local answered = false
+  vim.defer_fn(function()
+    if answered then return end
+    answered = true
+    curl_request_async(opts, cb) -- fallback puntual; el daemon sigue para la próxima
+  end, 12000)
+  d.request_async(opts, function(body)
+    if answered then return end
+    answered = true
+    if body then cb(body) else curl_request_async(opts, cb) end
+  end)
+end
+
+-- :SapDaemonTest -> prueba el camino del daemon y reporta count+latencia (verificar en vivo).
+function M.daemon_self_test(opts, cb)
+  local d = daemon_mod()
+  if not d then cb(nil, "daemon no disponible"); return end
+  pcall(d.ensure)
+  local t0 = vim.loop.hrtime()
+  d.request_async(opts, function(body)
+    cb(body, string.format("%.0f ms", (vim.loop.hrtime() - t0) / 1e6))
+  end)
 end
 
 -- ── Petición CRUDA flexible (para lock/PUT/unlock de text elements, etc.) ────
