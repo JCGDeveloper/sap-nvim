@@ -9,16 +9,18 @@ end
 
 -- Abre una URL en el navegador del sistema (WSL/Linux/mac).
 local function open_url(url)
-  if vim.ui and vim.ui.open then
-    local ok = pcall(vim.ui.open, url)
-    if ok then return end
+  -- WSL: abrir en el navegador de Windows. OJO: `explorer.exe <url>` ROMPE la URL cuando
+  -- lleva `&`/`~`/`;` (abre el explorador de archivos). powershell Start-Process con la URL
+  -- entre comillas simples la trata como literal y abre el navegador por defecto.
+  if vim.fn.executable("powershell.exe") == 1 then
+    vim.fn.jobstart({ "powershell.exe", "-NoProfile", "-Command", "Start-Process '" .. url .. "'" }, { detach = true })
+    return
   end
-  local openers = { "wslview", "xdg-open", "open", "explorer.exe" }
-  for _, o in ipairs(openers) do
-    if vim.fn.executable(o) == 1 then
-      vim.fn.jobstart({ o, url }, { detach = true })
-      return
-    end
+  if vim.fn.executable("wslview") == 1 then
+    vim.fn.jobstart({ "wslview", url }, { detach = true }); return
+  end
+  for _, o in ipairs({ "xdg-open", "open", "sensible-browser" }) do
+    if vim.fn.executable(o) == 1 then vim.fn.jobstart({ o, url }, { detach = true }); return end
   end
   notify("Abre manualmente: " .. url, vim.log.levels.WARN)
 end
