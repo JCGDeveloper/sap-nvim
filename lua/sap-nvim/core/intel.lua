@@ -501,7 +501,9 @@ function M.check_syntax(bufnr)
   local xml = '<?xml version="1.0" encoding="UTF-8"?>'
     .. '<chkrun:checkObjectList xmlns:chkrun="http://www.sap.com/adt/checkrun" '
     .. 'xmlns:adtcore="http://www.sap.com/adt/core">'
-    .. '<chkrun:checkObject adtcore:uri="' .. obj_uri .. '" chkrun:version="inactive">'
+    -- ?context=<programa principal> para includes: sin él, el check marca como errores las
+    -- variables/FORMs declarados en el TOP (falsos positivos). Igual que syntaxCheck de VSCode.
+    .. '<chkrun:checkObject adtcore:uri="' .. obj_uri .. context_suffix(bufnr) .. '" chkrun:version="inactive">'
     .. '<chkrun:artifacts><chkrun:artifact chkrun:contentType="text/plain; charset=utf-8" '
     .. 'chkrun:uri="' .. source_uri .. '"><chkrun:content>' .. b64(src)
     .. '</chkrun:content></chkrun:artifact></chkrun:artifacts>'
