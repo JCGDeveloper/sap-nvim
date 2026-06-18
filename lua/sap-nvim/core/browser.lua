@@ -129,6 +129,65 @@ function M.search_objects(query)
   end)
 end
 
+-- Muestra `lines` en un split de solo lectura con q/- para cerrar.
+local function show(bufname, lines)
+  local b = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_buf_set_lines(b, 0, -1, false, lines)
+  vim.bo[b].modifiable = false
+  vim.bo[b].buftype = "nofile"
+  pcall(vim.api.nvim_buf_set_name, b, bufname)
+  vim.cmd("botright split")
+  vim.api.nvim_win_set_buf(0, b)
+  pcall(vim.api.nvim_win_set_height, 0, math.min(20, math.max(6, #lines + 1)))
+  vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = b, nowait = true })
+  vim.keymap.set("n", "-", "<cmd>close<cr>", { buffer = b, nowait = true })
+end
+
+-- Info/atributos de un paquete (sapcli package stat).
+function M.package_info(pkg_name)
+  local function do_stat(pkg)
+    notify("Leyendo info del paquete: " .. pkg)
+    local stdout, stderr = {}, {}
+    vim.fn.jobstart({ "sapcli", "package", "stat", pkg }, {
+      on_stdout = function(_, data)
+        for _, line in ipairs(data) do
+          if line ~= "" then table.insert(stdout, line) end
+        end
+      end,
+      on_stderr = function(_, data)
+        for _, line in ipairs(data) do
+          if vim.trim(line) ~= "" then table.insert(stderr, line) end
+        end
+      end,
+      on_exit = function(_, code)
+        vim.schedule(function()
+          if code ~= 0 or #stdout == 0 then
+            local msg = #stderr > 0 and stderr[1] or ("No se pudo leer el paquete " .. pkg)
+            notify(msg, vim.log.levels.WARN)
+            return
+          end
+          show("sap-package://" .. pkg, stdout)
+        end)
+      end,
+    })
+  end
+
+  if pkg_name and pkg_name ~= "" then
+    do_stat(pkg_name:upper())
+    return
+  end
+
+  local w = vim.fn.expand("<cword>")
+  if w and w ~= "" and w:match("^[%w_/]+$") then
+    do_stat(w:upper())
+    return
+  end
+
+  vim.ui.input({ prompt = "Nombre del paquete (ej: ZMYPKG): ", default = "Z" }, function(pkg)
+    if pkg and pkg ~= "" then do_stat(pkg:upper()) end
+  end)
+end
+
 -- Browse a package's contents
 function M.browse_package(pkg_name)
   local function do_browse(pkg)
@@ -198,8 +257,13 @@ function M.setup()
     M.browse_package(args.args ~= "" and args.args or nil)
   end, { desc = "sap-nvim: Explorar contenido de un paquete SAP", nargs = "?" })
 
+  vim.api.nvim_create_user_command("SapPackageInfo", function(args)
+    M.package_info(args.args ~= "" and args.args or nil)
+  end, { desc = "sap-nvim: Ver info/atributos de un paquete SAP", nargs = "?" })
+
   vim.keymap.set("n", "<leader>afs", M.search_objects, { desc = "ABAP: Buscar objeto en sistema" })
   vim.keymap.set("n", "<leader>afb", M.browse_package, { desc = "ABAP: Explorar paquete" })
+  vim.keymap.set("n", "<leader>afi", function() M.package_info() end, { desc = "ABAP: Info del paquete" })
 end
 
 return M
