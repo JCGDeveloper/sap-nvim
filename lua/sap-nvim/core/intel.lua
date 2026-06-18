@@ -342,6 +342,81 @@ function M.references()
   end)
 end
 
+-- ── TYPE HIERARCHY: super/subtipos (clases e interfaces) del tipo bajo el cursor ──
+-- Replica typeHierarchy de abap-adt-api:
+--   POST /sap/bc/adt/abapsource/typehierarchy
+--   query: uri=<uri>#start=<line>,<offset> , type = superTypes|subTypes
+--   Content-Type text/plain, Accept application/*, body = source del objeto.
+-- super=true => supertipos (clases/interfaces de las que hereda/implementa el tipo);
+-- super=false/nil => subtipos (los que heredan/implementan este tipo).
+function M.type_hierarchy(super)
+  if not adt_http.is_available() then notify("ADT no disponible.", vim.log.levels.WARN); return end
+  local bufnr = vim.api.nvim_get_current_buf()
+  local uri = object_uri(bufnr)
+  if not uri then notify("No es un objeto SAP.", vim.log.levels.WARN); return end
+  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+  local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+  notify((super and "Buscando supertipos" or "Buscando subtipos") .. "...")
+
+  local body = adt_http.request({
+    method = "POST",
+    path = "/sap/bc/adt/abapsource/typehierarchy",
+    query = {
+      uri = uri .. "%23start=" .. row .. "," .. col,
+      type = super and "superTypes" or "subTypes",
+    },
+    content_type = "text/plain",
+    accept = "application/*",
+    body = src,
+  })
+  if not body then notify("Sin jerarquía de tipos aquí."); return end
+
+  -- En un INCLUDE, ADT exige el programa principal (igual que en Eclipse): error
+  -- `invalidMainProgram`. Avisamos para que se abra el programa, no el include.
+  if body:find("invalidMainProgram") then
+    notify("La jerarquía de tipos necesita el programa principal del include. "
+      .. "Ábrelo desde el programa (o una clase global), no desde el include.", vim.log.levels.WARN)
+    return
+  end
+
+  -- La respuesta real es <hierarchy:info>...<entries><entry adtcore:name=.. type=.. uri=..>.
+  -- Parseamos SOLO los <entry> (el <package_ref> anidado también trae adtcore:name).
+  -- Excluimos el tipo de ORIGEN (la propia clase consultada) para listar solo super/subtipos.
+  local origin = body:match('<origin[^>]-typeName="([^"]*)"')
+  local refs = {}
+  local seen = {}
+  for tag in body:gmatch("<entry%s[^>]->") do
+    local name = tag:match('adtcore:name="([^"]*)"')
+    local typ = tag:match('adtcore:type="([^"]*)"')
+    local nav = tag:match('adtcore:uri="([^"]*)"')
+    if name and name ~= "" and name ~= origin then
+      local key = name .. "|" .. (typ or "")
+      if not seen[key] then
+        seen[key] = true
+        refs[#refs + 1] = { name = name, typ = typ or "", uri = nav and unxml(nav) or nil }
+      end
+    end
+  end
+  if #refs == 0 then
+    notify(super and "Sin supertipos para este tipo." or "Sin subtipos para este tipo."); return
+  end
+
+  vim.ui.select(refs, {
+    prompt = (super and "Supertipos" or "Subtipos") .. " (" .. #refs .. "):",
+    format_item = function(r) return string.format("%-10s %s", r.typ or "", r.name or "") end,
+  }, function(choice)
+    if not choice then return end
+    -- Si la URI es navegable a un objeto que sabemos abrir, lo abrimos; si no, avisamos.
+    local obj = choice.uri and uri_to_object(choice.uri) or nil
+    if obj and obj.group then
+      require("sap-nvim.core.source").open(obj.name, obj.group, { line = obj.line, col = obj.col })
+    else
+      notify((choice.typ ~= "" and (choice.typ .. " ") or "") .. (choice.name or "?")
+        .. " no abrible directamente.")
+    end
+  end)
+end
+
 -- ── SYNTAX CHECK REAL de SAP (checkRun): diagnósticos con línea/col exactas ───
 local CHECK_NS = vim.api.nvim_create_namespace("sap_nvim_adt_check")
 
@@ -461,6 +536,10 @@ function M.setup()
   vim.api.nvim_create_user_command("SapGotoImpl", function()
     if not M.goto_definition("implementation") then notify("Sin implementación.") end
   end, { desc = "sap-nvim: Ir a la implementación del método/interfaz" })
+  vim.api.nvim_create_user_command("SapTypeHierarchy", function() M.type_hierarchy(false) end,
+    { desc = "sap-nvim: Subtipos del tipo bajo el cursor (jerarquía de tipos)" })
+  vim.api.nvim_create_user_command("SapSuperTypes", function() M.type_hierarchy(true) end,
+    { desc = "sap-nvim: Supertipos del tipo bajo el cursor (jerarquía de tipos)" })
 
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "abap",
@@ -482,6 +561,11 @@ function M.setup()
       vim.keymap.set("n", "gI", function()
         if not M.goto_definition("implementation") then notify("Sin implementación.") end
       end, { buffer = b, desc = "ABAP: Ir a la implementación" })
+      -- gh / gH: jerarquía de tipos (subtipos / supertipos).
+      vim.keymap.set("n", "gh", function() M.type_hierarchy(false) end,
+        { buffer = b, desc = "ABAP: Subtipos (type hierarchy)" })
+      vim.keymap.set("n", "gH", function() M.type_hierarchy(true) end,
+        { buffer = b, desc = "ABAP: Supertipos (type hierarchy)" })
 
       -- Document highlights: resaltar apariciones del símbolo al reposar el cursor.
       vim.api.nvim_create_autocmd("CursorHold", {
