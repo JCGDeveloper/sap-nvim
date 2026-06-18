@@ -31,6 +31,61 @@ local function object_uri(bufnr)
   return tmpl:format(name:lower())
 end
 
+-- Programa principal (master program) de un INCLUDE. ADT lo necesita como
+-- ?context=<uri> para resolver símbolos cross-include (variables del TOP, FORMs de otro
+-- include, etc.) — igual que la extensión de VSCode: findDefinition(..., mainProgram) ->
+-- uri = `${url}?context=${encodeURIComponent(mainProgram)}#start=...`.
+-- Caché por include (nombre en minúsculas) -> uri del programa, o false si no hay/uno solo.
+local mainprog_cache = {}
+
+-- Lista los programas principales de un include (GET .../mainprograms). Devuelve {uris...}.
+function M.main_programs(incname)
+  local body = adt_http.request({
+    method = "GET",
+    path = "/sap/bc/adt/programs/includes/" .. incname:lower() .. "/mainprograms",
+    accept = "application/*",
+  })
+  local uris = {}
+  for u in (body or ""):gmatch('adtcore:uri="([^"]*)"') do uris[#uris + 1] = u end
+  return uris
+end
+
+-- Sufijo ?context= para el buffer si es un include con programa principal conocido (lo
+-- resuelve y cachea la 1ª vez). encodeURIComponent ~= codificar las '/' como %2F.
+local function context_suffix(bufnr)
+  local meta = vim.b[bufnr].sap_obj
+  if not meta or meta.group ~= "include" then return "" end
+  local key = meta.name:lower()
+  if mainprog_cache[key] == nil then
+    local uris = M.main_programs(meta.name)
+    mainprog_cache[key] = uris[1] or false  -- el 1º por defecto (changeInclude permite cambiarlo)
+  end
+  local uri = mainprog_cache[key]
+  if not uri then return "" end
+  return "?context=" .. (uri:gsub("/", "%%2F"))
+end
+
+-- Fija/cambia el programa principal del include actual (replica abapfs.changeInclude):
+-- si hay varios, deja elegir; afecta a gd/hover/jerarquía cross-include.
+function M.change_include()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local meta = vim.b[bufnr].sap_obj
+  if not meta or meta.group ~= "include" then
+    notify("El buffer actual no es un include.", vim.log.levels.WARN); return
+  end
+  local uris = M.main_programs(meta.name)
+  if #uris == 0 then notify("El include no tiene programa principal asignado.", vim.log.levels.WARN); return end
+  if #uris == 1 then
+    mainprog_cache[meta.name:lower()] = uris[1]
+    notify("Programa principal: " .. uris[1]:match("([^/]+)$")); return
+  end
+  vim.ui.select(uris, { prompt = "Programa principal del include:",
+    format_item = function(u) return u:match("([^/]+)$") end }, function(choice)
+    if choice then mainprog_cache[meta.name:lower()] = choice
+      notify("Programa principal: " .. choice:match("([^/]+)$")) end
+  end)
+end
+
 -- Llama a ADT code completion en la posición (line 1-based, col 0-based) sobre el
 -- contenido actual del buffer. Devuelve lista de propuestas {word, kind}.
 function M.proposals(bufnr, line, col)
@@ -183,7 +238,7 @@ function M.hover()
   local body = adt_http.request({
     method = "POST",
     path = "/sap/bc/adt/abapsource/codecompletion/elementinfo",
-    query = { uri = uri .. "%23start=" .. row .. "," .. col },
+    query = { uri = uri .. context_suffix(bufnr) .. "%23start=" .. row .. "," .. col },
     body = src,
   })
   if not body or not body:find("elementInfo") then notify("Sin información aquí."); return end
@@ -263,10 +318,11 @@ function M.definition_target(bufnr, row, col, filter)
       cend = j - 1 + 1          -- offset 0-based tras el último (fin exclusivo, como VSCode)
     end
   end
+  local ctx = context_suffix(bufnr) -- ?context=<programa principal> para includes (cross-include)
   local body = adt_http.request({
     method = "POST",
     path = "/sap/bc/adt/navigation/target",
-    query = { uri = uri .. "%23start=" .. row .. "," .. cstart .. ";end=" .. row .. "," .. cend, filter = filter or "definition" },
+    query = { uri = uri .. ctx .. "%23start=" .. row .. "," .. cstart .. ";end=" .. row .. "," .. cend, filter = filter or "definition" },
     body = src,
   })
   if not body then return nil end
@@ -312,7 +368,7 @@ function M.references()
   local body = adt_http.request({
     method = "POST",
     path = "/sap/bc/adt/repository/informationsystem/usageReferences",
-    query = { uri = uri .. "%23start=" .. row .. "," .. col },
+    query = { uri = uri .. context_suffix(bufnr) .. "%23start=" .. row .. "," .. col },
     content_type = "application/vnd.sap.adt.repository.usagereferences.request.v1+xml",
     body = USAGE_REQ,
   })
@@ -362,7 +418,7 @@ function M.type_hierarchy(super)
     method = "POST",
     path = "/sap/bc/adt/abapsource/typehierarchy",
     query = {
-      uri = uri .. "%23start=" .. row .. "," .. col,
+      uri = uri .. context_suffix(bufnr) .. "%23start=" .. row .. "," .. col,
       type = super and "superTypes" or "subTypes",
     },
     content_type = "text/plain",
@@ -523,6 +579,8 @@ end
 function M.setup()
   vim.api.nvim_create_user_command("SapDiag", function() M.diag() end,
     { desc = "sap-nvim: Diagnóstico del completado (filetype/sap_obj/URI/ADT/propuestas)" })
+  vim.api.nvim_create_user_command("SapSetMainProgram", function() M.change_include() end,
+    { desc = "sap-nvim: Fijar el programa principal del include (gd/hover cross-include)" })
   vim.api.nvim_create_user_command("SapComplete", function() M.complete() end,
     { desc = "sap-nvim: Completado ADT (métodos/atributos del sistema)" })
   vim.api.nvim_create_user_command("SapCheck", function() M.check_syntax() end,
