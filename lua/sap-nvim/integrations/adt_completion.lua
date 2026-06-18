@@ -58,9 +58,11 @@ function source:get_completions(ctx, callback)
   local call = before:match("[%(,]%s*$") ~= nil   -- justo tras abrir/continuar una llamada
   local word = before:match("[%w_/][%w_/]*$")
 
-  -- No consultar si no hay acceso a miembro/llamada y el prefijo es <2 chars (no martillear SAP).
+  -- <2 chars sin miembro/llamada: aún no consultamos, pero is_incomplete_forward=TRUE para que
+  -- blink VUELVA a preguntar al teclear el 2º char (si fuera false, cachearía este vacío y no
+  -- mostraría nunca las clases — fue el bug anterior).
   if not member and not call and (not word or #word < 2) then
-    callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = false })
+    callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = true })
     return function() end
   end
 
@@ -91,11 +93,11 @@ function source:get_completions(ctx, callback)
     vim.schedule(function()
       callback({
         items = items,
-        is_incomplete_backward = not member,
-        -- Identificador suelto: re-consultar al teclear (la guardia de ≥2 chars devuelve vacío
-        -- en el 1er carácter; con incomplete=false blink cachearía ese vacío y NO mostraría
-        -- nunca las clases). Miembro: lista fija -> filtra local. (incomplete=true = re-query.)
-        is_incomplete_forward = not member,
+        is_incomplete_backward = true, -- al borrar, re-consultar para ampliar el conjunto
+        -- YA tenemos resultados (≥2 chars): incomplete_forward=FALSE -> al seguir tecleando,
+        -- blink FILTRA EN LOCAL la lista traída (instantáneo, como VSCode), sin re-consultar a
+        -- SAP en cada tecla. La 1ª consulta (caliente, ~0.5s vía daemon) trae el conjunto.
+        is_incomplete_forward = false,
       })
     end)
   end)
