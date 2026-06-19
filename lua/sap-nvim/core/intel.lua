@@ -378,11 +378,16 @@ function M.goto_definition(filter)
 		obj = M.definition_target(bufnr, row, col, "typeDefinition")
 	end
 
-	-- Fallback local: Si SAP no sabe qué es, te lleva a la línea de tu archivo donde lo creaste
+	-- Fallback local: Si SAP no sabe qué es, te lleva a la línea de tu archivo donde lo creaste.
+	-- Para "implementation" no tiene sentido el salto local: devolvemos false para que
+	-- el llamante (SapGotoImpl) avise "Sin implementación".
 	if not obj then
+		if filter == "implementation" then
+			return false
+		end
 		vim.notify("SAP: Sin def. Buscando local...", vim.log.levels.INFO)
 		pcall(vim.cmd, "normal! gD")
-		return true
+		return false
 	end
 
 	local meta = vim.b[bufnr].sap_obj
@@ -414,9 +419,8 @@ local ADT_KIND_MAP = {
 local hover_win = nil
 
 function M.hover()
-	-- Anulamos LSP por defecto para que no estorbe
-	vim.lsp.handlers["textDocument/hover"] = function() end
-
+	-- (El handler de hover de LSP se neutraliza UNA sola vez en setup(), y solo para
+	--  buffers ABAP, para no romper el hover de otros filetypes — ver M.setup.)
 	if hover_win and vim.api.nvim_win_is_valid(hover_win) then
 		vim.api.nvim_set_current_win(hover_win)
 		return
@@ -914,6 +918,23 @@ end
 
 function M.setup()
 	pcall(vim.diagnostic.config, { update_in_insert = true }, CHECK_NS)
+
+	-- Hover de LSP: en buffers ABAP usamos nuestro flotante (M.hover vía K), así que
+	-- silenciamos el hover nativo SOLO ahí. En el resto de filetypes se respeta el
+	-- handler original (no rompemos el hover de otros LSP). Se instala una única vez.
+	if not M._hover_handler_installed then
+		local default_hover = vim.lsp.handlers["textDocument/hover"]
+		vim.lsp.handlers["textDocument/hover"] = function(err, result, ctx, config)
+			local buf = (ctx and ctx.bufnr) or vim.api.nvim_get_current_buf()
+			if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].filetype == "abap" then
+				return
+			end
+			if default_hover then
+				return default_hover(err, result, ctx, config)
+			end
+		end
+		M._hover_handler_installed = true
+	end
 
 	local g = vim.api.nvim_create_augroup("sap_nvim_intel_lsp", { clear = true })
 
