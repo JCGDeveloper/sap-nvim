@@ -30,7 +30,7 @@ Lanzar con `isolation: worktree` (copia aislada del repo) y pasarle:
 | F14 | Visualizar tablas (DDIC + datos osql) | pendiente |
 | F15 | BAdIs / enhancements | pendiente |
 | F17 | Autocompletado ADT | pendiente (baja prioridad) |
-| F18 | Depurador (vsp/ADT) | pendiente (alto esfuerzo) |
+| F18 | Depurador (nvim-dap ⇄ ADT) | contrato de API mapeado; pendiente spike + adaptador |
 | F19 | Revisiones / comparar versiones | pendiente |
 | F20 | CDS preview | pendiente |
 
