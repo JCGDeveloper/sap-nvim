@@ -37,6 +37,7 @@ function M.setup(opts)
     "sap-nvim.core.favorites",
     "sap-nvim.core.search",
     "sap-nvim.core.templates",
+    "sap-nvim.core.include",
     "sap-nvim.core.git",
     "sap-nvim.core.quickfix",
     "sap-nvim.core.source",
