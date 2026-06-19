@@ -310,6 +310,7 @@ end
 local hover_win = nil
 
 function M.hover()
+	vim.lsp.handlers["textDocument/hover"] = function() end
 	-- Si la ventana ya existe y es válida, saltamos dentro de ella
 	if hover_win and vim.api.nvim_win_is_valid(hover_win) then
 		vim.api.nvim_set_current_win(hover_win)
@@ -341,22 +342,31 @@ function M.hover()
 		preview[#preview + 1] = lines[i]
 	end
 
-	-- Abrimos la ventana y guardamos el ID en 'hover_win'
-	local win, _ = vim.lsp.util.open_floating_preview(preview, "abap", {
+	-- Abrimos la ventana flotante recogiendo correctamente el Buffer y la Ventana
+	local float_buf, float_win = vim.lsp.util.open_floating_preview(preview, "abap", {
 		border = "rounded",
 		focusable = true,
 		width = 100,
 		height = 25,
 	})
-	hover_win = win
+	hover_win = float_win
 
-	-- Mapeo local dentro de la ventana de hover para cerrar al pulsar 'q'
+	-- Mapeo local usando directamente el ID del buffer correcto (float_buf)
 	vim.keymap.set("n", "q", function()
 		if hover_win and vim.api.nvim_win_is_valid(hover_win) then
 			vim.api.nvim_win_close(hover_win, true)
 			hover_win = nil
 		end
-	end, { buffer = vim.api.nvim_win_get_buf(win) })
+	end, { buffer = float_buf })
+
+	-- El autocmd WinClosed usa como patrón el ID de la ventana en texto
+	vim.api.nvim_create_autocmd("WinClosed", {
+		pattern = tostring(float_win),
+		once = true,
+		callback = function()
+			hover_win = nil
+		end,
+	})
 end
 
 -- ── GO-TO-DEFINITION / TYPE (navigation/target): abre la definición del símbolo ──
@@ -800,26 +810,26 @@ function M.setup()
 	-- Diagnósticos del syntax-check SAP
 	pcall(vim.diagnostic.config, { update_in_insert = true }, CHECK_NS)
 
-	-- Función auxiliar para blindar la tecla K contra otros LSPs
-	local function set_k_mapping(buf)
-		vim.keymap.set("n", "K", function()
-			M.hover()
-		end, { buffer = buf, desc = "ABAP: Hover/Navegar", nowait = true })
-	end
-
 	local g = vim.api.nvim_create_augroup("sap_nvim_intel_lsp", { clear = true })
 
-	-- Blindaje en LspAttach y BufEnter
-	vim.api.nvim_create_autocmd({ "LspAttach", "BufEnter" }, {
+	-- 🚨 EL FRANCOTIRADOR: Esperamos a que el LSP termine y machacamos la K 🚨
+	vim.api.nvim_create_autocmd("LspAttach", {
 		group = g,
 		callback = function(ev)
 			if vim.bo[ev.buf].filetype == "abap" then
-				set_k_mapping(ev.buf)
+				-- Esperamos 250 milisegundos a que Neovim/LazyVim terminen toda su carga
+				vim.defer_fn(function()
+					if vim.api.nvim_buf_is_valid(ev.buf) then
+						vim.keymap.set("n", "K", function()
+							require("sap-nvim.core.intel").hover()
+						end, { buffer = ev.buf, desc = "ABAP: Hover/Navegar SAP", nowait = true })
+					end
+				end, 250)
 			end
 		end,
 	})
 
-	-- ... [Tus otros comandos SapDaemonTest, SapDiag, etc. se quedan igual aquí] ...
+	-- Comandos de usuario
 	vim.api.nvim_create_user_command("SapDaemonTest", function()
 		M.daemon_test()
 	end, { desc = "sap-nvim: Probar daemon" })
@@ -846,7 +856,7 @@ function M.setup()
 	end, { desc = "sap-nvim: Ir al tipo" })
 	vim.api.nvim_create_user_command("SapGotoImpl", function()
 		if not M.goto_definition("implementation") then
-			notify("Sin implementación.")
+			vim.notify("Sin implementación.")
 		end
 	end, { desc = "sap-nvim: Ir a implementación" })
 	vim.api.nvim_create_user_command("SapTypeHierarchy", function()
@@ -864,19 +874,18 @@ function M.setup()
 			local b = ev.buf
 			vim.bo[b].omnifunc = "v:lua.require'sap-nvim.core.intel'.omnifunc"
 
-			-- Asignamos K y otros mapeos de navegación
-			set_k_mapping(b)
+			-- Asignamos los demás atajos con normalidad
 			vim.keymap.set("n", "gr", function()
 				M.references()
 			end, { buffer = b, desc = "ABAP: Referencias" })
 			vim.keymap.set("n", "gy", function()
 				if not M.goto_definition("typeDefinition") then
-					notify("Sin tipo.")
+					vim.notify("Sin tipo.")
 				end
 			end, { buffer = b, desc = "ABAP: Ir al tipo" })
 			vim.keymap.set("n", "gI", function()
 				if not M.goto_definition("implementation") then
-					notify("Sin implementación.")
+					vim.notify("Sin implementación.")
 				end
 			end, { buffer = b, desc = "ABAP: Ir a la implementación" })
 			vim.keymap.set("n", "gh", function()
@@ -886,7 +895,6 @@ function M.setup()
 				M.type_hierarchy(true)
 			end, { buffer = b, desc = "ABAP: Supertipos" })
 
-			-- Highlight y resto de lógica (CursorHold, SyntaxCheck, etc.) igual que tenías
 			vim.api.nvim_create_autocmd("CursorHold", {
 				buffer = b,
 				callback = function()
@@ -902,7 +910,7 @@ function M.setup()
 
 			if vim.b[b].sap_obj then
 				pcall(function()
-					adt_http.warmup()
+					require("sap-nvim.core.adt_http").warmup()
 				end)
 				M.check_syntax(b)
 			end
