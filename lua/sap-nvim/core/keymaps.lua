@@ -74,8 +74,15 @@ sap-nvim atajos:
   gr           Referencias del simbolo → picker (:SapReferences)
   (auto)       Syntax check de SAP en vivo (diagnosticos, al escribir/guardar) (:SapCheck)
   <leader>aF   Formatear con el Pretty Printer de SAP (objetos remotos)
-  <leader>aP   Plantillas: picker para insertar (:SapTemplate) · en visual, guardar seleccion
-               (vars dinamicas $OBJECT/$AUTHOR/$DATE; :SapTemplateSave para guardar el buffer)
+
+  PLANTILLAS (<leader>aP ...):
+  <leader>aPi  Insertar plantilla (picker con preview)            (:SapTemplate)
+  <leader>aPs  Guardar buffer como plantilla (en visual: la sel.) (:SapTemplateSave)
+  <leader>aPd  Mostrar la carpeta de plantillas                   (:SapTemplatesDir)
+  <leader>aPe  Abrir/editar la carpeta de plantillas              (:SapTemplateEdit)
+               Vars dinamicas: $OBJECT $PACKAGE $SHORTTEXT $METHOD $AUTHOR $DATE $YEAR ...
+               Al guardar puedes parametrizar otros nombres (grupo/tabla) como huecos.
+               Guia completa: docs/PLANTILLAS.md
 
   DATOS / TABLAS:
   <leader>avt  Ver definicion DDIC de tabla (:SapTable)

@@ -231,6 +231,18 @@ end
 
 -- ─── Setup ────────────────────────────────────────────────────────────────────
 
+-- Abre la carpeta de plantillas para gestionarlas (netrw/oil/explorador del usuario).
+function M.edit_dir()
+  vim.cmd("edit " .. vim.fn.fnameescape(M.dir()))
+end
+
+-- Guarda la selección visual actual como plantilla.
+local function save_visual()
+  local s, e = vim.fn.line("v"), vim.fn.line(".")
+  if s > e then s, e = e, s end
+  M.save(s, e)
+end
+
 function M.setup()
   vim.api.nvim_create_user_command("SapTemplate", function() M.pick() end,
     { desc = "sap-nvim: Insertar plantilla (picker)" })
@@ -240,15 +252,23 @@ function M.setup()
   vim.api.nvim_create_user_command("SapTemplatesDir", function()
     notify("Plantillas en: " .. M.dir())
   end, { desc = "sap-nvim: Ruta del store de plantillas" })
+  vim.api.nvim_create_user_command("SapTemplateEdit", function() M.edit_dir() end,
+    { desc = "sap-nvim: Abrir/editar la carpeta de plantillas" })
 
-  vim.keymap.set("n", "<leader>aP", function() M.pick() end, { desc = "ABAP: Plantillas (picker)" })
-  vim.keymap.set("v", "<leader>aP", function()
-    -- guarda la selección visual como plantilla
-    local s = vim.fn.line("v")
-    local e = vim.fn.line(".")
-    if s > e then s, e = e, s end
-    M.save(s, e)
-  end, { desc = "ABAP: Guardar selección como plantilla" })
+  -- Grupo de plantillas: <leader>aP + (i)nsertar · (s)guardar · (d)carpeta · (e)ditar.
+  -- Es un prefijo (sin acción suelta) para que which-key muestre el menú completo.
+  vim.keymap.set("n", "<leader>aPi", function() M.pick() end,
+    { desc = "Plantillas: insertar (picker)" })
+  vim.keymap.set("n", "<leader>aPs", function() M.save() end,
+    { desc = "Plantillas: guardar buffer" })
+  vim.keymap.set("v", "<leader>aPs", save_visual,
+    { desc = "Plantillas: guardar selección" })
+  vim.keymap.set("v", "<leader>aP", save_visual,
+    { desc = "Plantillas: guardar selección" })
+  vim.keymap.set("n", "<leader>aPd", function() notify("Plantillas en: " .. M.dir()) end,
+    { desc = "Plantillas: carpeta (ruta)" })
+  vim.keymap.set("n", "<leader>aPe", function() M.edit_dir() end,
+    { desc = "Plantillas: editar carpeta" })
 
   pcall(M.seed)
 end
