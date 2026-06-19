@@ -56,6 +56,12 @@ local ADT_URI = {
 	program = "/sap/bc/adt/programs/programs/%s/source/main",
 	include = "/sap/bc/adt/programs/includes/%s/source/main",
 	functiongroup = "/sap/bc/adt/functions/groups/%s/source/main",
+	-- Soporte para Diccionario de Datos (Estilo VSCode)
+	structure = "/sap/bc/adt/dictionary/structures/%s/source/main",
+	table = "/sap/bc/adt/dictionary/tables/%s/source/main",
+	dataelement = "/sap/bc/adt/dictionary/dataelements/%s/source/main",
+	tabletype = "/sap/bc/adt/dictionary/tabletypes/%s/source/main",
+	domain = "/sap/bc/adt/dictionary/domains/%s/source/main",
 }
 
 function M.object_uri(bufnr)
@@ -300,6 +306,17 @@ local URI_PATTERNS = {
 	{ "^/sap/bc/adt/programs/includes/([^/]+)", "include" },
 	{ "^/sap/bc/adt/programs/programs/([^/]+)", "program" },
 	{ "^/sap/bc/adt/functions/groups/([^/]+)", "functiongroup" },
+	-- Patrones modernos del Diccionario
+	{ "^/sap/bc/adt/dictionary/structures/([^/]+)", "structure" },
+	{ "^/sap/bc/adt/dictionary/tables/([^/]+)", "table" },
+	{ "^/sap/bc/adt/dictionary/dataelements/([^/]+)", "dataelement" },
+	{ "^/sap/bc/adt/dictionary/tabletypes/([^/]+)", "tabletype" },
+	{ "^/sap/bc/adt/dictionary/domains/([^/]+)", "domain" },
+	-- Patrones antiguos del Diccionario
+	{ "^/sap/bc/adt/ddic/structures/([^/]+)", "structure" },
+	{ "^/sap/bc/adt/ddic/tables/([^/]+)", "table" },
+	{ "^/sap/bc/adt/ddic/dataelements/([^/]+)", "dataelement" },
+	{ "^/sap/bc/adt/ddic/domains/([^/]+)", "domain" },
 }
 
 local function uri_to_object(uri)
@@ -353,10 +370,20 @@ function M.goto_definition(filter)
 	local bufnr = vim.api.nvim_get_current_buf()
 	local row, col = unpack(vim.api.nvim_win_get_cursor(0))
 
+	-- Intento 1: Buscar como definición normal
 	local obj = M.definition_target(bufnr, row, col, filter)
+
+	-- Intento 2 (Magia VSCode): Si no es una variable, a lo mejor es un Tipo del Diccionario (como ddshretval)
+	if not obj and filter == "definition" then
+		obj = M.definition_target(bufnr, row, col, "typeDefinition")
+	end
+
+	-- Fallback local: Si SAP no sabe qué es, te lleva a la línea de tu archivo donde lo creaste
 	if not obj then
-		return false
-	end -- Si SAP no lo encuentra, abortamos limpio.
+		vim.notify("SAP: Sin def. Buscando local...", vim.log.levels.INFO)
+		pcall(vim.cmd, "normal! gD")
+		return true
+	end
 
 	local meta = vim.b[bufnr].sap_obj
 	if meta and meta.name:upper() == obj.name and obj.line then
@@ -370,10 +397,24 @@ end
 
 -- ── HOVER SOURCE PREVIEW (Previsualizar código) ─────────────────────────────────
 
+-- Traductor de tipos técnicos de SAP a lenguaje humano
+local ADT_KIND_MAP = {
+	["CLAS/I"] = "Importing",
+	["INTF/I"] = "Importing",
+	["CLAS/E"] = "Exporting",
+	["INTF/E"] = "Exporting",
+	["CLAS/C"] = "Changing",
+	["INTF/C"] = "Changing",
+	["CLAS/R"] = "Returning",
+	["INTF/R"] = "Returning",
+	["PROG/P"] = "Parameter",
+	["PROG/S"] = "Select-Option",
+}
+
 local hover_win = nil
 
 function M.hover()
-	-- Anulamos cualquier petición LSP por defecto
+	-- Anulamos LSP por defecto para que no estorbe
 	vim.lsp.handlers["textDocument/hover"] = function() end
 
 	if hover_win and vim.api.nvim_win_is_valid(hover_win) then
@@ -381,35 +422,168 @@ function M.hover()
 		return
 	end
 
+	local adt_http = require("sap-nvim.core.adt_http")
 	if not adt_http.is_available() then
 		return
 	end
 	local bufnr = vim.api.nvim_get_current_buf()
 
-	local target =
-		M.definition_target(bufnr, vim.api.nvim_win_get_cursor(0)[1], vim.api.nvim_win_get_cursor(0)[2], "definition")
-	if not target then
+	local uri = M.object_uri(bufnr)
+	if not uri then
 		return
 	end
 
-	local source_uri = target.uri or ("/sap/bc/adt/oo/classes/" .. target.name:lower() .. "/source/main")
-	local body = adt_http.request({ method = "GET", path = source_uri, accept = "text/plain" })
-	if not body then
-		return
+	local row, col = unpack(vim.api.nvim_win_get_cursor(0))
+	local cstart, cend = get_word_range(bufnr, row, col)
+	local ctx = context_suffix(bufnr)
+	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+
+	-- 1. Intentamos obtener la Documentación Oficial de SAP (ElementInfo)
+	local req_params = {
+		method = "POST",
+		path = "/sap/bc/adt/abapsource/elementinfo",
+		query = { uri = uri .. ctx .. "%23start=" .. row .. "," .. cstart .. ";end=" .. row .. "," .. cend },
+		content_type = "text/plain",
+		accept = "application/xml",
+		body = src,
+	}
+
+	local body = adt_http.request(req_params)
+
+	-- Refresco de Token si ha caducado
+	if not body or not body:find("elementInfo") then
+		adt_http.reset_token()
+		body = adt_http.request(req_params)
 	end
 
-	body = body:gsub("\r", "")
-	local lines = vim.split(body, "\n")
 	local preview = {}
-	for i = 1, math.min(#lines, 40) do
-		preview[#preview + 1] = lines[i]
+
+	-- Parseamos ElementInfo (Plan A: Funciones, Clases, Tablas estándar)
+	if body and body:find("elementInfo") then
+		local is_first = true
+		local function unxml_local(s)
+			return (s or "")
+				:gsub("&lt;", "<")
+				:gsub("&gt;", ">")
+				:gsub("&quot;", '"')
+				:gsub("&apos;", "'")
+				:gsub("&amp;", "&")
+		end
+
+		for attrs in body:gmatch("<[%w_:]*elementInfo%s([^>]+)") do
+			local name = attrs:match('adtcore:name="([^"]*)"')
+			local desc = attrs:match('adtcore:description="([^"]*)"')
+			local typ = attrs:match('adtcore:type="([^"]*)"')
+
+			if name then
+				name = unxml_local(name)
+				desc = unxml_local(desc)
+				typ = unxml_local(typ)
+
+				if is_first then
+					table.insert(preview, "### " .. name)
+					if desc and desc ~= "" and desc ~= name then
+						table.insert(preview, "*" .. desc .. "*")
+					end
+					table.insert(preview, "---")
+					is_first = false
+				else
+					local item_text = "- **" .. name .. "**"
+					if typ and ADT_KIND_MAP[typ] then
+						item_text = item_text .. " `[" .. ADT_KIND_MAP[typ] .. "]`"
+					end
+					if desc and desc ~= "" and desc ~= name then
+						item_text = item_text .. ": " .. desc
+					end
+					table.insert(preview, item_text)
+				end
+			end
+		end
 	end
 
-	local float_buf, float_win = vim.lsp.util.open_floating_preview(preview, "abap", {
+	-- 2. FALLBACK PLAN B: Clon visual de VSCode para variables locales
+	if #preview == 0 then
+		local word = vim.fn.expand("<cword>")
+		local target = M.definition_target(bufnr, row, col, "definition")
+		local code_line = ""
+		local def_name = ""
+		local def_line = 0
+
+		if target and target.line then
+			def_name = target.name
+			def_line = target.line
+			local current_meta = vim.b[bufnr].sap_obj
+
+			-- Si está en el mismo archivo (ej. Variable del propio Include)
+			if current_meta and current_meta.name:upper() == target.name then
+				local lines = vim.api.nvim_buf_get_lines(bufnr, target.line - 1, target.line, false)
+				code_line = lines[1] or ""
+			else
+				-- Si está en otro archivo, generamos la URI correcta sin fallar
+				local tmpl = nil
+				if target.group == "class" then
+					tmpl = "/sap/bc/adt/oo/classes/%s/source/main"
+				elseif target.group == "interface" then
+					tmpl = "/sap/bc/adt/oo/interfaces/%s/source/main"
+				elseif target.group == "include" then
+					tmpl = "/sap/bc/adt/programs/includes/%s/source/main"
+				elseif target.group == "program" then
+					tmpl = "/sap/bc/adt/programs/programs/%s/source/main"
+				elseif target.group == "functiongroup" then
+					tmpl = "/sap/bc/adt/functions/groups/%s/source/main"
+				elseif target.group == "structure" then
+					tmpl = "/sap/bc/adt/dictionary/structures/%s/source/main"
+				elseif target.group == "table" then
+					tmpl = "/sap/bc/adt/dictionary/tables/%s/source/main"
+				end
+
+				if tmpl then
+					local source_uri = tmpl:format(target.name:lower())
+					local src_body = adt_http.request({ method = "GET", path = source_uri, accept = "text/plain" })
+					if src_body then
+						local lines = vim.split(src_body:gsub("\r", ""), "\n")
+						code_line = lines[target.line] or ""
+					end
+				end
+			end
+		else
+			-- Si SAP ni siquiera nos da la línea, escaneamos el texto local
+			local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+			for i, l in ipairs(lines) do
+				if
+					l:lower():match("data:%s*" .. word:lower())
+					or l:lower():match("types:%s*" .. word:lower())
+					or l:lower():match("constants:%s*" .. word:lower())
+				then
+					code_line = l
+					def_line = i
+					def_name = (vim.b[bufnr].sap_obj and vim.b[bufnr].sap_obj.name) or "Local File"
+					break
+				end
+			end
+		end
+
+		-- Renderizamos el clon exacto de VSCode
+		if code_line ~= "" then
+			table.insert(preview, "📦 **Variable:** `" .. word .. "`")
+			table.insert(preview, "")
+			table.insert(preview, "```abap\n" .. vim.trim(code_line) .. "\n```")
+			table.insert(preview, "")
+			table.insert(preview, "*Defined in " .. def_name .. " (Line " .. def_line .. ")*")
+		end
+	end
+
+	if #preview == 0 then
+		vim.notify("SAP no devolvió información ni código.", vim.log.levels.WARN)
+		return
+	end
+
+	-- Abrimos siempre en Markdown para que se vea bonito
+	local float_buf, float_win = vim.lsp.util.open_floating_preview(preview, "markdown", {
 		border = "rounded",
 		focusable = true,
-		width = 100,
-		height = 25,
+		max_width = 85,
+		max_height = 25,
 	})
 	hover_win = float_win
 
@@ -743,37 +917,50 @@ function M.setup()
 
 	local g = vim.api.nvim_create_augroup("sap_nvim_intel_lsp", { clear = true })
 
-	-- 🚨 EL FRANCOTIRADOR AMPLIO: Esperamos a LazyVim y machacamos sus atajos 🚨
+	-- Función agresiva para asegurar que mandan tus teclas
+	local function enforce_maps(buf)
+		local intel = require("sap-nvim.core.intel")
+		-- Borramos silenciosamente el K nativo por si LazyVim lo puso
+		pcall(vim.keymap.del, "n", "K", { buffer = buf })
+
+		vim.keymap.set("n", "K", function()
+			intel.hover()
+		end, { buffer = buf, desc = "ABAP: Hover ADT", nowait = true })
+		vim.keymap.set("n", "gr", function()
+			intel.references()
+		end, { buffer = buf, desc = "ABAP: Referencias ADT", nowait = true })
+		vim.keymap.set("n", "gd", function()
+			intel.goto_definition("definition")
+		end, { buffer = buf, desc = "ABAP: Ir a Definición", nowait = true })
+		vim.keymap.set("n", "gy", function()
+			intel.goto_definition("typeDefinition")
+		end, { buffer = buf, desc = "ABAP: Ir al tipo", nowait = true })
+		vim.keymap.set("n", "gI", function()
+			intel.goto_definition("implementation")
+		end, { buffer = buf, desc = "ABAP: Ir a impl", nowait = true })
+	end
+
+	-- Blindaje 1: Cuando el LSP intenta cargar
 	vim.api.nvim_create_autocmd("LspAttach", {
 		group = g,
 		callback = function(ev)
 			if vim.bo[ev.buf].filetype == "abap" then
+				-- Damos medio segundo a LazyVim para que se relaje, y atacamos
 				vim.defer_fn(function()
 					if vim.api.nvim_buf_is_valid(ev.buf) then
-						local intel = require("sap-nvim.core.intel")
-						vim.keymap.set("n", "K", function()
-							intel.hover()
-						end, { buffer = ev.buf, desc = "ABAP: Hover ADT", nowait = true })
-						vim.keymap.set("n", "gr", function()
-							intel.references()
-						end, { buffer = ev.buf, desc = "ABAP: Referencias ADT", nowait = true })
-						vim.keymap.set("n", "gd", function()
-							if not intel.goto_definition("definition") then
-								notify("Sin definición.")
-							end
-						end, { buffer = ev.buf, desc = "ABAP: Ir a Definición", nowait = true })
-						vim.keymap.set("n", "gy", function()
-							if not intel.goto_definition("typeDefinition") then
-								notify("Sin tipo.")
-							end
-						end, { buffer = ev.buf, desc = "ABAP: Ir al tipo", nowait = true })
-						vim.keymap.set("n", "gI", function()
-							if not intel.goto_definition("implementation") then
-								notify("Sin implementación.")
-							end
-						end, { buffer = ev.buf, desc = "ABAP: Ir a implementación", nowait = true })
+						enforce_maps(ev.buf)
 					end
-				end, 250)
+				end, 500)
+			end
+		end,
+	})
+
+	-- Blindaje 2: Cada vez que entras a la ventana (infalible)
+	vim.api.nvim_create_autocmd("BufEnter", {
+		group = g,
+		callback = function(ev)
+			if vim.bo[ev.buf].filetype == "abap" then
+				enforce_maps(ev.buf)
 			end
 		end,
 	})
