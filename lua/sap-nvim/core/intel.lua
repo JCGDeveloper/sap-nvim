@@ -326,7 +326,8 @@ local function uri_to_object(uri)
 	for _, p in ipairs(URI_PATTERNS) do
 		local name = path:match(p[1])
 		if name then
-			return { group = p[2], name = name:upper(), line = tonumber(line), col = tonumber(col) }
+			-- Añadimos raw_path para guardar la URL exacta de la tabla/estructura
+			return { group = p[2], name = name:upper(), line = tonumber(line), col = tonumber(col), raw_path = path }
 		end
 	end
 	return nil
@@ -501,7 +502,7 @@ function M.hover()
 		end
 	end
 
-	-- 2. FALLBACK PLAN B: Clon visual de VSCode para variables locales
+	-- 2. FALLBACK PLAN B: Clon visual de VSCode (Ahora con soporte para Tablas/DDIC)
 	if #preview == 0 then
 		local word = vim.fn.expand("<cword>")
 		local target = M.definition_target(bufnr, row, col, "definition")
@@ -509,45 +510,73 @@ function M.hover()
 		local def_name = ""
 		local def_line = 0
 
-		if target and target.line then
+		-- Función mágica: Lee hacia abajo buscando el punto (.) o llaves { } para el Diccionario
+		local function extract_statement(lines_table, start_idx)
+			local stmt = {}
+			local in_braces = false
+			-- Leemos hasta 50 líneas para asegurar que pillemos estructuras y tablas enteras
+			for i = start_idx, math.min(start_idx + 50, #lines_table) do
+				local l = lines_table[i] or ""
+				table.insert(stmt, l)
+				-- Limpiamos strings y comentarios para que no engañen al buscador
+				local clean = l:gsub("'.-'", ""):gsub('".*', ""):gsub("^%*.*", "")
+
+				if clean:match("{") then
+					in_braces = true
+				end
+				if in_braces and clean:match("}") then
+					break
+				end
+				if not in_braces and clean:match("%.") then
+					break
+				end
+			end
+
+			-- Alineamos el bloque a la izquierda
+			local min_ind = nil
+			for _, l in ipairs(stmt) do
+				if vim.trim(l) ~= "" then
+					local ind = #(l:match("^%s*") or "")
+					if not min_ind or ind < min_ind then
+						min_ind = ind
+					end
+				end
+			end
+			local res = {}
+			for _, l in ipairs(stmt) do
+				table.insert(res, l:sub((min_ind or 0) + 1))
+			end
+			return table.concat(res, "\n")
+		end
+
+		if target then
 			def_name = target.name
-			def_line = target.line
+			-- CORRECCIÓN: Si es una tabla, SAP no da línea. Asumimos la línea 1.
+			def_line = target.line or 1
 			local current_meta = vim.b[bufnr].sap_obj
 
-			-- Si está en el mismo archivo (ej. Variable del propio Include)
+			-- Si está en el mismo archivo
 			if current_meta and current_meta.name:upper() == target.name then
-				local lines = vim.api.nvim_buf_get_lines(bufnr, target.line - 1, target.line, false)
-				code_line = lines[1] or ""
+				local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+				code_line = extract_statement(lines, def_line)
 			else
-				-- Si está en otro archivo, generamos la URI correcta sin fallar
-				local tmpl = nil
-				if target.group == "class" then
-					tmpl = "/sap/bc/adt/oo/classes/%s/source/main"
-				elseif target.group == "interface" then
-					tmpl = "/sap/bc/adt/oo/interfaces/%s/source/main"
-				elseif target.group == "include" then
-					tmpl = "/sap/bc/adt/programs/includes/%s/source/main"
-				elseif target.group == "program" then
-					tmpl = "/sap/bc/adt/programs/programs/%s/source/main"
-				elseif target.group == "functiongroup" then
-					tmpl = "/sap/bc/adt/functions/groups/%s/source/main"
-				elseif target.group == "structure" then
-					tmpl = "/sap/bc/adt/dictionary/structures/%s/source/main"
-				elseif target.group == "table" then
-					tmpl = "/sap/bc/adt/dictionary/tables/%s/source/main"
-				end
+				-- Si está en otro archivo, usamos la ruta EXACTA que nos dio SAP
+				if target.raw_path then
+					local source_uri = target.raw_path
+					-- CORRECCIÓN: Evitamos duplicar el /source/main si SAP ya nos lo ha dado
+					if not source_uri:match("/source/main$") then
+						source_uri = source_uri .. "/source/main"
+					end
 
-				if tmpl then
-					local source_uri = tmpl:format(target.name:lower())
 					local src_body = adt_http.request({ method = "GET", path = source_uri, accept = "text/plain" })
 					if src_body then
 						local lines = vim.split(src_body:gsub("\r", ""), "\n")
-						code_line = lines[target.line] or ""
+						code_line = extract_statement(lines, def_line)
 					end
 				end
 			end
 		else
-			-- Si SAP ni siquiera nos da la línea, escaneamos el texto local
+			-- Búsqueda local por si es algo no guardado en SAP
 			local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 			for i, l in ipairs(lines) do
 				if
@@ -555,9 +584,9 @@ function M.hover()
 					or l:lower():match("types:%s*" .. word:lower())
 					or l:lower():match("constants:%s*" .. word:lower())
 				then
-					code_line = l
 					def_line = i
 					def_name = (vim.b[bufnr].sap_obj and vim.b[bufnr].sap_obj.name) or "Local File"
+					code_line = extract_statement(lines, i)
 					break
 				end
 			end
@@ -565,9 +594,9 @@ function M.hover()
 
 		-- Renderizamos el clon exacto de VSCode
 		if code_line ~= "" then
-			table.insert(preview, "📦 **Variable:** `" .. word .. "`")
+			table.insert(preview, "📦 **Definición:** `" .. word .. "`")
 			table.insert(preview, "")
-			table.insert(preview, "```abap\n" .. vim.trim(code_line) .. "\n```")
+			table.insert(preview, "```abap\n" .. code_line .. "\n```")
 			table.insert(preview, "")
 			table.insert(preview, "*Defined in " .. def_name .. " (Line " .. def_line .. ")*")
 		end
@@ -915,55 +944,19 @@ end
 function M.setup()
 	pcall(vim.diagnostic.config, { update_in_insert = true }, CHECK_NS)
 
-	local g = vim.api.nvim_create_augroup("sap_nvim_intel_lsp", { clear = true })
-
-	-- Función agresiva para asegurar que mandan tus teclas
-	local function enforce_maps(buf)
-		local intel = require("sap-nvim.core.intel")
-		-- Borramos silenciosamente el K nativo por si LazyVim lo puso
-		pcall(vim.keymap.del, "n", "K", { buffer = buf })
-
-		vim.keymap.set("n", "K", function()
-			intel.hover()
-		end, { buffer = buf, desc = "ABAP: Hover ADT", nowait = true })
-		vim.keymap.set("n", "gr", function()
-			intel.references()
-		end, { buffer = buf, desc = "ABAP: Referencias ADT", nowait = true })
-		vim.keymap.set("n", "gd", function()
-			intel.goto_definition("definition")
-		end, { buffer = buf, desc = "ABAP: Ir a Definición", nowait = true })
-		vim.keymap.set("n", "gy", function()
-			intel.goto_definition("typeDefinition")
-		end, { buffer = buf, desc = "ABAP: Ir al tipo", nowait = true })
-		vim.keymap.set("n", "gI", function()
-			intel.goto_definition("implementation")
-		end, { buffer = buf, desc = "ABAP: Ir a impl", nowait = true })
+	-- 🔥 LA OPCIÓN NUCLEAR ANTI-LAZYVIM 🔥
+	-- Secuestramos la función base del LSP de Neovim.
+	-- Si LazyVim llama al hover nativo, nosotros decidimos qué hacer.
+	local original_hover = vim.lsp.buf.hover
+	vim.lsp.buf.hover = function()
+		if vim.bo.filetype == "abap" then
+			require("sap-nvim.core.intel").hover()
+		else
+			if original_hover then
+				original_hover()
+			end
+		end
 	end
-
-	-- Blindaje 1: Cuando el LSP intenta cargar
-	vim.api.nvim_create_autocmd("LspAttach", {
-		group = g,
-		callback = function(ev)
-			if vim.bo[ev.buf].filetype == "abap" then
-				-- Damos medio segundo a LazyVim para que se relaje, y atacamos
-				vim.defer_fn(function()
-					if vim.api.nvim_buf_is_valid(ev.buf) then
-						enforce_maps(ev.buf)
-					end
-				end, 500)
-			end
-		end,
-	})
-
-	-- Blindaje 2: Cada vez que entras a la ventana (infalible)
-	vim.api.nvim_create_autocmd("BufEnter", {
-		group = g,
-		callback = function(ev)
-			if vim.bo[ev.buf].filetype == "abap" then
-				enforce_maps(ev.buf)
-			end
-		end,
-	})
 
 	-- Comandos de usuario
 	vim.api.nvim_create_user_command("SapDaemonTest", function()
@@ -992,7 +985,7 @@ function M.setup()
 	end, { desc = "sap-nvim: Ir al tipo" })
 	vim.api.nvim_create_user_command("SapGotoImpl", function()
 		if not M.goto_definition("implementation") then
-			notify("Sin implementación.")
+			vim.notify("Sin implementación.", vim.log.levels.WARN)
 		end
 	end, { desc = "sap-nvim: Ir a implementación" })
 	vim.api.nvim_create_user_command("SapTypeHierarchy", function()
@@ -1002,14 +995,63 @@ function M.setup()
 		M.type_hierarchy(true)
 	end, { desc = "sap-nvim: Supertipos" })
 
-	-- Autocmd principal
+	-- Resto de atajos (gd, gr, etc.) que no suelen dar tanta guerra como la K
+	local function enforce_maps(b)
+		vim.schedule(function()
+			if vim.api.nvim_buf_is_valid(b) and vim.bo[b].filetype == "abap" then
+				vim.keymap.set("n", "gr", function()
+					require("sap-nvim.core.intel").references()
+				end, { buffer = b, desc = "ABAP: Referencias ADT" })
+				vim.keymap.set("n", "gd", function()
+					require("sap-nvim.core.intel").goto_definition("definition")
+				end, { buffer = b, desc = "ABAP: Ir a Definición" })
+				vim.keymap.set("n", "gy", function()
+					require("sap-nvim.core.intel").goto_definition("typeDefinition")
+				end, { buffer = b, desc = "ABAP: Ir al tipo" })
+				vim.keymap.set("n", "gI", function()
+					require("sap-nvim.core.intel").goto_definition("implementation")
+				end, { buffer = b, desc = "ABAP: Ir a impl" })
+			end
+		end)
+	end
+
+	local g = vim.api.nvim_create_augroup("sap_nvim_intel_ft", { clear = true })
+
+	-- EL MARTILLO ANTI-LAZYVIM: Esperamos 1 segundo entero a que LazyVim/Noice
+	-- terminen de cargar sus cosas del LSP, y les pisamos la tecla con comandos crudos.
+	vim.api.nvim_create_autocmd("LspAttach", {
+		group = g,
+		callback = function(ev)
+			vim.defer_fn(function()
+				if vim.api.nvim_buf_is_valid(ev.buf) and vim.bo[ev.buf].filetype == "abap" then
+					pcall(vim.keymap.del, "n", "K", { buffer = ev.buf })
+					-- Usamos <cmd> en vez de función Lua para que Noice no lo intercepte
+					vim.keymap.set("n", "K", "<cmd>SapHover<CR>", { buffer = ev.buf, desc = "SAP Hover" })
+					vim.keymap.set("n", "gr", "<cmd>SapReferences<CR>", { buffer = ev.buf, desc = "SAP Referencias" })
+					vim.keymap.set("n", "gd", "<cmd>SapGotoType<CR>", { buffer = ev.buf, desc = "SAP Definición" })
+				end
+			end, 1000) -- 1000ms de retraso estratégico
+		end,
+	})
+
 	vim.api.nvim_create_autocmd("FileType", {
 		pattern = "abap",
-		group = vim.api.nvim_create_augroup("sap_nvim_intel_ft", { clear = true }),
+		group = g,
 		callback = function(ev)
 			local b = ev.buf
 			vim.bo[b].omnifunc = "v:lua.require'sap-nvim.core.intel'.omnifunc"
 
+			-- Aplicamos también al abrir el archivo, por si no hay LSP
+			vim.defer_fn(function()
+				if vim.api.nvim_buf_is_valid(b) then
+					pcall(vim.keymap.del, "n", "K", { buffer = b })
+					vim.keymap.set("n", "K", "<cmd>SapHover<CR>", { buffer = b, desc = "SAP Hover" })
+					vim.keymap.set("n", "gr", "<cmd>SapReferences<CR>", { buffer = b, desc = "SAP Referencias" })
+					vim.keymap.set("n", "gd", "<cmd>SapGotoType<CR>", { buffer = b, desc = "SAP Definición" })
+				end
+			end, 500)
+
+			-- Resto de la inicialización de sintaxis
 			vim.api.nvim_create_autocmd("CursorHold", {
 				buffer = b,
 				callback = function()
