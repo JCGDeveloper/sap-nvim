@@ -176,6 +176,52 @@ local function tokenize(line)
   return segs
 end
 
+-- R-B3 — Espaciado interior de los paréntesis de CONSTRUCTOR `#( ... )` (VALUE/COND/NEW/
+-- SWITCH/CONV/CORRESPONDING #(...)). ABAP 7.40+ exige `kw #( ... )` con espacios; un
+-- espaciado mal puesto hace que SAP rechace el paréntesis. Lo hacemos SOLO para `#(`
+-- (inequívoco): el resto de paréntesis se dejan intactos a propósito, porque espaciar
+-- genéricamente corromper­ía cosas válidas SIN espacios interiores:
+--   acceso offset/length `lv_text+0(10)`, declaración inline `DATA(lv_x)`, etc.
+-- El espaciado interior de llamadas a método (`meth( a )`) lo aporta el Pretty Printer de
+-- ADT (objetos remotos con conexión); aquí no lo arriesgamos. Idempotente.
+-- Opera sobre un segmento de CÓDIGO (sin literales de cadena). Probado offline.
+local function space_ctor_parens(s)
+  local res, stack = {}, {}
+  local i, n = 1, #s
+  while i <= n do
+    local two = s:sub(i, i + 1)
+    local c = s:sub(i, i)
+    if two == "#(" then
+      table.insert(res, "#(")
+      table.insert(stack, true) -- paréntesis de constructor
+      i = i + 2
+      local nxt = s:sub(i, i)
+      if nxt ~= "" and nxt ~= " " then table.insert(res, " ") end
+    elseif c == "(" then
+      table.insert(res, "(")
+      table.insert(stack, false) -- otro paréntesis: NO tocar el interior
+      i = i + 1
+    elseif c == ")" then
+      local is_ctor = table.remove(stack)
+      if is_ctor then
+        local last = res[#res]
+        if last and (last:sub(-1) == " " or last:sub(-1) == "(") then
+          table.insert(res, ")")
+        else
+          table.insert(res, " )")
+        end
+      else
+        table.insert(res, ")")
+      end
+      i = i + 1
+    else
+      table.insert(res, c)
+      i = i + 1
+    end
+  end
+  return table.concat(res)
+end
+
 local function uppercase_keywords(line)
   local segs = tokenize(line)
   local out = {}
@@ -192,6 +238,8 @@ local function uppercase_keywords(line)
       -- Nueva sintaxis: forzar espacio antes de `#(` (constructor: VALUE #( ), COND #( ),
       -- NEW #( )...). `#(` solo aparece en constructores, así que es seguro.
       processed = processed:gsub("([%w_])#%(", "%1 #(")
+      -- ...y espaciar el interior de esos paréntesis de constructor (R-B3).
+      processed = space_ctor_parens(processed)
       table.insert(out, processed)
     end
   end
@@ -372,6 +420,12 @@ function M.format_file()
 end
 
 function M.setup()
+  -- Comandos de formateo (el keymap <leader>aF ya llama a format_file en keymaps.lua).
+  vim.api.nvim_create_user_command("SapFormat", function() M.format_file() end,
+    { desc = "sap-nvim: Formatear (Pretty Printer de SAP si hay conexión; regex nativo si no)" })
+  vim.api.nvim_create_user_command("SapFormatNative", function() M.format_abap() end,
+    { desc = "sap-nvim: Formatear con el formateador nativo (offline, sin SAP)" })
+
   -- Format-on-save opcional (config.format.on_save). Formatea ANTES de guardar (BufWritePre)
   -- con el Pretty Printer de SAP para objetos remotos. El usuario lo activa en setup().
   vim.api.nvim_create_autocmd("BufWritePre", {
