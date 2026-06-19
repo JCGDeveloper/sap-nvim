@@ -103,10 +103,13 @@ HTTP, vía el binario `vsp` en `~/sap-mcp/vsp` o reimplementación).
   código; **guardar** plantillas nuevas desde UI; plantillas **dinámicas/parametrizadas**
   (placeholders, variables de entorno como nombre de objeto/fecha/autor). Motor: **LuaSnip**
   + un store en disco (`~/.config/sap-nvim/templates/` o en el repo del proyecto).
-  - ✅ **Variables dinámicas (2026-06-19):** `core/template_vars.lua` expande
-    `$DATE/$TIME/$YEAR/$AUTHOR/$USER/$OBJECT/$PACKAGE/$SYSTEM` con el contexto real al
-    proponer el snippet (no en caché), sin tocar los tabstops `${n}`. Cableado en
-    `abap_local`; snippet `hdr` (cabecera autor/fecha) de ejemplo. Probado offline.
+  - ✅ **Variables dinámicas — paridad Eclipse/ADT (2026-06-19):** `core/template_vars.lua`
+    expande con el contexto real al proponer (no en caché), sin tocar los tabstops `${n}`:
+    `$OBJECT`(=`${enclosing_object}`), `$PACKAGE`(real, =`${enclosing_package}`),
+    `$SHORTTEXT`(=`${shortText}`), `$METHOD`(=`${enclosing_method}`), `$AUTHOR`/`$USER`,
+    `$SYSTEM`, `$DATE/$YEAR/$MONTH/$DAY/$TIME`, `$DOLLAR`(=`${dollar}`). `$SHORTTEXT`/`$PACKAGE`
+    reales se cargan con `template_vars.prime()` (lee metadatos ADT async al abrir, vía
+    `source.open`). Cableado en `abap_local` y `templates`; snippet `hdr` de ejemplo. Probado offline.
   - ✅ **Plantillas completas (2026-06-19):** `core/templates.lua` — store en disco
     (`~/.config/sap-nvim/templates/`, un `*.abap` por plantilla, editable a mano), picker
     Telescope con preview (fallback `vim.ui.select`), guardar buffer/selección desde UI con

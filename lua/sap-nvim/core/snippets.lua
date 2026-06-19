@@ -19,12 +19,13 @@ return {
     trig = "hdr",
     name = "Cabecera (autor/fecha dinámicos)",
     body = [[*&---------------------------------------------------------------------*\n]]
-      .. [[*& $OBJECT\n]]
+      .. [[*& $OBJECT  ·  $SHORTTEXT\n]]
       .. [[*&---------------------------------------------------------------------*\n]]
-      .. [[*& Autor:   $AUTHOR\n]]
-      .. [[*& Fecha:   $DATE\n]]
-      .. [[*& Sistema: $SYSTEM\n]]
-      .. [[*& ${1:Descripción}\n]]
+      .. [[*& Autor:    $AUTHOR\n]]
+      .. [[*& Fecha:    $DATE\n]]
+      .. [[*& Paquete:  $PACKAGE\n]]
+      .. [[*& Sistema:  $SYSTEM\n]]
+      .. [[*& ${1:Detalle}\n]]
       .. [[*&---------------------------------------------------------------------*\n${0}]],
   },
   -- IF / ENDIF

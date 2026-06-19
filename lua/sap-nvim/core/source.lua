@@ -117,6 +117,9 @@ function M.open(name, group, opts)
         vim.bo[bufnr].swapfile = false
         vim.b[bufnr].sap_obj = { name = name, group = group, fgroup = fgroup }
         vim.bo[bufnr].filetype = "abap"
+        -- Lee async los metadatos ADT (descripción + paquete real) para las variables
+        -- dinámicas de plantillas ($SHORTTEXT/$PACKAGE). Best-effort, no bloquea.
+        pcall(function() require("sap-nvim.core.template_vars").prime(bufnr) end)
         if opts.line then
           pcall(vim.api.nvim_win_set_cursor, 0, { opts.line, opts.col or 0 })
           vim.cmd("normal! zz")
