@@ -74,6 +74,8 @@ sap-nvim atajos:
   gr           Referencias del simbolo → picker (:SapReferences)
   (auto)       Syntax check de SAP en vivo (diagnosticos, al escribir/guardar) (:SapCheck)
   <leader>aF   Formatear con el Pretty Printer de SAP (objetos remotos)
+  <leader>aP   Plantillas: picker para insertar (:SapTemplate) · en visual, guardar seleccion
+               (vars dinamicas $OBJECT/$AUTHOR/$DATE; :SapTemplateSave para guardar el buffer)
 
   DATOS / TABLAS:
   <leader>avt  Ver definicion DDIC de tabla (:SapTable)

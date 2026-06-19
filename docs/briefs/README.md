@@ -42,7 +42,7 @@ F0–F11, F13, F14, F16 ya implementados (ver SDD y `PLAN-MAESTRO.md §1`).
 |---|---|---|
 | RB  | Formateo inteligente al guardar (pretty printer real) | pulido (alta prioridad) |
 | RD1 | SE91: crear texto de mensaje directo | innovación |
-| RD2 | Plantillas dinámicas estilo Eclipse | innovación |
+| RD2 | Plantillas dinámicas estilo Eclipse | ✅ hecho (`core/templates.lua` + `template_vars.lua`) |
 
 Pendientes de brief (especificados en `PLAN-MAESTRO.md §3`): keywords contextuales (R-A1),
 ADT completion de sistema (R-A2), `gr` referencias (R-A3), go-to-type (R-A4), hover

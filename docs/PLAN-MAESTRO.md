@@ -107,8 +107,12 @@ HTTP, vía el binario `vsp` en `~/sap-mcp/vsp` o reimplementación).
     `$DATE/$TIME/$YEAR/$AUTHOR/$USER/$OBJECT/$PACKAGE/$SYSTEM` con el contexto real al
     proponer el snippet (no en caché), sin tocar los tabstops `${n}`. Cableado en
     `abap_local`; snippet `hdr` (cabecera autor/fecha) de ejemplo. Probado offline.
-  - ⏳ **Pendiente:** picker Telescope de plantillas + guardar plantilla desde UI + store
-    en disco editable por el usuario.
+  - ✅ **Plantillas completas (2026-06-19):** `core/templates.lua` — store en disco
+    (`~/.config/sap-nvim/templates/`, un `*.abap` por plantilla, editable a mano), picker
+    Telescope con preview (fallback `vim.ui.select`), guardar buffer/selección desde UI con
+    opción de generalizar el objeto a `$OBJECT`, e inserción vía `vim.snippet` (tabstops) +
+    `template_vars` (vars dinámicas). `:SapTemplate`/`:SapTemplateSave`/`<leader>aP`. Seed de
+    ejemplo `cabecera`. Helpers puros probados offline; store probado con IO real.
 
 ### 3.E — Debugging completo (nvim-dap)
 - **R-E1** Suite completa: breakpoints (set/toggle/clear en buffer), step over (F10),
