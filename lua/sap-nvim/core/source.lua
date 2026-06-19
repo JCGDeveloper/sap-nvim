@@ -109,8 +109,12 @@ function M.open(name, group, opts)
         -- jobstart entrega un último elemento "" por el EOF: lo descartamos.
         if out[#out] == "" then table.remove(out) end
         vim.fn.writefile(out, path)
-        vim.cmd("edit! " .. vim.fn.fnameescape(path))
+        -- `noswapfile`: los archivos de caché son artefactos del plugin (la fuente real es
+        -- SAP, se re-leen al abrir), así que no queremos swap ni el aviso E325 "swap file
+        -- already exists" al reabrirlos tras un cierre/cuelgue previo.
+        vim.cmd("noswapfile edit! " .. vim.fn.fnameescape(path))
         local bufnr = vim.api.nvim_get_current_buf()
+        vim.bo[bufnr].swapfile = false
         vim.b[bufnr].sap_obj = { name = name, group = group, fgroup = fgroup }
         vim.bo[bufnr].filetype = "abap"
         if opts.line then
