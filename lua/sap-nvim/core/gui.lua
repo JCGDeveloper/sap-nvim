@@ -9,9 +9,13 @@ end
 
 -- Abre una URL en el navegador del sistema (WSL/Linux/mac).
 local function open_url(url)
-  -- WSL: abrir en el navegador de Windows. OJO: `explorer.exe <url>` ROMPE la URL cuando
-  -- lleva `&`/`~`/`;` (abre el explorador de archivos). powershell Start-Process con la URL
-  -- entre comillas simples la trata como literal y abre el navegador por defecto.
+  -- WSL/Windows: lo MÁS fiable es `cmd.exe /c start "" "<url>"`. El "" es el título (start lo
+  -- exige), y pasar la URL como argv ÚNICO evita el parseo de `&`/`=` de powershell (que
+  -- truncaba la URL y perdía `&sap-client=`). Es el primario en WSL (cmd.exe es ejecutable).
+  if vim.fn.executable("cmd.exe") == 1 then
+    vim.fn.jobstart({ "cmd.exe", "/c", "start", "", url }, { detach = true })
+    return
+  end
   if vim.fn.executable("powershell.exe") == 1 then
     vim.fn.jobstart({ "powershell.exe", "-NoProfile", "-Command", "Start-Process '" .. url .. "'" }, { detach = true })
     return
@@ -60,11 +64,14 @@ local RUN_INFO = {
   class          = { tx = "SE24", field = "SEOCLASS-CLSNAME", okcode = "WB_EXEC" },
 }
 
--- encodeURIComponent estricto: deja alfanuméricos y `- _ .`; codifica el resto. CLAVE: el
--- shortcut lleva `=` y `;` que, SIN codificar, rompen el parseo de la URL del ITS y el OKCODE
--- (ejecutar/F8) nunca se aplica — ese era el bug. VSCode los codifica (`%3d`, `%3b`, `%20`).
+-- Emula EXACTAMENTE el encodeURIComponent de JS (lo que usa la extensión de VSCode): NO
+-- codifica `A-Z a-z 0-9 - _ . ! ~ * ' ( )`. CLAVE doble:
+--  • el `;` y el `=` del shortcut SÍ se codifican (`%3B`/`%3D`): sin ello el ITS parsea mal
+--    la URL y el OKCODE (ejecutar/F8) no se aplica.
+--  • el `*` se deja LITERAL (no `%2A`): el ITS exige que `~transaction` empiece por `*SE38`
+--    para saltar la pantalla inicial; con `%2A` la ejecución aborta en el menú SAP.
 local function enc(s)
-  return (s:gsub("[^%w%-_.]", function(c) return string.format("%%%02X", string.byte(c)) end))
+  return (s:gsub("[^%w%-_.!~*'()]", function(c) return string.format("%%%02X", string.byte(c)) end))
 end
 
 -- Construye la URL WebGUI que EJECUTA el objeto (shortcut de transacción completo y codificado).
