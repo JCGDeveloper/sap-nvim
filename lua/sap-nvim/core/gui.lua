@@ -51,8 +51,33 @@ function M.web_gui()
   open_url(base .. "/sap/bc/gui/sap/its/webgui?sap-client=" .. client)
 end
 
+-- Mapeo tipo de objeto -> transacción/campo/okcode para EJECUTAR en WebGUI. Idéntico a la
+-- extensión de VSCode (SapGuiPanel.getTransactionInfo): PROG/P -> SE38, FUGR/FF -> SE37, etc.
+local RUN_INFO = {
+  program        = { tx = "SE38", field = "RS38M-PROGRAMM",  okcode = "STRT" },
+  functiongroup  = { tx = "SE37", field = "RS38L-NAME",       okcode = "WB_EXEC" },
+  functionmodule = { tx = "SE37", field = "RS38L-NAME",       okcode = "WB_EXEC" },
+  class          = { tx = "SE24", field = "SEOCLASS-CLSNAME", okcode = "WB_EXEC" },
+}
+
+-- encodeURIComponent estricto: deja alfanuméricos y `- _ .`; codifica el resto. CLAVE: el
+-- shortcut lleva `=` y `;` que, SIN codificar, rompen el parseo de la URL del ITS y el OKCODE
+-- (ejecutar/F8) nunca se aplica — ese era el bug. VSCode los codifica (`%3d`, `%3b`, `%20`).
+local function enc(s)
+  return (s:gsub("[^%w%-_.]", function(c) return string.format("%%%02X", string.byte(c)) end))
+end
+
+-- Construye la URL WebGUI que EJECUTA el objeto (shortcut de transacción completo y codificado).
+local function webgui_run_url(base, client, info, name)
+  local shortcut = "*" .. info.tx .. " " .. info.field .. "=" .. name:upper() .. ";DYNP_OKCODE=" .. info.okcode
+  return base
+    .. "/sap/bc/gui/sap/its/webgui?~transaction=" .. enc(shortcut)
+    .. "&sap-client=" .. client
+    .. "&sap-language=EN&saml2=disabled"
+end
+
 -- Ejecuta el PROGRAMA/report del buffer actual (o el nombre dado) via SE38 en WebGUI.
--- Usa vim.b.sap_obj si es un program; si no, pide el nombre. Abre SE38 con el programa.
+-- Usa vim.b.sap_obj si es un program; si no, pide el nombre. Abre SE38 y lo EJECUTA (STRT).
 function M.run_program(progname)
   local base, client = base_client()
   if not base then return end
@@ -62,10 +87,7 @@ function M.run_program(progname)
     p = (p or ""):upper()
     if p == "" then return end
     notify("Ejecutando programa " .. p .. " (SE38) en WebGUI...")
-    -- SE38 con el programa precargado: ~transaction=*SE38 con parametro del programa.
-    -- NOTA: la sintaxis exacta del shortcut (*SE38 RS38M-PROGRAMM=...;DYNP_OKCODE=STRT)
-    -- la verificara el orquestador en vivo; el formato URL-encoded es el habitual de SAP ITS.
-    open_url(base .. "/sap/bc/gui/sap/its/webgui?sap-client=" .. client .. "&~transaction=*SE38%20RS38M-PROGRAMM=" .. p .. ";DYNP_OKCODE=STRT")
+    open_url(webgui_run_url(base, client, RUN_INFO.program, p))
   end
   if name then
     go(name)
