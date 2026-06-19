@@ -378,16 +378,11 @@ function M.goto_definition(filter)
 		obj = M.definition_target(bufnr, row, col, "typeDefinition")
 	end
 
-	-- Fallback local: Si SAP no sabe qué es, te lleva a la línea de tu archivo donde lo creaste.
-	-- Para "implementation" no tiene sentido el salto local: devolvemos false para que
-	-- el llamante (SapGotoImpl) avise "Sin implementación".
+	-- Fallback local: Si SAP no sabe qué es, te lleva a la línea de tu archivo donde lo creaste
 	if not obj then
-		if filter == "implementation" then
-			return false
-		end
 		vim.notify("SAP: Sin def. Buscando local...", vim.log.levels.INFO)
 		pcall(vim.cmd, "normal! gD")
-		return false
+		return true
 	end
 
 	local meta = vim.b[bufnr].sap_obj
