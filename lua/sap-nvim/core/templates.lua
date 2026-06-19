@@ -48,14 +48,36 @@ function M.strip_tabstops(body)
   return body
 end
 
--- "Generaliza" un cuerpo para reutilizarlo: reemplaza apariciones del nombre del objeto
--- por $OBJECT (case-insensitive en límites de palabra).
-function M.templatize(body, obj_name)
-  if not obj_name or obj_name == "" then return body end
-  return (body:gsub("([%w_/]+)", function(w)
-    if w:upper() == obj_name:upper() then return "$OBJECT" end
+-- Reemplaza TODAS las apariciones (token completo, case-insensitive) de `token` por
+-- `first` en la 1ª y `rest` en las siguientes. Devuelve el texto y si hubo cambios.
+local function replace_token(text, token, first, rest)
+  if not token or token == "" then return text, false end
+  local seen, changed = false, false
+  local out = text:gsub("([%w_/~]+)", function(w)
+    if w:upper() == token:upper() then
+      changed = true
+      if not seen then seen = true; return first end
+      return rest
+    end
     return w
-  end))
+  end)
+  return out, changed
+end
+
+-- "Generaliza" un cuerpo para reutilizarlo, estilo Eclipse:
+--  • el nombre del objeto (obj_name) → $OBJECT en TODAS partes (se rellena solo al insertar).
+--  • cada identificador de `extras` → un tab-stop numerado y ESPEJADO `${i:nombre}` / `$i`
+--    (escribes el nuevo valor una vez y cambia en todas sus apariciones).
+function M.templatize(body, obj_name, extras)
+  if obj_name and obj_name ~= "" then
+    body = (replace_token(body, obj_name, "$OBJECT", "$OBJECT"))
+  end
+  for i, ex in ipairs(extras or {}) do
+    if ex and ex ~= "" then
+      body = (replace_token(body, ex, "${" .. i .. ":" .. ex .. "}", "$" .. i))
+    end
+  end
+  return body
 end
 
 -- ─── Inserción ────────────────────────────────────────────────────────────────
@@ -144,6 +166,7 @@ function M.save(line1, line2)
     if not name or vim.trim(name) == "" then return end
     name = vim.trim(name):gsub("[^%w_%-]", "_")
     local path = M.dir() .. "/" .. name .. ".abap"
+    local obj = vim.b[bufnr].sap_obj and vim.b[bufnr].sap_obj.name
 
     local function write(final_body)
       local function do_write()
@@ -159,16 +182,26 @@ function M.save(line1, line2)
       end
     end
 
-    local obj = vim.b[bufnr].sap_obj and vim.b[bufnr].sap_obj.name
-    if obj and obj ~= "" and body:upper():find(obj:upper(), 1, true) then
-      vim.ui.select({ "Sí, generalizar (" .. obj .. " → $OBJECT)", "No, guardar literal" },
-        { prompt = "¿Generalizar el nombre del objeto para reutilizar?" }, function(ch)
-          if not ch then return end
-          if ch:match("^Sí") then write(M.templatize(body, obj)) else write(body) end
-        end)
-    else
-      write(body)
-    end
+    -- Otros identificadores a parametrizar (grupo de funciones, tabla, prefijo...): cada uno
+    -- se convierte en un hueco numerado y espejado, así al reusar lo escribes una vez.
+    vim.ui.input({ prompt = "Otros nombres a parametrizar (coma, vacío = ninguno): " }, function(extra_str)
+      local extras = {}
+      for tok in (extra_str or ""):gmatch("[%w_/~]+") do extras[#extras + 1] = tok end
+
+      local function finish(use_obj)
+        write(M.templatize(body, use_obj and obj or nil, extras))
+      end
+
+      if obj and obj ~= "" and body:upper():find(obj:upper(), 1, true) then
+        vim.ui.select({ "Sí, " .. obj .. " → $OBJECT (automático)", "No, dejar literal" },
+          { prompt = "¿Generalizar el nombre del objeto?" }, function(ch)
+            if not ch then return end
+            finish(ch:match("^Sí") ~= nil)
+          end)
+      else
+        finish(false)
+      end
+    end)
   end)
 end
 
