@@ -13,6 +13,20 @@ return {
     name = "REPORT skeleton",
     body = [[REPORT ${1:zprogram}.\n\n${0}]],
   },
+  -- Cabecera con variables DINÁMICAS (R-D2): $OBJECT/$AUTHOR/$DATE/$SYSTEM se rellenan
+  -- solos con el contexto actual al expandir (estilo plantilla de Eclipse/ADT).
+  hdr = {
+    trig = "hdr",
+    name = "Cabecera (autor/fecha dinámicos)",
+    body = [[*&---------------------------------------------------------------------*\n]]
+      .. [[*& $OBJECT\n]]
+      .. [[*&---------------------------------------------------------------------*\n]]
+      .. [[*& Autor:   $AUTHOR\n]]
+      .. [[*& Fecha:   $DATE\n]]
+      .. [[*& Sistema: $SYSTEM\n]]
+      .. [[*& ${1:Descripción}\n]]
+      .. [[*&---------------------------------------------------------------------*\n${0}]],
+  },
   -- IF / ENDIF
   ife = {
     trig = "ife",

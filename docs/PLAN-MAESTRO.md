@@ -58,9 +58,11 @@ HTTP, vía el binario `vsp` en `~/sap-mcp/vsp` o reimplementación).
 ## 3. NUEVOS requisitos (de esta sesión / capturas del usuario)
 
 ### 3.A — Autocompletado y LSP (sensación VSCode)
-- **R-A1 Keywords contextuales:** dentro de una clase/método faltan `IMPORTING`,
-  `EXPORTING`, `RETURNING VALUE`, `CHANGING`, `CLASS-METHODS`, etc. El completado debe ser
-  **consciente del contexto** (sección de clase, método, definición vs implementación).
+- **R-A1 Keywords contextuales:** ✅ HECHO (2026-06-19) — `integrations/abap_local.lua`
+  detecta el contexto (firma de método / sección de clase / cuerpo / global) y prioriza
+  (`score_offset`) los keywords propios: `IMPORTING`/`EXPORTING`/`RETURNING VALUE()`/
+  `CHANGING`/`RAISING` en una firma; `METHODS`/`CLASS-METHODS`/`DATA`/secciones en la
+  definición de clase. Detección heurística pura, probada offline. No requiere red.
 - **R-A2 Métodos/clases del sistema:** autocompletar métodos y clases estándar de SAP
   (p.ej. `cl_abap_*`, `if_*`). Requiere **ADT code completion** (sapcli no lo expone →
   vía `vsp`/ADT directo) o, mínimo, un índice de los objetos del sistema.
@@ -101,6 +103,12 @@ HTTP, vía el binario `vsp` en `~/sap-mcp/vsp` o reimplementación).
   código; **guardar** plantillas nuevas desde UI; plantillas **dinámicas/parametrizadas**
   (placeholders, variables de entorno como nombre de objeto/fecha/autor). Motor: **LuaSnip**
   + un store en disco (`~/.config/sap-nvim/templates/` o en el repo del proyecto).
+  - ✅ **Variables dinámicas (2026-06-19):** `core/template_vars.lua` expande
+    `$DATE/$TIME/$YEAR/$AUTHOR/$USER/$OBJECT/$PACKAGE/$SYSTEM` con el contexto real al
+    proponer el snippet (no en caché), sin tocar los tabstops `${n}`. Cableado en
+    `abap_local`; snippet `hdr` (cabecera autor/fecha) de ejemplo. Probado offline.
+  - ⏳ **Pendiente:** picker Telescope de plantillas + guardar plantilla desde UI + store
+    en disco editable por el usuario.
 
 ### 3.E — Debugging completo (nvim-dap)
 - **R-E1** Suite completa: breakpoints (set/toggle/clear en buffer), step over (F10),
