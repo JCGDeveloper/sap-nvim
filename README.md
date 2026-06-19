@@ -443,6 +443,30 @@ recursivo. Abre oil.nvim (si está disponible) o el directorio al terminar.
 - Las anotaciones (`@AbapCatalog.…`) se preservan tal cual
 - Los comentarios (`//`, `/* */`) se indentan pero no se modifican
 
+`:SapFormat` (= `<leader>aF`) usa el Pretty Printer de SAP/ADT en objetos remotos; sin
+conexión cae al formateador nativo (`:SapFormatNative`).
+
+---
+
+### Plantillas de código (estilo Eclipse/ADT)
+
+Store de plantillas en disco (`~/.config/sap-nvim/templates/`) con picker, guardado desde la
+UI y **variables dinámicas** (`$OBJECT`, `$PACKAGE`, `$SHORTTEXT`, `$METHOD`, `$AUTHOR`,
+`$DATE`, …) con paridad Eclipse. Al guardar puedes parametrizar identificadores (grupo de
+funciones, tabla…) como tab-stops espejados para reutilizar un include entero.
+
+Grupo de teclado **`<leader>aP`**: `i` insertar · `s` guardar · `d` carpeta · `e` editar.
+
+Guía completa: [`docs/PLANTILLAS.md`](docs/PLANTILLAS.md).
+
+---
+
+### Autocompletado contextual (ABAP)
+
+El completado local es **consciente del contexto**: en una firma de método propone
+`IMPORTING`/`EXPORTING`/`RETURNING VALUE()`/`CHANGING`; en la sección de una clase,
+`METHODS`/`CLASS-METHODS`/`DATA`/… — priorizados sobre el resto de palabras clave.
+
 ---
 
 ### Integración con la statusline
