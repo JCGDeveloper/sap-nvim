@@ -155,7 +155,7 @@ sap-nvim atajos:
 		require("sap-nvim.core.debugger").debug_current()
 	end, { desc = "ABAP: Debuggear" })
 
-	-- 🎯 SOLUCIÓN A LOS MAPEOS PERDIDOS EN CDS
+	-- 🎯 MAPEOS COMBINADOS ABAP + CDS
 	local abap_maps = {
 		{ "<leader>aa", "<cmd>SapActivate<cr>", "Activar (sube antes si es remoto)" },
 		{ "<leader>au", "<cmd>SapPush<cr>", "Subir (push) sin activar" },
@@ -171,12 +171,23 @@ sap-nvim atajos:
 		{ "<leader>avq", "<cmd>SapData<cr>", "Ejecutar OpenSQL" },
 	}
 
+	local cds_maps = {
+		{ "<leader>cp", "<cmd>SapCdsPreview<cr>", "Preview Datos" },
+		{ "<leader>cs", "<cmd>SapCdsSql<cr>", "Ver SQL Nativo" },
+		{ "<leader>co", "<cmd>SapCdsOData<cr>", "Generar OData" },
+		{ "<leader>cg", "<cmd>SapCdsGraph<cr>", "Grafo RAP" },
+		{ "<leader>cc", ":SapCdsOpen ", "Abrir CDS" },
+	}
+
 	vim.api.nvim_create_autocmd("FileType", {
 		pattern = { "abap", "cds", "acds", "abapcds", "ddls" },
 		group = vim.api.nvim_create_augroup("sap_nvim_keymaps_abap", { clear = true }),
 		callback = function(ev)
 			for _, m in ipairs(abap_maps) do
-				vim.keymap.set("n", m[1], m[2], { buffer = ev.buf, silent = true, desc = "SAP: " .. m[3] })
+				vim.keymap.set("n", m[1], m[2], { buffer = ev.buf, silent = true, desc = "ABAP: " .. m[3] })
+			end
+			for _, m in ipairs(cds_maps) do
+				vim.keymap.set("n", m[1], m[2], { buffer = ev.buf, silent = true, desc = "CDS: " .. m[3] })
 			end
 		end,
 	})

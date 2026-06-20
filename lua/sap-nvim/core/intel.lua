@@ -705,57 +705,131 @@ function M.references()
 	vim.notify("[DEBUG] Buscando refs en: " .. target_uri, vim.log.levels.INFO)
 
 	local function parse_and_show(body)
-		-- CHIVATO: Ver respuesta cruda
-		vim.notify("[DEBUG] SAP respondió: " .. string.sub(body or "VACIO", 1, 100), vim.log.levels.INFO)
-
-		if not body or not body:find("usageReference") then
+		if not body or body == "" then
 			local_references_fallback()
 			return
 		end
-		-- ... resto del parseo ...
+
 		local refs = {}
-		for obj_block in body:gmatch("<usageReferences:adtObject(.-)</usageReferences:adtObject>") do
-			local obj_name = obj_block:match('adtcore:name="([^"]*)"')
-			local obj_typ = obj_block:match('adtcore:type="([^"]*)"')
-			for ref_block in obj_block:gmatch("<usageReferences:usageReference(.-)</usageReferences:usageReference>") do
-				local ref_uri = ref_block:match('adtcore:uri="([^"]*)"')
-				local snippet = ref_block:match("<usageReferences:snippet>([^<]*)</usageReferences:snippet>")
-				if ref_uri then
-					refs[#refs + 1] =
-						{ name = obj_name, typ = obj_typ or "", uri = unxml(ref_uri), snippet = unxml(snippet or "") }
+
+		------------------------------------------------------------------
+		-- FORMATO MODERNO RIS (S/4HANA CDS)
+		------------------------------------------------------------------
+		for block in body:gmatch("<usageReferences:referencedObject(.-)</usageReferences:referencedObject>") do
+			local uri = block:match('uri="([^"]*)"')
+
+			local name = block:match('adtcore:name="([^"]*)"')
+
+			local typ = block:match('adtcore:type="([^"]*)"')
+
+			local descr = block:match('adtcore:description="([^"]*)"')
+
+			if uri and name then
+				refs[#refs + 1] = {
+					name = name,
+					typ = typ or "",
+					uri = unxml(uri),
+					snippet = descr or "",
+				}
+			end
+		end
+
+		------------------------------------------------------------------
+		-- FORMATO ANTIGUO ADT
+		------------------------------------------------------------------
+		if #refs == 0 then
+			for obj_block in body:gmatch("<usageReferences:adtObject(.-)</usageReferences:adtObject>") do
+				local obj_name = obj_block:match('adtcore:name="([^"]*)"')
+
+				local obj_typ = obj_block:match('adtcore:type="([^"]*)"')
+
+				for ref_block in
+					obj_block:gmatch("<usageReferences:usageReference(.-)</usageReferences:usageReference>")
+				do
+					local ref_uri = ref_block:match('adtcore:uri="([^"]*)"')
+
+					local snippet = ref_block:match("<usageReferences:snippet>([^<]*)</usageReferences:snippet>")
+
+					if ref_uri then
+						refs[#refs + 1] = {
+							name = obj_name or "?",
+							typ = obj_typ or "",
+							uri = unxml(ref_uri),
+							snippet = unxml(snippet or ""),
+						}
+					end
 				end
 			end
 		end
+
+		------------------------------------------------------------------
+		-- SIN RESULTADOS
+		------------------------------------------------------------------
 		if #refs == 0 then
+			vim.notify("[sap-nvim] No se encontraron referencias globales.", vim.log.levels.WARN)
+
 			local_references_fallback()
 			return
 		end
+
+		------------------------------------------------------------------
+		-- ELIMINAR DUPLICADOS
+		------------------------------------------------------------------
+		local seen = {}
+		local unique = {}
+
+		for _, r in ipairs(refs) do
+			local key = (r.uri or "") .. "|" .. (r.name or "")
+
+			if not seen[key] then
+				seen[key] = true
+				unique[#unique + 1] = r
+			end
+		end
+
+		refs = unique
+
+		table.sort(refs, function(a, b)
+			return (a.name or "") < (b.name or "")
+		end)
+
+		vim.notify(string.format("[sap-nvim] %d referencias encontradas", #refs), vim.log.levels.INFO)
+
 		vim.ui.select(refs, {
 			prompt = "Referencias SAP (" .. #refs .. "):",
+
 			format_item = function(r)
-				return string.format(
-					"%-15s [Línea %-4s] %s",
-					r.name,
-					r.uri:match("start=(%d+)") or "?",
-					vim.trim(r.snippet)
-				)
+				return string.format("%-45s %-12s %s", r.name or "", r.typ or "", r.snippet or "")
 			end,
 		}, function(choice)
 			if not choice then
 				return
 			end
+
 			local obj = uri_to_object(choice.uri)
+
 			if obj and obj.group then
-				local cds_groups = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+				local cds_groups = {
+					ddls = true,
+					ddlx = true,
+					dcl = true,
+					bdef = true,
+					srvd = true,
+				}
+
 				if cds_groups[obj.group] then
-					require("sap-nvim.core.cds").open_adt(obj.group, obj.name, { line = obj.line, col = obj.col })
+					require("sap-nvim.core.cds").open_adt(obj.group, obj.name, {
+						line = obj.line,
+						col = obj.col,
+					})
 				else
-					require("sap-nvim.core.source").open(
-						obj.name:upper(),
-						obj.group,
-						{ line = obj.line, col = obj.col }
-					)
+					require("sap-nvim.core.source").open(obj.name:upper(), obj.group, {
+						line = obj.line,
+						col = obj.col,
+					})
 				end
+			else
+				vim.notify("No se pudo resolver la URI:\n" .. tostring(choice.uri), vim.log.levels.WARN)
 			end
 		end)
 	end
