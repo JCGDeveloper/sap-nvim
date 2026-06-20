@@ -4,6 +4,9 @@ return {
 	-- fuzzy lua; usa el binario por defecto de blink. Fuentes ADT del plugin.
 	{
 		"saghen/blink.cmp",
+		-- Pineado al MISMO commit que tu config personal (que funciona): el último main
+		-- tiene una regresión que borra el identificador al aceptar la compleción.
+		commit = "78336bc89ee5365633bcf754d93df01678b5c08f",
 		event = "InsertEnter",
 		opts = {
 			sources = {
@@ -45,7 +48,9 @@ return {
 	{
 		"nvim-treesitter/nvim-treesitter",
 		branch = "main",
-		build = ":TSUpdate",
+		-- MISMO commit que tu config personal (que NO crashea en Neovim 0.12). El último
+		-- main rompe el highlighter (vim/treesitter query_predicates) al renderizar el hover.
+		commit = "4916d6592ede8c07973490d9322f187e07dfefac",
 		lazy = false,
 		config = function()
 			pcall(function()
