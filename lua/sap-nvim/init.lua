@@ -33,6 +33,7 @@ function M.setup(opts)
     "sap-nvim.core.debugger",
     "sap-nvim.core.transport",
     "sap-nvim.core.cts",
+    "sap-nvim.core.cds",
     "sap-nvim.core.transaction",
     "sap-nvim.core.gui",
     "sap-nvim.core.favorites",

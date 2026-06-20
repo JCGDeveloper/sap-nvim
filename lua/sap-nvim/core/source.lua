@@ -58,11 +58,17 @@ end
 
 -- Abre un objeto remoto: lo lee de SAP, lo cachea y lo muestra en un buffer.
 -- opts.line / opts.col (opcional): salta a esa posición tras abrir (para go-to-definition).
+local RAP_KINDS = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+
 function M.open(name, group, opts)
   opts = opts or {}
   if not group then
     notify("Tipo de objeto desconocido para '" .. name .. "'", vim.log.levels.WARN)
     return
+  end
+  -- Objetos CDS/RAP: sapcli no los lee. Los abre core/cds por ADT directo.
+  if RAP_KINDS[group] then
+    return require("sap-nvim.core.cds").open_adt(group, name, opts)
   end
   if not adt.is_configured() then
     notify("No hay conexion SAP. Usa :SapSetup primero.", vim.log.levels.WARN)

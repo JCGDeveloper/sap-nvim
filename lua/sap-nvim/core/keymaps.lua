@@ -1,50 +1,48 @@
--- sap-nvim.core.keymaps
--- Atajos básicos para ABAP
-
+-- lua/sap-nvim/core/keymaps.lua
 local M = {}
 
 function M.setup(opts)
-  opts = opts or {}
+	opts = opts or {}
 
-  -- TDD: Ejecutar tests unitarios ABAP vía sapcli
-  vim.keymap.set("n", "<leader>aT", function()
-    local obj = vim.fn.expand("%:t:r")
-    if obj == "" then
-      vim.notify("sap-nvim: Guardá el archivo primero", vim.log.levels.WARN)
-      return
-    end
-    vim.cmd("write")
-    vim.notify("[sap-nvim] Ejecutando tests de " .. obj .. "...")
-    local aunit_lines = {}
-    vim.fn.jobstart({ "sapcli", "aunit", "run", "class", obj }, {
-      on_stdout = function(_, data)
-        for _, line in ipairs(data) do
-          if line ~= "" then table.insert(aunit_lines, line) end
-        end
-      end,
-      on_exit = function(_, code)
-        vim.schedule(function()
-          if #aunit_lines > 0 then
-            vim.notify("[sap-nvim] AUnit:\n" .. table.concat(aunit_lines, "\n"))
-          end
-          if code == 0 then
-            vim.notify("[sap-nvim] Tests OK", vim.log.levels.INFO)
-          else
-            vim.notify("[sap-nvim] Tests fallaron (code " .. code .. ")", vim.log.levels.WARN)
-          end
-        end)
-      end,
-    })
-  end, { desc = "ABAP: Ejecutar tests unitarios" })
+	vim.keymap.set("n", "<leader>aT", function()
+		local obj = vim.fn.expand("%:t:r")
+		if obj == "" then
+			vim.notify("sap-nvim: Guardá el archivo primero", vim.log.levels.WARN)
+			return
+		end
+		vim.cmd("write")
+		vim.notify("[sap-nvim] Ejecutando tests de " .. obj .. "...")
+		local aunit_lines = {}
+		vim.fn.jobstart({ "sapcli", "aunit", "run", "class", obj }, {
+			on_stdout = function(_, data)
+				for _, line in ipairs(data) do
+					if line ~= "" then
+						table.insert(aunit_lines, line)
+					end
+				end
+			end,
+			on_exit = function(_, code)
+				vim.schedule(function()
+					if #aunit_lines > 0 then
+						vim.notify("[sap-nvim] AUnit:\n" .. table.concat(aunit_lines, "\n"))
+					end
+					if code == 0 then
+						vim.notify("[sap-nvim] Tests OK", vim.log.levels.INFO)
+					else
+						vim.notify("[sap-nvim] Tests fallaron (code " .. code .. ")", vim.log.levels.WARN)
+					end
+				end)
+			end,
+		})
+	end, { desc = "ABAP: Ejecutar tests unitarios" })
 
-  -- ATC: Ejecutar ABAP Test Cockpit
-  vim.keymap.set("n", "<leader>aK", function()
-    require("sap-nvim.core.adt").run_atc()
-  end, { desc = "ABAP: Ejecutar ATC" })
+	vim.keymap.set("n", "<leader>aK", function()
+		require("sap-nvim.core.adt").run_atc()
+	end, { desc = "ABAP: Ejecutar ATC" })
 
-  -- Help actualizada
-  vim.keymap.set("n", "<leader>ah", function()
-    vim.notify([[
+	vim.keymap.set("n", "<leader>ah", function()
+		vim.notify(
+			[[
 sap-nvim atajos:
   <leader>ah   Ayuda
   <leader>aF   Formatear (uppercase + indent)
@@ -80,9 +78,6 @@ sap-nvim atajos:
   <leader>aPs  Guardar buffer como plantilla (en visual: la sel.) (:SapTemplateSave)
   <leader>aPd  Mostrar la carpeta de plantillas                   (:SapTemplatesDir)
   <leader>aPe  Abrir/editar la carpeta de plantillas              (:SapTemplateEdit)
-               Vars dinamicas: $OBJECT $PACKAGE $SHORTTEXT $METHOD $AUTHOR $DATE $YEAR ...
-               Al guardar puedes parametrizar otros nombres (grupo/tabla) como huecos.
-               Guia completa: docs/PLANTILLAS.md
 
   DATOS / TABLAS:
   <leader>avt  Ver definicion DDIC de tabla (:SapTable)
@@ -105,103 +100,86 @@ sap-nvim atajos:
   <leader>asc  Configurar conexiones (:SapSetup, formato kubeconfig)
   <leader>asd  Diagnostico SAP solo-lectura (:SapDoctor)
   <leader>asi  Info conexion activa (:SapStatus)
-    ]], vim.log.levels.INFO)
-  end, { desc = "ABAP: Ayuda" })
+    ]],
+			vim.log.levels.INFO
+		)
+	end, { desc = "ABAP: Ayuda" })
 
-  -- Formatear ABAP con formateador nativo (uppercase + indentación)
-  -- Dispatcher handles ABAP vs CDS automatically by file extension
-  vim.keymap.set("n", "<leader>aF", function()
-    require("sap-nvim.core.formatter").format_file()
-  end, { desc = "ABAP/CDS: Format file" })
+	vim.keymap.set("n", "<leader>aF", function()
+		require("sap-nvim.core.formatter").format_file()
+	end, { desc = "ABAP/CDS: Format file" })
 
-  -- SAP GUI integration
-  local function find_sapgui()
-    local paths = {
-      "/Applications/SAP GUI.app",
-      "/Applications/SAPGUI.app",
-    }
-    for _, p in ipairs(paths) do
-      local f = io.open(p .. "/Contents/Info.plist", "r")
-      if f then
-        f:close()
-        return p
-      end
-    end
-    return nil
-  end
+	local function find_sapgui()
+		local paths = { "/Applications/SAP GUI.app", "/Applications/SAPGUI.app" }
+		for _, p in ipairs(paths) do
+			local f = io.open(p .. "/Contents/Info.plist", "r")
+			if f then
+				f:close()
+				return p
+			end
+		end
+		return nil
+	end
 
-  vim.keymap.set("n", "<leader>asg", function()
-    local app = find_sapgui()
-    if app then
-      vim.fn.jobstart({ "open", app })
-      vim.notify("sap-nvim: Abriendo SAP GUI...")
-    else
-      vim.notify("sap-nvim: SAP GUI no encontrado", vim.log.levels.ERROR)
-    end
-  end, { desc = "ABAP: Abrir SAP GUI" })
+	vim.keymap.set("n", "<leader>asg", function()
+		local app = find_sapgui()
+		if app then
+			vim.fn.jobstart({ "open", app })
+			vim.notify("sap-nvim: Abriendo SAP GUI...")
+		else
+			vim.notify("sap-nvim: SAP GUI no encontrado", vim.log.levels.ERROR)
+		end
+	end, { desc = "ABAP: Abrir SAP GUI" })
 
-  vim.keymap.set("n", "<leader>aso", function()
-    local app = find_sapgui()
-    if app then
-      local obj = vim.fn.expand("%:t:r")
-      local tx = "SE80"
-      vim.fn.jobstart({ "open", app })
-      vim.notify(string.format("sap-nvim: SAP GUI abierto. Busca %s en %s", obj, tx))
-    else
-      vim.notify("sap-nvim: SAP GUI no encontrado", vim.log.levels.ERROR)
-    end
-  end, { desc = "ABAP: Abrir objeto en SAP GUI" })
+	vim.keymap.set("n", "<leader>aso", function()
+		local app = find_sapgui()
+		if app then
+			local obj = vim.fn.expand("%:t:r")
+			vim.fn.jobstart({ "open", app })
+			vim.notify(string.format("sap-nvim: SAP GUI abierto. Busca %s en SE80", obj))
+		else
+			vim.notify("sap-nvim: SAP GUI no encontrado", vim.log.levels.ERROR)
+		end
+	end, { desc = "ABAP: Abrir objeto en SAP GUI" })
 
-  -- Activar objeto ABAP. Para objetos remotos sube antes (push) implícitamente,
-  -- igual que la extensión de VSCode al guardar; errores/warnings al quickfix.
-  vim.keymap.set("n", "<leader>aa", function()
-    require("sap-nvim.core.source").activate()
-  end, { desc = "ABAP: Activar objeto (sube antes si es remoto, jump-to-error)" })
+	vim.keymap.set("n", "<leader>aa", function()
+		require("sap-nvim.core.source").activate()
+	end, { desc = "ABAP: Activar objeto (sube antes si es remoto, jump-to-error)" })
+	vim.keymap.set("n", "<leader>aw", function()
+		require("sap-nvim.core.whereused").whereused()
+	end, { desc = "ABAP: Where-used list" })
+	vim.keymap.set("n", "<leader>ack", function()
+		require("sap-nvim.core.checkout").checkout_package()
+	end, { desc = "ABAP: Checkout paquete SAP" })
+	vim.keymap.set("n", "<leader>ad", function()
+		require("sap-nvim.core.debugger").debug_current()
+	end, { desc = "ABAP: Debuggear" })
 
-  -- Where-used list
-  vim.keymap.set("n", "<leader>aw", function()
-    require("sap-nvim.core.whereused").whereused()
-  end, { desc = "ABAP: Where-used list" })
+	-- 🎯 SOLUCIÓN A LOS MAPEOS PERDIDOS EN CDS
+	local abap_maps = {
+		{ "<leader>aa", "<cmd>SapActivate<cr>", "Activar (sube antes si es remoto)" },
+		{ "<leader>au", "<cmd>SapPush<cr>", "Subir (push) sin activar" },
+		{ "<leader>aX", "<cmd>SapDelete<cr>", "Borrar objeto del sistema" },
+		{ "<leader>ao", "<cmd>SapOutline<cr>", "Outline del objeto" },
+		{ "<leader>ag", "<cmd>SapGotoDef<cr>", "Ir a definición" },
+		{ "<leader>aw", "<cmd>SapWhereUsed<cr>", "Where-used" },
+		{ "<leader>ai", "<cmd>SapInactive<cr>", "Objetos inactivos" },
+		{ "<leader>an", "<cmd>SapNew<cr>", "Nuevo objeto en SAP" },
+		{ "<leader>aT", "<cmd>SapAUnit<cr>", "Tests unitarios (AUnit)" },
+		{ "<leader>avt", "<cmd>SapTable<cr>", "Ver definición de tabla" },
+		{ "<leader>avd", "<cmd>SapTableData<cr>", "Ver datos de tabla" },
+		{ "<leader>avq", "<cmd>SapData<cr>", "Ejecutar OpenSQL" },
+	}
 
-  -- Checkout de paquete completo
-  vim.keymap.set("n", "<leader>ack", function()
-    require("sap-nvim.core.checkout").checkout_package()
-  end, { desc = "ABAP: Checkout paquete SAP" })
-
-  -- Debug: Iniciar depurador ABAP interactivo (vsp)
-  vim.keymap.set("n", "<leader>ad", function()
-    require("sap-nvim.core.debugger").debug_current()
-  end, { desc = "ABAP: Debuggear" })
-
-  -- ── Override BUFFER-LOCAL en buffers ABAP ──────────────────────────────────
-  -- El prefijo <leader>a choca con plugins de IA (code-companion/opencode mapean
-  -- <leader>aa, an, ai...). Los mapeos globales de arriba pueden quedar pisados por
-  -- esos plugins según el orden de carga. Aquí re-asignamos los atajos ABAP como
-  -- BUFFER-LOCAL en filetype abap: en un buffer ABAP ganan siempre (preceden a los
-  -- globales); fuera de ABAP, los plugins de IA siguen funcionando con normalidad.
-  local abap_maps = {
-    { "<leader>aa",  "<cmd>SapActivate<cr>",   "Activar (sube antes si es remoto)" },
-    { "<leader>au",  "<cmd>SapPush<cr>",       "Subir (push) sin activar" },
-    { "<leader>aX",  "<cmd>SapDelete<cr>",     "Borrar objeto del sistema" },
-    { "<leader>ao",  "<cmd>SapOutline<cr>",    "Outline del objeto" },
-    { "<leader>ag",  "<cmd>SapGotoDef<cr>",    "Ir a definición" },
-    { "<leader>aw",  "<cmd>SapWhereUsed<cr>",  "Where-used" },
-    { "<leader>ai",  "<cmd>SapInactive<cr>",   "Objetos inactivos" },
-    { "<leader>an",  "<cmd>SapNew<cr>",        "Nuevo objeto en SAP" },
-    { "<leader>aT",  "<cmd>SapAUnit<cr>",      "Tests unitarios (AUnit)" },
-    { "<leader>avt", "<cmd>SapTable<cr>",      "Ver definición de tabla" },
-    { "<leader>avd", "<cmd>SapTableData<cr>",  "Ver datos de tabla" },
-    { "<leader>avq", "<cmd>SapData<cr>",       "Ejecutar OpenSQL" },
-  }
-  vim.api.nvim_create_autocmd("FileType", {
-    pattern = "abap",
-    group = vim.api.nvim_create_augroup("sap_nvim_keymaps_abap", { clear = true }),
-    callback = function(ev)
-      for _, m in ipairs(abap_maps) do
-        vim.keymap.set("n", m[1], m[2], { buffer = ev.buf, silent = true, desc = "ABAP: " .. m[3] })
-      end
-    end,
-  })
+	vim.api.nvim_create_autocmd("FileType", {
+		pattern = { "abap", "cds", "acds", "abapcds", "ddls" },
+		group = vim.api.nvim_create_augroup("sap_nvim_keymaps_abap", { clear = true }),
+		callback = function(ev)
+			for _, m in ipairs(abap_maps) do
+				vim.keymap.set("n", m[1], m[2], { buffer = ev.buf, silent = true, desc = "SAP: " .. m[3] })
+			end
+		end,
+	})
 end
 
 return M
