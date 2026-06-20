@@ -101,7 +101,7 @@ function M.list_transports()
     method = "GET",
     path = "/sap/bc/adt/cts/transportrequests",
     query = { user = user, targets = "true" },
-    accept = "application/vnd.sap.as+xml",
+    accept = "application/vnd.sap.adt.transportorganizertree.v1+xml",
   }, function(body)
     vim.schedule(function()
       local err = parse_exception(body)
