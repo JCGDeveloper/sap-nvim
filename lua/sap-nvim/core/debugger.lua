@@ -356,6 +356,24 @@ function M.set_variable(variableName, value, cb)
   end)
 end
 
+-- Mueve el puntero de ejecución a una línea SIN ejecutar (Pilar 5, jump-to-line).
+-- uri = source uri con #start=line. cb(result) — { ended, error }.
+function M.jump(uri, cb)
+  curl({
+    method = "POST", path = "/sap/bc/adt/debugger",
+    query = { method = "stepJumpToLine", uri = uri }, accept = "application/xml",
+  }, function(body, status)
+    local msg = parse_exception(body)
+    if msg then
+      fail("jump", "(HTTP " .. tostring(status) .. "): " .. msg)
+      if cb then cb({ error = msg }) end
+      return
+    end
+    log("jump", "saltado a " .. uri)
+    if cb then cb({ ended = false }) end
+  end)
+end
+
 -- ── stop / cleanup ─────────────────────────────────────────────────────────────
 
 function M.stop(cb)

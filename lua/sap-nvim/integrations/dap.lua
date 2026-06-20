@@ -140,6 +140,7 @@ function handlers.initialize(req)
     supportsConfigurationDoneRequest = true,
     supportsTerminateRequest = true,
     supportsSetVariable = true,
+    supportsGotoTargetsRequest = true,
     supportsStepInTargetsRequest = false,
     supportsEvaluateForHovers = false,
   })
@@ -276,6 +277,30 @@ function handlers.variables(req)
   end)
 end
 
+-- Pilar 5 — jump-to-line: el cliente pide targets para una línea y luego salta a uno.
+function handlers.gotoTargets(req)
+  local a = req.arguments or {}
+  local path = a.source and a.source.path
+  local line = a.line
+  local uri = path and file_to_uri(path)
+  if not uri or not line then respond(req, { targets = {} }); return end
+  local id = state.gotoctr
+  state.gotoctr = state.gotoctr + 1
+  state.goto_targets[id] = uri .. "#start=" .. line
+  respond(req, { targets = { { id = id, label = "→ línea " .. line, line = line } } })
+end
+
+function handlers["goto"](req)
+  local a = req.arguments or {}
+  local uri = a.targetId and state.goto_targets[a.targetId]
+  if not uri then respond(req, nil, false); return end
+  respond(req)
+  dbg.jump(uri, function(r)
+    if r.error then event("output", { category = "stderr", output = "[ABAP] jump: " .. r.error .. "\n" })
+    else emit_stopped("goto") end
+  end)
+end
+
 -- Pilar 2 — setVariable: mutar un escalar en runtime. El id ADT se resuelve por (ref, name).
 function handlers.setVariable(req)
   local a = req.arguments or {}
@@ -353,7 +378,8 @@ local function start_server(callback)
     server:accept(sock)
     state = { sock = sock, seq = 1, server = server, source_uri = nil,
       pending_bps = {}, frames = {}, varrefs = {}, varctr = 1, config = {},
-      current_frame = nil, srcrefs = {}, srcref_by_uri = {}, srcctr = 5000 }
+      current_frame = nil, srcrefs = {}, srcref_by_uri = {}, srcctr = 5000,
+      varids = {}, goto_targets = {}, gotoctr = 9000 }
     local buf = ""
     sock:read_start(function(rerr, chunk)
       if rerr or not chunk then pcall(function() sock:close() end); return end
