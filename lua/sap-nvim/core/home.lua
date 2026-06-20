@@ -71,39 +71,83 @@ function M.transaction()
 end
 
 local MENU = {
-	{ key = "n", desc = "Nuevo objeto en SAP (programa, clase, include…)", action = function()
-		require("sap-nvim.core.new").new_object()
-	end },
-	{ key = "o", desc = "Abrir / buscar objeto", action = function()
-		M.search()
-	end },
-	{ key = "C", desc = "Abrir vista CDS / objeto RAP (ddls, bdef…)", action = function()
-		M.open_cds()
-	end },
-	{ key = "x", desc = "Ejecutar transacción (WebGUI)", action = function()
-		M.transaction()
-	end },
-	{ key = "R", desc = "Ejecutar programa (SE38)", action = function()
-		require("sap-nvim.core.gui").run_program()
-	end },
-	{ key = "t", desc = "Órdenes de transporte (mías)", action = function()
-		require("sap-nvim.core.cts").list_transports()
-	end },
-	{ key = "c", desc = "Crear orden de transporte", action = function()
-		require("sap-nvim.core.cts").create_transport()
-	end },
-	{ key = "b", desc = "Buffers abiertos  (también ␣␣)", action = function()
-		M.pick_buffers()
-	end },
-	{ key = "r", desc = "Objetos SAP recientes (sesión anterior)", action = function()
-		M.pick_buffers()
-	end },
-	{ key = "L", desc = "Conexión / login (cambiar de máquina)", action = function()
-		require("sap-nvim.core.connection").choose()
-	end },
-	{ key = "q", desc = "Salir", action = function()
-		vim.cmd("qa")
-	end },
+	{
+		key = "n",
+		desc = "Nuevo objeto en SAP (programa, clase, include…)",
+		action = function()
+			require("sap-nvim.core.new").new_object()
+		end,
+	},
+	{
+		key = "o",
+		desc = "Abrir / buscar objeto",
+		action = function()
+			M.search()
+		end,
+	},
+	{
+		key = "C",
+		desc = "Abrir vista CDS / objeto RAP (ddls, bdef…)",
+		action = function()
+			M.open_cds()
+		end,
+	},
+	{
+		key = "x",
+		desc = "Ejecutar transacción (WebGUI)",
+		action = function()
+			M.transaction()
+		end,
+	},
+	{
+		key = "R",
+		desc = "Ejecutar programa (SE38)",
+		action = function()
+			require("sap-nvim.core.gui").run_program()
+		end,
+	},
+	{
+		key = "t",
+		desc = "Órdenes de transporte (mías)",
+		action = function()
+			require("sap-nvim.core.cts").list_transports()
+		end,
+	},
+	{
+		key = "c",
+		desc = "Crear orden de transporte",
+		action = function()
+			require("sap-nvim.core.cts").create_transport()
+		end,
+	},
+	{
+		key = "b",
+		desc = "Buffers abiertos  (también ␣␣)",
+		action = function()
+			M.pick_buffers()
+		end,
+	},
+	{
+		key = "r",
+		desc = "Objetos SAP recientes (sesión anterior)",
+		action = function()
+			M.pick_buffers()
+		end,
+	},
+	{
+		key = "L",
+		desc = "Conexión / login (cambiar de máquina)",
+		action = function()
+			require("sap-nvim.core.connection").choose()
+		end,
+	},
+	{
+		key = "q",
+		desc = "Salir",
+		action = function()
+			vim.cmd("qa")
+		end,
+	},
 }
 
 -- Abre una vista CDS / objeto RAP pidiendo tipo (por defecto ddls) y nombre.
@@ -122,13 +166,13 @@ end
 
 local LOGO = {
 	"",
-	"      ███████  █████  ██████",
-	"      ██      ██   ██ ██   ██",
-	"      ███████ ███████ ██████",
-	"           ██ ██   ██ ██",
-	"      ███████ ██   ██ ██",
+	" █████   █████   █████   ████    █████   █████ ",
+	" █       █       █   █   █   █   █   █   █   █ ",
+	" █████   █████     █     █   █   █   █   █████ ",
+	"     █   █         █     █   █   █   █   █  █   ",
+	" █████   █████   █████   ████    █████   █   █ ",
 	"",
-	"           N E O V I M  ·  S A P",
+	"           N E O V I M  ·  S E I D O R",
 	"",
 }
 
@@ -299,6 +343,12 @@ end
 -- Arranque del modo SAP: pide conexión+contraseña (si falta), restaura objetos SAP y
 -- abre el dashboard. El login se puede desactivar con vim.g.sap_login_on_start = false.
 function M.start()
+	-- Guard: VimEnter y el guard de carga-tardía pueden invocar start() ambos; evitamos
+	-- el doble login. Solo una vez por sesión.
+	if M._started then
+		return
+	end
+	M._started = true
 	local function go()
 		M.restore_session()
 		M.open_dashboard()

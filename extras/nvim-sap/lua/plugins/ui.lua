@@ -79,7 +79,9 @@ return {
 		priority = 900,
 		lazy = false,
 		opts = {
-			bigfile = { enabled = true },
+			-- bigfile OFF: los objetos SAP de la caché disparaban "Big file detected" y
+			-- desactivaban treesitter/features. No queremos eso aquí.
+			bigfile = { enabled = false },
 			quickfile = { enabled = true },
 			picker = { enabled = true },
 			input = { enabled = true },
