@@ -485,6 +485,13 @@ function M.open_adt(kind, name, opts)
 	notify("Abriendo " .. name:upper() .. " (" .. kind .. ") por ADT...")
 	adt.request_async({ method = "GET", path = uri .. "/source/main", accept = "text/plain" }, function(body)
 		vim.schedule(function()
+			if adt.is_auth_error and adt.is_auth_error(body) then
+				notify(
+					"401 No autorizado al leer " .. name .. ". Contraseña/conexión incorrecta — usa :SapRelogin.",
+					vim.log.levels.ERROR
+				)
+				return
+			end
 			if not body or body == "" or is_exception(body) then
 				notify(
 					"No se pudo leer " .. name .. ": " .. (exc_message(body) or "respuesta vacía"),

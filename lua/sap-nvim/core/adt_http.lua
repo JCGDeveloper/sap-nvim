@@ -120,6 +120,25 @@ function M.use_connection(ctx, password)
   state.creds = nil
   state.token = nil
   pcall(os.remove, vim.fn.stdpath("cache") .. "/sap-nvim/adt_cookies.txt")
+  -- El daemon captura las credenciales al ARRANCAR (env vars): si no lo reiniciamos,
+  -- seguiría autenticando con la conexión/contraseña anteriores -> 401. Lo paramos para
+  -- que el siguiente request lo relance con las credenciales nuevas.
+  pcall(function()
+    require("sap-nvim.core.adt_daemon").stop()
+  end)
+end
+
+-- ¿La respuesta es una página de error de SAP (401/login) en vez de datos? Cuando las
+-- credenciales fallan, ADT devuelve HTML ("Nicht autorisiert"/"Unauthorized") con 200/401.
+function M.is_auth_error(body)
+  if not body or body == "" then
+    return false
+  end
+  return body:match("^%s*<!?[Hh][Tt][Mm][Ll]") ~= nil
+    or body:match("^%s*<!DOCTYPE") ~= nil
+    or body:find("Nicht autorisiert", 1, true) ~= nil
+    or body:find("Unauthorized", 1, true) ~= nil
+    or body:find("Logon failed", 1, true) ~= nil
 end
 
 function M.creds()
