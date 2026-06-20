@@ -217,7 +217,10 @@ function M.setup()
 	-- Atajos: <leader>ax ejecutar transacción, <leader>aR ejecutar el programa del buffer.
 	vim.keymap.set("n", "<leader>ax", function()
 		local w = vim.fn.expand("<cword>")
-		if w and w:match("^[%w_/]+$") and #w >= 3 and #w <= 20 then
+		-- Solo auto-ejecutar la palabra bajo el cursor como transacción si estamos en un
+		-- buffer ABAP y parece un código de transacción. Fuera de un programa (dashboard,
+		-- otro filetype, palabra rara) SIEMPRE mostramos el cuadro para elegir/escribir.
+		if vim.bo.filetype == "abap" and w and w:match("^[%w_/]+$") and #w >= 3 and #w <= 20 then
 			M.run_transaction(w)
 		else
 			vim.ui.input({ prompt = "Transacción: " }, function(v)
