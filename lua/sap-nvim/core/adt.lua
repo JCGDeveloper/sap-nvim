@@ -108,6 +108,56 @@ function M.fetch_transport_orders(callback)
   })
 end
 
+-- Órdenes que el usuario puede ASIGNAR a un objeto concreto (ADT transportchecks, como hace
+-- VSCode al guardar). Devuelve TODAS las accesibles (propias + compartidas/tareas en órdenes
+-- de otros), no solo las del owner. callback(list, err) — item: "TRKORR  descripción  (user)".
+function M.fetch_object_transports(source_uri, devclass, callback)
+  local adt_http = require("sap-nvim.core.adt_http")
+  if not adt_http.is_available() then
+    callback(nil, "ADT no disponible")
+    return
+  end
+  local uri = (source_uri or ""):gsub("%?.*$", "")
+  if uri == "" then
+    callback(nil, "sin URI de objeto")
+    return
+  end
+  local mt = "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.transport.service.checkData"
+  local body = '<?xml version="1.0" encoding="UTF-8"?><asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0"><asx:values><DATA>'
+    .. "<DEVCLASS>"
+    .. (devclass or "")
+    .. "</DEVCLASS><OPERATION>I</OPERATION><URI>"
+    .. uri
+    .. "</URI></DATA></asx:values></asx:abap>"
+  -- raw es síncrono pero gestiona CSRF/cookies de forma fiable; el push es acción puntual.
+  local resp = adt_http.raw({
+    method = "POST",
+    path = "/sap/bc/adt/cts/transportchecks",
+    accept = mt,
+    content_type = mt:gsub(";", "; "),
+    body = body,
+  })
+  if not resp or resp == "" then
+    callback(nil, "sin respuesta de transportchecks")
+    return
+  end
+  local out = {}
+  for req in resp:gmatch("<CTS_REQUEST>(.-)</CTS_REQUEST>") do
+    local trkorr = req:match("<TRKORR>([^<]*)</TRKORR>")
+    local text = req:match("<AS4TEXT>([^<]*)</AS4TEXT>")
+    local user = req:match("<AS4USER>([^<]*)</AS4USER>")
+    if trkorr and trkorr ~= "" then
+      out[#out + 1] = string.format(
+        "%s  %s%s",
+        trkorr,
+        text or "",
+        (user and user ~= "" and ("  (" .. user .. ")")) or ""
+      )
+    end
+  end
+  callback(out, nil)
+end
+
 -- Search ABAP objects by name pattern (async)
 -- callback(results, err)
 function M.fetch_objects(query, callback)

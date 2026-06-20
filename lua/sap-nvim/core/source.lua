@@ -161,18 +161,41 @@ function M.prefetch_includes(lines)
   end
 end
 
+-- Obtiene las órdenes para el picker: primero las ASIGNABLES al objeto actual (ADT
+-- transportchecks → incluye compartidas/accesibles, no solo las propias); si no hay objeto
+-- o falla, cae al listado por owner (sapcli). done(list).
+local function fetch_transports(done)
+  local bufnr = vim.api.nvim_get_current_buf()
+  local meta = vim.b[bufnr].sap_obj
+  local source_uri
+  local ok, intel = pcall(require, "sap-nvim.core.intel")
+  if ok and intel.object_uri then source_uri = intel.object_uri(bufnr) end
+  local devclass = (meta and meta.package) or ""
+  if source_uri and source_uri ~= "" then
+    adt.fetch_object_transports(source_uri, devclass, function(list, _)
+      if list and #list > 0 then
+        done(list)
+      else
+        adt.fetch_transport_orders(function(t) done(t or {}) end)
+      end
+    end)
+  else
+    adt.fetch_transport_orders(function(t) done(t or {}) end)
+  end
+end
+
 -- Resuelve el transporte a usar para el push y llama cb(corrnr_or_nil).
 -- corrnr = nil  -> objeto local ($TMP), sin orden. Público para reusar (message.lua, etc.).
 function M.resolve_transport(cb)
   if session_transport == LOCAL then return cb(nil) end
   if session_transport then return cb(session_transport) end
 
-  adt.fetch_transport_orders(function(transports, _)
+  fetch_transports(function(transports)
     vim.schedule(function()
       local items = { "(objeto local $TMP — sin orden)" }
       for _, t in ipairs(transports or {}) do table.insert(items, t) end
 
-      vim.ui.select(items, { prompt = "Orden de transporte para el push:" }, function(choice)
+      vim.ui.select(items, { prompt = "Orden de transporte (asignables al objeto):" }, function(choice)
         if not choice then return end -- cancelado
         if choice:match("^%(objeto local") then
           session_transport = LOCAL
