@@ -205,7 +205,7 @@ function handlers.setBreakpoints(req)
 	for _, b in ipairs(bps) do
 		state.bpctr = (state.bpctr or 0) + 1
 		local id = state.bpctr
-		table.insert(state.pending_bps, { uri = uri, line = b.line, id = id })
+		table.insert(state.pending_bps, { uri = uri, path = path, line = b.line, id = id })
 		-- verificación optimista; la real (verified=false si SAP rechaza) se corrige en
 		-- configurationDone con un evento `breakpoint`.
 		table.insert(resp_bps, { id = id, verified = uri ~= nil, line = b.line })
@@ -242,7 +242,13 @@ function handlers.configurationDone(req)
 				return
 			end
 			if bp.uri then
-				dbg.set_breakpoint(bp.uri, bp.line, function(verified, info)
+				-- Resolver la URI real: para INCLUDES (forms) es la URI VIT con el programa
+				-- principal; para program/class es la source/main. Reutiliza objtype para el tipo.
+				local ok_ot, objtype = pcall(require, "sap-nvim.core.objtype")
+				local group = ok_ot and bp.path and objtype.group(bp.path) or nil
+				local name = ok_ot and bp.path and objtype.name(bp.path) or nil
+				dbg.resolve_bp_uri(group, name, bp.uri, function(bp_uri, sync_scope)
+				dbg.set_breakpoint(bp_uri, bp.line, function(verified, info)
 					if not verified then
 						local why = (info and info.errorMessage) or "SAP rechazó el breakpoint"
 						-- Marca el breakpoint como NO verificado en dap-ui (hueco) con el motivo.
@@ -262,6 +268,7 @@ function handlers.configurationDone(req)
 						})
 					end
 					next_bp()
+				end, sync_scope)
 				end)
 			else
 				next_bp()

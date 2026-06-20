@@ -226,7 +226,43 @@ end
 -- ── 2) set_breakpoint ─────────────────────────────────────────────────────────
 -- source_uri: ej. "/sap/bc/adt/programs/programs/znvim/source/main". line: número.
 -- cb(verified, info) — info = { id, errorMessage, uri }.
-function M.set_breakpoint(source_uri, line, cb)
+-- Resuelve la URI del breakpoint según el tipo de objeto (igual que breakpointManager.ts).
+-- Para INCLUDES (forms/includes de un programa) SAP exige la URI "VIT" con MAIN_PROGRAM e
+-- INCLUDE combinados (cada uno rellenado a 40 chars). Para program/class: la source/main.
+-- cb(bp_uri, sync_scope) — sync_scope es la source/main del objeto (syncScope mode=partial).
+function M.resolve_bp_uri(group, name, source_uri, cb)
+	source_uri = (source_uri or ""):gsub("%?.*$", "")
+	if group ~= "include" or not name or name == "" then
+		cb(source_uri, source_uri)
+		return
+	end
+	curl({
+		method = "GET",
+		path = "/sap/bc/adt/programs/includes/" .. name:lower() .. "/mainprograms",
+		accept = "application/*",
+	}, function(body)
+		local mainname = body and body:match('adtcore:name="([^"]*)"')
+		if not mainname then
+			log("bp", "include " .. name .. " sin programa principal; uso source normal.")
+			cb(source_uri, source_uri)
+			return
+		end
+		local function pad40(x)
+			return (x:upper() .. string.rep(" ", 40)):sub(1, 40)
+		end
+		local combined = pad40(mainname) .. pad40(name)
+		local vit = "/sap/bc/adt/vit/wb/object_type/"
+			.. urlenc("PROGI  "):lower() -- 'PROG'+'I'+2 espacios → progi%20%20
+			.. "/object_name/"
+			.. urlenc(combined)
+		log("bp", "include " .. name .. " → main " .. mainname .. " (URI VIT)")
+		cb(vit, source_uri)
+	end)
+end
+
+-- bp_uri: URI del breakpoint (VIT para includes, source/main para program/class).
+-- sync_scope (opcional): source/main del objeto → syncScope mode="partial".
+function M.set_breakpoint(bp_uri, line, cb, sync_scope)
 	local s = M.session
 	if not s then
 		fail("bp", "sin sesión (init_session primero).")
@@ -236,16 +272,22 @@ function M.set_breakpoint(source_uri, line, cb)
 		return
 	end
 
-	-- 🔥 FIX: Limpiamos cualquier parámetro query (como ?version=active) antes de añadir #start
-	local clean_uri = source_uri:gsub("%?.*$", "")
+	local clean_uri = bp_uri:gsub("%?.*$", "")
 	local uri = clean_uri .. "#start=" .. line
+
+	local scope_xml = '<syncScope mode="full"></syncScope>'
+	if sync_scope and sync_scope ~= "" then
+		scope_xml = '<syncScope mode="partial"><adtcore:objectReference xmlns:adtcore="http://www.sap.com/adt/core" adtcore:uri="'
+			.. sync_scope:gsub("%?.*$", "")
+			.. '"/></syncScope>'
+	end
 
 	local body = table.concat({
 		'<?xml version="1.0" encoding="UTF-8"?>',
 		'<dbg:breakpoints scope="external" debuggingMode="user" requestUser="' .. s.user .. '"',
 		'  terminalId="' .. s.terminalId .. '" ideId="' .. s.ideId .. '" systemDebugging="false" deactivated="false"',
 		'  xmlns:dbg="http://www.sap.com/adt/debugger">',
-		'  <syncScope mode="full"></syncScope>',
+		"  " .. scope_xml,
 		'  <breakpoint xmlns:adtcore="http://www.sap.com/adt/core" kind="line" clientId="sapnvim"',
 		'    skipCount="0" adtcore:uri="' .. uri .. '"/>',
 		"</dbg:breakpoints>",
