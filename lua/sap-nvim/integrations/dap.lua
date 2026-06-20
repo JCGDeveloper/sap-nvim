@@ -290,7 +290,7 @@ function handlers.gotoTargets(req)
   respond(req, { targets = { { id = id, label = "→ línea " .. line, line = line } } })
 end
 
-function handlers["goto"](req)
+handlers["goto"] = function(req)
   local a = req.arguments or {}
   local uri = a.targetId and state.goto_targets[a.targetId]
   if not uri then respond(req, nil, false); return end
