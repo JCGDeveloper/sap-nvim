@@ -47,6 +47,24 @@ local function uuid()
   end)):upper()
 end
 
+-- terminalId/ideId ESTABLES por máquina (como VSCode): persistidos, reutilizados entre
+-- sesiones. Imprescindible para poder LIMPIAR los listeners del usuario (si fueran random
+-- por sesión, los huérfanos quedarían inalcanzables). Devuelve terminalId, ideId.
+local IDS_FILE = vim.fn.stdpath("cache") .. "/sap-nvim/debug_ids"
+local function stable_ids()
+  local t, i
+  if vim.fn.filereadable(IDS_FILE) == 1 then
+    local lines = vim.fn.readfile(IDS_FILE)
+    t, i = lines[1], lines[2]
+  end
+  if not t or t == "" or not i or i == "" then
+    t, i = uuid(), uuid()
+    pcall(vim.fn.mkdir, vim.fn.fnamemodify(IDS_FILE, ":h"), "p")
+    pcall(vim.fn.writefile, { t, i }, IDS_FILE)
+  end
+  return t, i
+end
+
 local function unxml(s)
   return (s or ""):gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"'):gsub("&apos;", "'"):gsub("&amp;", "&")
 end
@@ -121,8 +139,9 @@ function M.init_session(cb)
   vim.fn.mkdir(vim.fn.fnamemodify(jar, ":h"), "p")
   pcall(os.remove, jar)
 
+  local terminalId, ideId = stable_ids()
   M.session = {
-    jar = jar, csrf = nil, terminalId = uuid(), ideId = uuid(),
+    jar = jar, csrf = nil, terminalId = terminalId, ideId = ideId,
     user = c.user:upper(), listener_job = nil, debugSessionId = nil, breakpoints = {},
   }
   log("init", "sesión nueva user=" .. M.session.user)
@@ -403,9 +422,43 @@ function M.stop(cb)
   end)
 end
 
+-- Cierra TODAS las sesiones/listeners de debug del usuario (panic clean). Borra el listener
+-- bajo el terminalId/ideId ESTABLE en sus dos variantes (ideId puesto y vacío). Útil cuando
+-- quedan listeners huérfanos que dan "conflicto" al volver a depurar.
+function M.terminate_all(cb)
+  local function purge(s)
+    if s.listener_job then pcall(vim.fn.jobstop, s.listener_job); s.listener_job = nil end
+    local variants = { s.ideId, "" }
+    local left = #variants
+    for _, idev in ipairs(variants) do
+      curl({
+        method = "DELETE", path = "/sap/bc/adt/debugger/listeners",
+        query = { debuggingMode = "user", requestUser = s.user, terminalId = s.terminalId,
+                  ideId = idev, checkConflict = "false", notifyConflict = "true" },
+      }, function(_, status)
+        log("killall", "listener borrado (ideId=" .. (idev == "" and "∅" or "set") .. ") HTTP " .. tostring(status))
+        left = left - 1
+        if left <= 0 then
+          pcall(os.remove, s.jar)
+          M.session = nil
+          log("killall", "Sesiones de debug del usuario " .. s.user .. " cerradas.")
+          if cb then cb() end
+        end
+      end)
+    end
+  end
+  if M.session then purge(M.session)
+  else M.init_session(function(ok) if ok then purge(M.session) elseif cb then cb() end end) end
+end
+
 -- El control del debugger es 100% vía nvim-dap (integrations/dap.lua): <leader>db breakpoint,
--- <leader>dc arrancar, <leader>di/do/dO step, <leader>dt terminar. Este módulo es SOLO el
--- cliente del protocolo (sin comandos propios, para no competir por la sesión con dap).
-function M.setup() end
+-- <leader>dc arrancar, <leader>di/do/dO step, <leader>dt terminar. Aquí solo exponemos la
+-- limpieza de sesiones huérfanas (no compite con dap por la sesión).
+function M.setup()
+  vim.api.nvim_create_user_command("SapDebugKillAll", function() M.terminate_all() end,
+    { desc = "sap-nvim: Cerrar TODAS las sesiones/listeners de debug del usuario" })
+  vim.keymap.set("n", "<leader>dX", function() M.terminate_all() end,
+    { desc = "Debug: cerrar todas las sesiones del usuario" })
+end
 
 return M
