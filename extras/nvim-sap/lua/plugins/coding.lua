@@ -1,25 +1,18 @@
 -- Coding: completado, treesitter, pares/comentarios/surround, git
 return {
-	-- Completado (con las fuentes ADT del plugin). fuzzy lua = sin build de Rust.
+	-- Completado. Alineado a tu config personal (que SÍ funciona): sin version pin ni
+	-- fuzzy lua; usa el binario por defecto de blink. Fuentes ADT del plugin.
 	{
 		"saghen/blink.cmp",
-		version = "*",
 		event = "InsertEnter",
 		opts = {
-			fuzzy = { implementation = "lua" },
-			keymap = { preset = "default" },
-			completion = {
-				documentation = { auto_show = true },
-				ghost_text = { enabled = true },
-			},
-			signature = { enabled = true },
 			sources = {
-				default = { "abap_local", "sap_adt", "path", "buffer" },
+				default = { "abap_local", "sap_adt" },
 				per_filetype = {
-					abap = { "abap_local", "sap_adt", "buffer" },
-					cds = { "abap_local", "sap_adt", "buffer" },
-					acds = { "abap_local", "sap_adt", "buffer" },
-					ddls = { "abap_local", "sap_adt", "buffer" },
+					abap = { "abap_local", "sap_adt" },
+					cds = { "abap_local", "sap_adt" },
+					acds = { "abap_local", "sap_adt" },
+					ddls = { "abap_local", "sap_adt" },
 				},
 				providers = {
 					sap_adt = {
@@ -46,36 +39,51 @@ return {
 		},
 	},
 
-	-- Treesitter — rama clásica `master` (la `main` eliminó nvim-treesitter.configs).
-	-- El plugin sap-nvim registra los parsers abap/cds en su propio setup.
+	-- Treesitter — rama `main` (la `master` NO es compatible con Neovim 0.12 y peta el
+	-- highlighter, p.ej. al renderizar el markdown del hover). Los objetos SAP no tienen
+	-- parser (van con la sintaxis nativa abap.vim); esto es para lua/markdown/sql/etc.
 	{
 		"nvim-treesitter/nvim-treesitter",
-		branch = "master",
+		branch = "main",
 		build = ":TSUpdate",
-		event = { "BufReadPost", "BufNewFile" },
-		opts = {
-			highlight = { enable = true },
-			indent = { enable = true },
-			ensure_installed = { "lua", "vim", "vimdoc", "bash", "json", "yaml", "markdown", "sql" },
-		},
-		config = function(_, opts)
-			require("nvim-treesitter.configs").setup(opts)
+		lazy = false,
+		config = function()
+			pcall(function()
+				require("nvim-treesitter").install({
+					"lua",
+					"vim",
+					"vimdoc",
+					"bash",
+					"json",
+					"yaml",
+					"markdown",
+					"markdown_inline",
+					"sql",
+				})
+			end)
+			-- En la rama main el highlight no se auto-activa: lo arrancamos por buffer.
+			-- pcall: si un filetype no tiene parser (abap/cds), no pasa nada (sintaxis nativa).
+			vim.api.nvim_create_autocmd("FileType", {
+				group = vim.api.nvim_create_augroup("sapnvim_ts_start", { clear = true }),
+				callback = function(ev)
+					pcall(vim.treesitter.start, ev.buf)
+				end,
+			})
 		end,
-	},
-
-	-- Telescope: lo usa el plugin para la búsqueda en vivo (<leader>aS) y el picker de
-	-- plantillas. VeryLazy para que esté en el rtp cuando el plugin haga require.
-	{
-		"nvim-telescope/telescope.nvim",
-		dependencies = { "nvim-lua/plenary.nvim" },
-		event = "VeryLazy",
-		config = true,
 	},
 
 	-- Pares, comentarios y surround (mini.nvim)
 	{ "echasnovski/mini.pairs", event = "InsertEnter", opts = {} },
 	{ "echasnovski/mini.comment", event = "VeryLazy", opts = {} },
 	{ "echasnovski/mini.surround", event = "VeryLazy", opts = {} },
+
+	-- Telescope: lo usa el plugin para la búsqueda en vivo (<leader>aS) y plantillas.
+	{
+		"nvim-telescope/telescope.nvim",
+		dependencies = { "nvim-lua/plenary.nvim" },
+		event = "VeryLazy",
+		config = true,
+	},
 
 	-- Git en el margen
 	{

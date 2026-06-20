@@ -508,8 +508,12 @@ function M.open_adt(kind, name, opts)
 			local b = vim.api.nvim_get_current_buf()
 			vim.bo[b].swapfile = false
 			vim.b[b].sap_obj = { name = name:upper(), group = kind, uri = uri }
+			-- Sin ftdetect propio para .ddls/.bdef/etc.: usamos filetype `abap`. Así se
+			-- aplica el coloreado nativo (abap.vim trae Neovim; select/from/key/as/on… son
+			-- keywords ABAP) sin depender de un parser treesitter de CDS, y se enganchan
+			-- hover/gd/gr/completado y los keymaps (FileType abap).
 			if vim.bo[b].filetype == "" then
-				vim.bo[b].filetype = (kind == "ddls" or kind == "ddlx") and "cds" or "abap"
+				vim.bo[b].filetype = "abap"
 			end
 			if opts.line then
 				pcall(vim.api.nvim_win_set_cursor, 0, { opts.line, opts.col or 0 })
