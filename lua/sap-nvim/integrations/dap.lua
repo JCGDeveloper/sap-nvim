@@ -439,26 +439,33 @@ function handlers.evaluate(req)
 		return
 	end
 
-	-- ADT permite evaluar variables si le pasas el nombre exacto como ID en mayúsculas
-	local adt_id = expr:upper()
+	-- ADT evalúa una variable/expresión si la pasas como ID (en mayúsculas: ABAP es
+	-- case-insensitive y los IDs del debugger van en mayúsculas). Vale para nombres
+	-- simples, campos de estructura (LS_X-CAMPO) y filas de tabla (LT_X[1]-CAMPO).
+	local adt_id = vim.trim(expr):upper()
 
-	dbg.get_variables(adt_id, function(vars)
+	-- CLAVE: getVariables (get_vars_by_id), NO getChildVariables (get_variables).
+	-- getChildVariables devuelve los HIJOS de un nodo (vacío para un escalar);
+	-- getVariables evalúa el ID y devuelve su <VALUE>.
+	dbg.get_vars_by_id({ adt_id }, function(vars)
 		if not vars or #vars == 0 then
-			-- FIX: Formato de error estricto de DAP para evitar que nvim-dap-ui crashee
 			respond(req, { error = { id = 2, format = "No evaluable o fuera de scope: " .. adt_id } }, false)
 			return
 		end
 
 		local v = vars[1]
-		local result_val = (v.value ~= "" and v.value)
-			or (v.meta == "table" and ("table[" .. v.table_lines .. "]"))
+		local result_val = (v.value and v.value ~= "" and v.value)
+			or (v.meta == "table" and ("Standard Table [" .. (v.table_lines or 0) .. " filas]"))
+			or (v.meta == "structure" and "{ … }")
 			or "''"
 
 		respond(req, {
 			result = result_val,
 			type = v.type or v.meta,
-			-- Si es una tabla o estructura, le pasamos una referencia para que DAP UI ponga la flechita de expandir
-			variablesReference = v.expandable and new_varref(v.id) or 0,
+			-- Tabla/estructura: referencia con {id,meta,lines} para que handlers.variables
+			-- sepa despachar (filas por getVariables vs campos por getChildVariables) al expandir.
+			variablesReference = v.expandable and new_varref({ id = v.id, meta = v.meta, lines = v.table_lines })
+				or 0,
 		})
 	end)
 end
