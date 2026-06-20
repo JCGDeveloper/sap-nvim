@@ -100,6 +100,7 @@ end
 
 local function emit_stopped(reason)
   reset_varrefs()
+  state.current_frame = nil -- tras parar, el cursor del debugger está en el frame top
   event("stopped", { reason = reason or "breakpoint", threadId = 1, allThreadsStopped = true })
 end
 
@@ -202,22 +203,34 @@ function handlers.stackTrace(req)
 end
 
 function handlers.scopes(req)
-  -- TODO v2: goToStack según req.arguments.frameId. v1: scopes del frame actual.
-  dbg.get_variables("@ROOT", function(_, scopes)
-    local out = {}
-    for _, sc in ipairs(scopes) do
-      out[#out + 1] = {
-        name = sc.name,
-        variablesReference = new_varref(sc.id),
-        expensive = false,
-      }
-    end
-    -- si @ROOT no devolvió scopes nombrados, ofrecer Globals por defecto
-    if #out == 0 then
-      out[1] = { name = "Globals", variablesReference = new_varref("@GLOBALS"), expensive = false }
-    end
-    respond(req, { scopes = out })
-  end)
+  local frameId = req.arguments and req.arguments.frameId
+  local frame = frameId and state.frames[frameId]
+
+  local function fetch_scopes()
+    dbg.get_variables("@ROOT", function(_, scopes)
+      local out = {}
+      for _, sc in ipairs(scopes) do
+        out[#out + 1] = { name = sc.name, variablesReference = new_varref(sc.id), expensive = false }
+      end
+      -- si @ROOT no devolvió scopes nombrados, ofrecer Globals por defecto
+      if #out == 0 then
+        out[1] = { name = "Globals", variablesReference = new_varref("@GLOBALS"), expensive = false }
+      end
+      respond(req, { scopes = out })
+    end)
+  end
+
+  -- Pilar 1 — variables POR FRAME: si el frame pedido no es el actual, posicionamos el
+  -- cursor del debugger en él (goToStack) ANTES de leer sus scopes/variables.
+  if frame and frame.stackUri and state.current_frame ~= frameId then
+    dbg.goto_stack(frame.stackUri, function()
+      state.current_frame = frameId
+      reset_varrefs() -- las refs anteriores eran de otro frame
+      fetch_scopes()
+    end)
+  else
+    fetch_scopes()
+  end
 end
 
 function handlers.variables(req)
