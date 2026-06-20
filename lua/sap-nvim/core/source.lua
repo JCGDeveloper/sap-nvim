@@ -190,22 +190,49 @@ function M.resolve_transport(cb)
   if session_transport == LOCAL then return cb(nil) end
   if session_transport then return cb(session_transport) end
 
+  local SENT_LOCAL = "(objeto local $TMP — sin orden)"
+  local SENT_MINE = "🔎 Buscar entre TODAS mis órdenes…"
+  local SENT_MANUAL = "✏️ Ingresar número de orden…"
+
+  local function choose(corrnr)
+    session_transport = corrnr -- la 1ª palabra de la fila CTS es el ID (p.ej. SIDK900123)
+    cb(corrnr)
+  end
+
+  -- Picker reutilizable (se usa para las asignables y para "mis órdenes").
+  local function pick(items, prompt)
+    vim.ui.select(items, { prompt = prompt }, function(choice)
+      if not choice then return end -- cancelado
+      if choice == SENT_LOCAL then
+        session_transport = LOCAL
+        return cb(nil)
+      elseif choice == SENT_MANUAL then
+        vim.ui.input({ prompt = "Número de orden: " }, function(v)
+          if v and v ~= "" then choose(v:upper()) end
+        end)
+      elseif choice == SENT_MINE then
+        -- Lista por owner (sapcli) = TODAS mis órdenes, las use o no este objeto.
+        adt.fetch_transport_orders(function(mine)
+          vim.schedule(function()
+            local list = {}
+            for _, t in ipairs(mine or {}) do list[#list + 1] = t end
+            list[#list + 1] = SENT_MANUAL
+            pick(list, "Mis órdenes de transporte:")
+          end)
+        end)
+      else
+        choose(choice:match("^%s*(%S+)"))
+      end
+    end)
+  end
+
   fetch_transports(function(transports)
     vim.schedule(function()
-      local items = { "(objeto local $TMP — sin orden)" }
+      local items = { SENT_LOCAL }
       for _, t in ipairs(transports or {}) do table.insert(items, t) end
-
-      vim.ui.select(items, { prompt = "Orden de transporte (asignables al objeto):" }, function(choice)
-        if not choice then return end -- cancelado
-        if choice:match("^%(objeto local") then
-          session_transport = LOCAL
-          return cb(nil)
-        end
-        -- La primera palabra de la fila CTS es el ID de la orden (p.ej. SIDK900123).
-        local corrnr = choice:match("^%s*(%S+)")
-        session_transport = corrnr
-        cb(corrnr)
-      end)
+      table.insert(items, SENT_MINE)
+      table.insert(items, SENT_MANUAL)
+      pick(items, "Orden de transporte (asignables al objeto):")
     end)
   end)
 end
