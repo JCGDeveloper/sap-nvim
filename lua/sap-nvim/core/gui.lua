@@ -123,8 +123,12 @@ function M.run_program(progname)
 		return
 	end
 
-	-- 2. Si estamos en un archivo, intentamos deducir el nombre del archivo actual
-	local current_filename = vim.fn.expand("%:t:r"):upper()
+	-- 2. Deducimos el nombre del objeto. PREFERIMOS vim.b.sap_obj.name (el nombre real
+	-- del objeto SAP). Si no, objtype.name() quita la doble extensión abapGit
+	-- (zcar_x.prog.abap → ZCAR_X); NO usamos expand("%:t:r") a secas porque solo quita
+	-- UNA extensión y deja ".PROG" pegado (rompe SE38: "ZCAR_X.PROG" no existe).
+	local meta = vim.b.sap_obj
+	local current_filename = ((meta and meta.name) or require("sap-nvim.core.objtype").name()):upper()
 
 	-- 3. Si parece un Include (por su nombre o estructura), preguntamos a SAP por el padre
 	-- Usamos la API de Includes para resolver el 'mainprogram'
