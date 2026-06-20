@@ -196,33 +196,60 @@ end
 
 function M.resolve_bp_uri(group, name, source_uri, cb)
 	source_uri = (source_uri or ""):gsub("%?.*$", "")
-	if group ~= "include" or not name or name == "" then
+	source_uri = source_uri:gsub("^adt://", "")
+
+	local is_local = not source_uri:match("^/sap/bc/adt")
+
+	if is_local then
+		local is_class = source_uri:match("%.clas%.abap$")
+		local clean_name = source_uri:match("([^/\\]+)%..+%.abap$") or source_uri:match("([^/\\]+)%.abap$")
+		if clean_name then
+			name = clean_name
+		end
+
+		if is_class then
+			source_uri = "/sap/bc/adt/oo/classes/" .. urlenc((name or ""):lower()) .. "/source/main"
+		else
+			source_uri = "/sap/bc/adt/programs/programs/" .. urlenc((name or ""):lower()) .. "/source/main"
+		end
+	end
+
+	if not name or name == "" then
 		cb(source_uri, source_uri)
 		return
 	end
-	curl(
-		{
-			method = "GET",
-			path = "/sap/bc/adt/programs/includes/" .. name:lower() .. "/mainprograms",
-			accept = "application/*",
-		},
-		function(body)
-			local mainname = body and body:match('adtcore:name="([^"]*)"')
-			if not mainname then
-				cb(source_uri, source_uri)
-				return
-			end
-			local function pad40(x)
-				return (x:upper() .. string.rep(" ", 40)):sub(1, 40)
-			end
-			local combined = pad40(mainname) .. pad40(name)
-			local vit = "/sap/bc/adt/vit/wb/object_type/"
-				.. urlenc("PROGI  "):lower()
-				.. "/object_name/"
-				.. urlenc(combined)
-			cb(vit, source_uri)
+
+	curl({
+		method = "GET",
+		path = "/sap/bc/adt/programs/includes/" .. urlenc(name:lower()) .. "/mainprograms",
+		accept = "application/*",
+	}, function(body, status)
+		local mainname = body and body:match('adtcore:name="([^"]*)"')
+
+		if not mainname then
+			cb(source_uri, source_uri)
+			return
 		end
-	)
+
+		-- SAP exige 40 chars para el padre y 40 para el hijo
+		local function pad40(x)
+			return (x:upper() .. string.rep(" ", 40)):sub(1, 40)
+		end
+		local combined = pad40(mainname) .. pad40(name)
+
+		-- Esta URI lleva el Main Program incrustado, evitando el error "is initial"
+		local vit = "/sap/bc/adt/vit/wb/object_type/"
+			.. urlenc("PROGI  "):lower()
+			.. "/object_name/"
+			.. urlenc(combined)
+
+		log("bp", "💡 Include detectado: " .. name:upper() .. " (Main: " .. mainname .. ")")
+
+		-- 🔥 LA FÓRMULA MÁGICA:
+		-- 1. Pasamos 'vit' para que SAP sepa el Main Program.
+		-- 2. Pasamos 'nil' para que el scope sea "full" y SAP no llore por restricciones.
+		cb(vit, nil)
+	end)
 end
 
 function M.set_breakpoint(bp_uri, line, cb, sync_scope)
@@ -260,65 +287,59 @@ function M.set_breakpoint(bp_uri, line, cb, sync_scope)
 		"</dbg:breakpoints>",
 	}, "\n")
 
-	curl(
-		{
-			method = "POST",
-			path = "/sap/bc/adt/debugger/breakpoints",
-			body = body,
-			content_type = "application/xml",
-			accept = "application/xml",
-		},
-		function(resp, status)
-			local errmsg = resp and resp:match('errorMessage="([^"]+)"')
-			local id = resp and resp:match('<breakpoint[^>]-%sid="([^"]*)"')
-			if parse_exception(resp) or (errmsg and errmsg ~= "") then
-				fail("bp", "L" .. line .. " rechazado: " .. (errmsg or "ver SAP"))
-				if cb then
-					cb(false, { errorMessage = errmsg or "rechazado", uri = uri })
-				end
-				return
-			end
-			s.breakpoints[#s.breakpoints + 1] = { id = id, uri = uri, line = line }
+	curl({
+		method = "POST",
+		path = "/sap/bc/adt/debugger/breakpoints",
+		body = body,
+		content_type = "application/xml",
+		accept = "application/xml",
+	}, function(resp, status)
+		local errmsg = resp and resp:match('errorMessage="([^"]+)"')
+		local id = resp and resp:match('<breakpoint[^>]-%sid="([^"]*)"')
+		if parse_exception(resp) or (errmsg and errmsg ~= "") then
+			fail("bp", "L" .. line .. " rechazado: " .. (errmsg or "ver SAP"))
 			if cb then
-				cb(true, { id = id, uri = uri })
+				cb(false, { errorMessage = errmsg or "rechazado", uri = uri })
 			end
+			return
 		end
-	)
+		s.breakpoints[#s.breakpoints + 1] = { id = id, uri = uri, line = line }
+		if cb then
+			cb(true, { id = id, uri = uri })
+		end
+	end)
 end
 
 function M.attach(debuggeeId, cb)
-	curl(
-		{
-			method = "POST",
-			path = "/sap/bc/adt/debugger",
-			query = {
-				method = "attach",
-				debuggeeId = debuggeeId,
-				debuggingMode = "user",
-				requestUser = M.session.user,
-				dynproDebugging = "true",
-			},
-			accept = "application/xml",
+	curl({
+		method = "POST",
+		path = "/sap/bc/adt/debugger",
+		query = {
+			method = "attach",
+			debuggeeId = debuggeeId,
+			debuggingMode = "user",
+			requestUser = M.session.user,
+			dynproDebugging = "true",
 		},
-		function(body, status)
-			if parse_exception(body) then
-				fail("attach", "rechazado")
-				if cb then
-					cb(false, {})
-				end
-				return
-			end
-			local info = {
-				isPostMortem = (body and body:match('isPostMortem="true"')) ~= nil,
-				debugSessionId = body and body:match('debugSessionId="([^"]*)"'),
-				processId = body and body:match('processId="([^"]*)"'),
-			}
-			M.session.debugSessionId = info.debugSessionId
+		accept = "application/xml",
+	}, function(body, status)
+		if parse_exception(body) then
+			fail("attach", "rechazado")
 			if cb then
-				cb(true, info)
+				cb(false, {})
 			end
+			return
 		end
-	)
+		local info = {
+			isPostMortem = (body and body:match('isPostMortem="true"')) ~= nil,
+			debugSessionId = body and body:match('debugSessionId="([^"]*)"'),
+			processId = body and body:match('processId="([^"]*)"'),
+		}
+		M.session.debugSessionId = info.debugSessionId
+		if cb then
+			cb(true, info)
+		end
+	end)
 end
 
 function M.listen(cb)
@@ -327,89 +348,83 @@ function M.listen(cb)
 		fail("listen", "sin sesión.")
 		return
 	end
-	s.listener_job = curl(
-		{
-			method = "POST",
-			path = "/sap/bc/adt/debugger/listeners",
-			query = {
-				debuggingMode = "user",
-				requestUser = s.user,
-				terminalId = s.terminalId,
-				ideId = s.ideId,
-				checkConflict = "true",
-				isNotifiedOnConflict = "true",
-			},
+	s.listener_job = curl({
+		method = "POST",
+		path = "/sap/bc/adt/debugger/listeners",
+		query = {
+			debuggingMode = "user",
+			requestUser = s.user,
+			terminalId = s.terminalId,
+			ideId = s.ideId,
+			checkConflict = "true",
+			isNotifiedOnConflict = "true",
 		},
-		function(body, status)
-			s.listener_job = nil
-			if not body or body == "" then
-				fail("listen", "respuesta vacía")
-				return
-			end
-			if body:find("conflictText", 1, true) then
-				fail("listen", "conflicto: debugger ADT en uso.")
-				return
-			end
-			local debuggee = body:match("<DEBUGGEE_ID>([^<]+)</DEBUGGEE_ID>") or body:match('debuggeeId="([^"]+)"')
-			if not debuggee then
-				fail("listen", "sin DEBUGGEE_ID.")
-				return
-			end
-
-			M.attach(debuggee, function(ok, info)
-				if not ok then
-					return
-				end
-				if info.isPostMortem then
-					log("listen", "DUMP (post-mortem). Ignorando...")
-					M.step("terminateDebuggee", function()
-						M.listen(cb)
-					end)
-					return
-				end
-				if cb then
-					cb(debuggee, info)
-				end
-			end)
+	}, function(body, status)
+		s.listener_job = nil
+		if not body or body == "" then
+			fail("listen", "respuesta vacía")
+			return
 		end
-	)
+		if body:find("conflictText", 1, true) then
+			fail("listen", "conflicto: debugger ADT en uso.")
+			return
+		end
+		local debuggee = body:match("<DEBUGGEE_ID>([^<]+)</DEBUGGEE_ID>") or body:match('debuggeeId="([^"]+)"')
+		if not debuggee then
+			fail("listen", "sin DEBUGGEE_ID.")
+			return
+		end
+
+		M.attach(debuggee, function(ok, info)
+			if not ok then
+				return
+			end
+			if info.isPostMortem then
+				log("listen", "DUMP (post-mortem). Ignorando...")
+				M.step("terminateDebuggee", function()
+					M.listen(cb)
+				end)
+				return
+			end
+			if cb then
+				cb(debuggee, info)
+			end
+		end)
+	end)
 end
 
 function M.get_stack(cb)
-	curl(
-		{
-			method = "GET",
-			path = "/sap/bc/adt/debugger/stack",
-			query = { method = "getStack", emode = "_", semanticURIs = "true" },
-			accept = "application/xml",
-		},
-		function(body, status)
-			if parse_exception(body) or not (body or ""):find("stackEntry", 1, true) then
-				if cb then
-					cb({})
-				end
-				return
-			end
-			local frames = {}
-			for attrs in body:gmatch("<stackEntry(.-)/?>") do
-				local uri = attrs:match('adtcore:uri="([^"]*)"') or attrs:match('stackUri="([^"]*)"')
-				frames[#frames + 1] = {
-					program = attrs:match('programName="([^"]*)"'),
-					include = attrs:match('includeName="([^"]*)"'),
-					line = tonumber(attrs:match('line="([^"]*)"')) or 1,
-					position = tonumber(attrs:match('stackPosition="([^"]*)"')),
-					stackUri = attrs:match('stackUri="([^"]*)"'),
-					stackType = attrs:match('stackType="([^"]*)"'),
-					eventName = attrs:match('eventName="([^"]*)"'),
-					systemProgram = attrs:match('systemProgram="true"') ~= nil,
-					uri = uri and unxml(uri) or nil,
-				}
-			end
+	curl({
+		method = "GET",
+		path = "/sap/bc/adt/debugger/stack",
+		query = { method = "getStack", emode = "_", semanticURIs = "true" },
+		accept = "application/xml",
+	}, function(body, status)
+		if parse_exception(body) or not (body or ""):find("stackEntry", 1, true) then
 			if cb then
-				cb(frames)
+				cb({})
 			end
+			return
 		end
-	)
+		local frames = {}
+		for attrs in body:gmatch("<stackEntry(.-)/?>") do
+			local uri = attrs:match('adtcore:uri="([^"]*)"') or attrs:match('stackUri="([^"]*)"')
+			frames[#frames + 1] = {
+				program = attrs:match('programName="([^"]*)"'),
+				include = attrs:match('includeName="([^"]*)"'),
+				line = tonumber(attrs:match('line="([^"]*)"')) or 1,
+				position = tonumber(attrs:match('stackPosition="([^"]*)"')),
+				stackUri = attrs:match('stackUri="([^"]*)"'),
+				stackType = attrs:match('stackType="([^"]*)"'),
+				eventName = attrs:match('eventName="([^"]*)"'),
+				systemProgram = attrs:match('systemProgram="true"') ~= nil,
+				uri = uri and unxml(uri) or nil,
+			}
+		end
+		if cb then
+			cb(frames)
+		end
+	end)
 end
 
 function M.goto_stack(stackUri, cb)
@@ -436,52 +451,49 @@ function M.get_variables(scope, cb)
 		.. table.concat(h)
 		.. "</HIERARCHIES></DATA></asx:values></asx:abap>"
 
-	curl(
-		{
-			method = "POST",
-			path = "/sap/bc/adt/debugger",
-			query = { method = "getChildVariables" },
-			accept = "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.debugger.ChildVariables",
-			content_type = "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.debugger.ChildVariables",
-			body = body,
-		},
-		function(resp, status)
-			if parse_exception(resp) then
-				if cb then
-					cb({}, {})
-				end
-				return
-			end
-			resp = resp or ""
-			local vars = {}
-			for v in resp:gmatch("<STPDA_ADT_VARIABLE>(.-)</STPDA_ADT_VARIABLE>") do
-				if #vars >= M.MAX_CHILDREN then
-					break
-				end
-				local meta = v:match("<META_TYPE>([^<]*)</META_TYPE>") or "simple"
-				vars[#vars + 1] = {
-					id = v:match("<ID>([^<]*)</ID>"),
-					name = v:match("<NAME>([^<]*)</NAME>"),
-					value = unxml((v:match("<VALUE>(.-)</VALUE>") or "")),
-					type = v:match("<DECLARED_TYPE_NAME>([^<]*)</DECLARED_TYPE_NAME>"),
-					meta = meta,
-					table_lines = tonumber(v:match("<TABLE_LINES>([^<]*)</TABLE_LINES>")) or 0,
-					expandable = (meta ~= "simple" and meta ~= "string"),
-				}
-			end
-			local scopes = {}
-			for hy in resp:gmatch("<STPDA_ADT_VARIABLE_HIERARCHY>(.-)</STPDA_ADT_VARIABLE_HIERARCHY>") do
-				local cid = hy:match("<CHILD_ID>([^<]*)</CHILD_ID>")
-				local cname = hy:match("<CHILD_NAME>([^<]*)</CHILD_NAME>")
-				if cid then
-					scopes[#scopes + 1] = { id = cid, name = (cname ~= "" and cname) or cid }
-				end
-			end
+	curl({
+		method = "POST",
+		path = "/sap/bc/adt/debugger",
+		query = { method = "getChildVariables" },
+		accept = "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.debugger.ChildVariables",
+		content_type = "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.debugger.ChildVariables",
+		body = body,
+	}, function(resp, status)
+		if parse_exception(resp) then
 			if cb then
-				cb(vars, scopes)
+				cb({}, {})
+			end
+			return
+		end
+		resp = resp or ""
+		local vars = {}
+		for v in resp:gmatch("<STPDA_ADT_VARIABLE>(.-)</STPDA_ADT_VARIABLE>") do
+			if #vars >= M.MAX_CHILDREN then
+				break
+			end
+			local meta = v:match("<META_TYPE>([^<]*)</META_TYPE>") or "simple"
+			vars[#vars + 1] = {
+				id = v:match("<ID>([^<]*)</ID>"),
+				name = v:match("<NAME>([^<]*)</NAME>"),
+				value = unxml((v:match("<VALUE>(.-)</VALUE>") or "")),
+				type = v:match("<DECLARED_TYPE_NAME>([^<]*)</DECLARED_TYPE_NAME>"),
+				meta = meta,
+				table_lines = tonumber(v:match("<TABLE_LINES>([^<]*)</TABLE_LINES>")) or 0,
+				expandable = (meta ~= "simple" and meta ~= "string"),
+			}
+		end
+		local scopes = {}
+		for hy in resp:gmatch("<STPDA_ADT_VARIABLE_HIERARCHY>(.-)</STPDA_ADT_VARIABLE_HIERARCHY>") do
+			local cid = hy:match("<CHILD_ID>([^<]*)</CHILD_ID>")
+			local cname = hy:match("<CHILD_NAME>([^<]*)</CHILD_NAME>")
+			if cid then
+				scopes[#scopes + 1] = { id = cid, name = (cname ~= "" and cname) or cid }
 			end
 		end
-	)
+		if cb then
+			cb(vars, scopes)
+		end
+	end)
 end
 
 function M.get_vars_by_id(ids, cb)
@@ -493,43 +505,40 @@ function M.get_vars_by_id(ids, cb)
 	local body = '<?xml version="1.0" encoding="UTF-8" ?><asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0"><asx:values><DATA>'
 		.. table.concat(b)
 		.. "</DATA></asx:values></asx:abap>"
-	curl(
-		{
-			method = "POST",
-			path = "/sap/bc/adt/debugger",
-			query = { method = "getVariables" },
-			accept = "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.debugger.Variables",
-			content_type = "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.debugger.Variables",
-			body = body,
-		},
-		function(resp, status)
-			if parse_exception(resp) then
-				if cb then
-					cb({})
-				end
-				return
-			end
-			local vars = {}
-			for v in (resp or ""):gmatch("<STPDA_ADT_VARIABLE>(.-)</STPDA_ADT_VARIABLE>") do
-				if #vars >= M.MAX_CHILDREN then
-					break
-				end
-				local meta = v:match("<META_TYPE>([^<]*)</META_TYPE>") or "simple"
-				vars[#vars + 1] = {
-					id = v:match("<ID>([^<]*)</ID>"),
-					name = v:match("<NAME>([^<]*)</NAME>"),
-					value = unxml((v:match("<VALUE>(.-)</VALUE>") or "")),
-					type = v:match("<DECLARED_TYPE_NAME>([^<]*)</DECLARED_TYPE_NAME>"),
-					meta = meta,
-					table_lines = tonumber(v:match("<TABLE_LINES>([^<]*)</TABLE_LINES>")) or 0,
-					expandable = (meta ~= "simple" and meta ~= "string"),
-				}
-			end
+	curl({
+		method = "POST",
+		path = "/sap/bc/adt/debugger",
+		query = { method = "getVariables" },
+		accept = "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.debugger.Variables",
+		content_type = "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.debugger.Variables",
+		body = body,
+	}, function(resp, status)
+		if parse_exception(resp) then
 			if cb then
-				cb(vars)
+				cb({})
 			end
+			return
 		end
-	)
+		local vars = {}
+		for v in (resp or ""):gmatch("<STPDA_ADT_VARIABLE>(.-)</STPDA_ADT_VARIABLE>") do
+			if #vars >= M.MAX_CHILDREN then
+				break
+			end
+			local meta = v:match("<META_TYPE>([^<]*)</META_TYPE>") or "simple"
+			vars[#vars + 1] = {
+				id = v:match("<ID>([^<]*)</ID>"),
+				name = v:match("<NAME>([^<]*)</NAME>"),
+				value = unxml((v:match("<VALUE>(.-)</VALUE>") or "")),
+				type = v:match("<DECLARED_TYPE_NAME>([^<]*)</DECLARED_TYPE_NAME>"),
+				meta = meta,
+				table_lines = tonumber(v:match("<TABLE_LINES>([^<]*)</TABLE_LINES>")) or 0,
+				expandable = (meta ~= "simple" and meta ~= "string"),
+			}
+		end
+		if cb then
+			cb(vars)
+		end
+	end)
 end
 
 function M.table_row_ids(id, lines)
@@ -566,51 +575,45 @@ function M.step(action, cb)
 end
 
 function M.set_variable(variableName, value, cb)
-	curl(
-		{
-			method = "POST",
-			path = "/sap/bc/adt/debugger",
-			query = { method = "setVariableValue", variableName = variableName },
-			body = value,
-			content_type = "text/plain",
-			accept = "application/xml",
-		},
-		function(body, status)
-			local msg = parse_exception(body)
-			if msg or not tostring(status):match("^2") then
-				if cb then
-					cb(false, msg)
-				end
-				return
-			end
+	curl({
+		method = "POST",
+		path = "/sap/bc/adt/debugger",
+		query = { method = "setVariableValue", variableName = variableName },
+		body = value,
+		content_type = "text/plain",
+		accept = "application/xml",
+	}, function(body, status)
+		local msg = parse_exception(body)
+		if msg or not tostring(status):match("^2") then
 			if cb then
-				cb(true)
+				cb(false, msg)
 			end
+			return
 		end
-	)
+		if cb then
+			cb(true)
+		end
+	end)
 end
 
 function M.jump(uri, cb)
-	curl(
-		{
-			method = "POST",
-			path = "/sap/bc/adt/debugger",
-			query = { method = "stepJumpToLine", uri = uri },
-			accept = "application/xml",
-		},
-		function(body, status)
-			local msg = parse_exception(body)
-			if msg then
-				if cb then
-					cb({ error = msg })
-				end
-				return
-			end
+	curl({
+		method = "POST",
+		path = "/sap/bc/adt/debugger",
+		query = { method = "stepJumpToLine", uri = uri },
+		accept = "application/xml",
+	}, function(body, status)
+		local msg = parse_exception(body)
+		if msg then
 			if cb then
-				cb({ ended = false })
+				cb({ error = msg })
 			end
+			return
 		end
-	)
+		if cb then
+			cb({ ended = false })
+		end
+	end)
 end
 
 function M.stop(cb)
@@ -625,27 +628,24 @@ function M.stop(cb)
 		pcall(vim.fn.jobstop, s.listener_job)
 		s.listener_job = nil
 	end
-	curl(
-		{
-			method = "DELETE",
-			path = "/sap/bc/adt/debugger/listeners",
-			query = {
-				debuggingMode = "user",
-				requestUser = s.user,
-				terminalId = s.terminalId,
-				ideId = s.ideId,
-				checkConflict = "false",
-				notifyConflict = "true",
-			},
+	curl({
+		method = "DELETE",
+		path = "/sap/bc/adt/debugger/listeners",
+		query = {
+			debuggingMode = "user",
+			requestUser = s.user,
+			terminalId = s.terminalId,
+			ideId = s.ideId,
+			checkConflict = "false",
+			notifyConflict = "true",
 		},
-		function(_, status)
-			pcall(os.remove, s.jar)
-			M.session = nil
-			if cb then
-				cb()
-			end
+	}, function(_, status)
+		pcall(os.remove, s.jar)
+		M.session = nil
+		if cb then
+			cb()
 		end
-	)
+	end)
 end
 
 -- 🔥 RESTAURADO: Función para matar todas las sesiones huérfanas

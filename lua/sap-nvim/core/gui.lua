@@ -101,14 +101,13 @@ local function webgui_run_url(base, client, info, name)
 end
 
 -- Ejecuta el PROGRAMA/report del buffer actual (o el nombre dado) via SE38 en WebGUI.
--- Usa vim.b.sap_obj si es un program; si no, pide el nombre. Abre SE38 y lo EJECUTA (STRT).
+-- Si es un INCLUDE, pregunta asíncronamente a SAP cuál es su Main Program antes de ejecutar.
 function M.run_program(progname)
 	local base, client = base_client()
 	if not base then
 		return
 	end
-	local meta = vim.b.sap_obj
-	local name = progname or (meta and meta.group == "program" and meta.name) or nil
+
 	local function go(p)
 		p = (p or ""):upper()
 		if p == "" then
@@ -117,17 +116,48 @@ function M.run_program(progname)
 		notify("Ejecutando programa " .. p .. " (SE38) en WebGUI...")
 		open_url(webgui_run_url(base, client, RUN_INFO.program, p))
 	end
-	if name then
-		go(name)
-	else
-		vim.ui.input({ prompt = "Programa a ejecutar: " }, function(v)
-			if v then
-				go(v)
+
+	-- 1. Si el usuario pasa un nombre explícito, vamos directo
+	if progname then
+		go(progname)
+		return
+	end
+
+	-- 2. Si estamos en un archivo, intentamos deducir el nombre del archivo actual
+	local current_filename = vim.fn.expand("%:t:r"):upper()
+
+	-- 3. Si parece un Include (por su nombre o estructura), preguntamos a SAP por el padre
+	-- Usamos la API de Includes para resolver el 'mainprogram'
+	local adt_http = require("sap-nvim.core.adt_http")
+	notify("Detectando programa principal...")
+
+	adt_http.request_async({
+		method = "GET",
+		path = "/sap/bc/adt/programs/includes/" .. current_filename:lower() .. "/mainprograms",
+		accept = "application/*",
+	}, function(body, status)
+		local mainname = body and body:match('adtcore:name="([^"]*)"')
+
+		vim.schedule(function()
+			if mainname and mainname ~= "" then
+				notify("Programa principal detectado: " .. mainname)
+				go(mainname)
+			else
+				-- 4. Si no es un include (o no tiene padre), ejecutamos el nombre del archivo actual
+				if current_filename and current_filename ~= "" then
+					go(current_filename)
+				else
+					-- 5. Fallback final: pedirlo a mano
+					vim.ui.input({ prompt = "Programa a ejecutar: " }, function(v)
+						if v then
+							go(v)
+						end
+					end)
+				end
 			end
 		end)
-	end
+	end)
 end
-
 -- Muestra texto en un split de solo lectura (q/- cierra).
 local function show(bufname, lines)
 	local b = vim.api.nvim_create_buf(true, true)
