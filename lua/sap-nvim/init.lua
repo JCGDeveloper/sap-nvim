@@ -34,6 +34,7 @@ function M.setup(opts)
     "sap-nvim.core.transport",
     "sap-nvim.core.cts",
     "sap-nvim.core.cds",
+    "sap-nvim.core.connection",
     "sap-nvim.core.home",
     "sap-nvim.core.transaction",
     "sap-nvim.core.gui",

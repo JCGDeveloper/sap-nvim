@@ -10,15 +10,21 @@ map("n", "<C-s>", "<cmd>w<cr>", { desc = "Guardar" })
 map("i", "<C-s>", "<esc><cmd>w<cr>", { desc = "Guardar" })
 map("n", "<esc>", "<cmd>nohlsearch<cr>", { desc = "Quitar resaltado" })
 map("n", "<leader>qq", "<cmd>qa<cr>", { desc = "Salir de todo" })
-map("n", "<leader>w", "<cmd>w<cr>", { desc = "Guardar" })
 
--- ── Ventanas ────────────────────────────────────────────────────────────────
-map("n", "<C-h>", "<C-w>h", { desc = "Ventana izquierda" })
-map("n", "<C-j>", "<C-w>j", { desc = "Ventana abajo" })
-map("n", "<C-k>", "<C-w>k", { desc = "Ventana arriba" })
-map("n", "<C-l>", "<C-w>l", { desc = "Ventana derecha" })
+-- ── Ventanas ── (navegación <C-h/j/k/l> la da nvim-tmux-navigation) ──────────
+map("n", "<leader>ws", "<C-w>s", { desc = "Split horizontal" })
+map("n", "<leader>wv", "<C-w>v", { desc = "Split vertical" })
+map("n", "<leader>wd", "<C-w>c", { desc = "Cerrar ventana" })
+map("n", "<leader>wo", "<C-w>o", { desc = "Solo esta ventana" })
+map("n", "<leader>ww", "<C-w>w", { desc = "Ir a otra ventana" })
+map("n", "<leader>w=", "<C-w>=", { desc = "Igualar tamaños" })
 map("n", "<leader>-", "<C-w>s", { desc = "Split horizontal" })
 map("n", "<leader>|", "<C-w>v", { desc = "Split vertical" })
+-- Redimensionar con Ctrl+flechas
+map("n", "<C-Up>", "<cmd>resize +2<cr>", { desc = "Ventana más alta" })
+map("n", "<C-Down>", "<cmd>resize -2<cr>", { desc = "Ventana más baja" })
+map("n", "<C-Left>", "<cmd>vertical resize -2<cr>", { desc = "Ventana más estrecha" })
+map("n", "<C-Right>", "<cmd>vertical resize +2<cr>", { desc = "Ventana más ancha" })
 
 -- ── Buffers ─────────────────────────────────────────────────────────────────
 map("n", "<S-l>", "<cmd>bnext<cr>", { desc = "Buffer siguiente" })

@@ -67,6 +67,7 @@ return {
 				{ "<leader>f", group = "Buscar (pickers)" },
 				{ "<leader>b", group = "Buffers" },
 				{ "<leader>g", group = "Git" },
+				{ "<leader>w", group = "Ventanas" },
 			},
 		},
 	},

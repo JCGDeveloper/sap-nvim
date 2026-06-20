@@ -77,6 +77,9 @@ local MENU = {
 	{ key = "o", desc = "Abrir / buscar objeto", action = function()
 		M.search()
 	end },
+	{ key = "C", desc = "Abrir vista CDS / objeto RAP (ddls, bdef…)", action = function()
+		M.open_cds()
+	end },
 	{ key = "x", desc = "Ejecutar transacción (WebGUI)", action = function()
 		M.transaction()
 	end },
@@ -95,10 +98,27 @@ local MENU = {
 	{ key = "r", desc = "Objetos SAP recientes (sesión anterior)", action = function()
 		M.pick_buffers()
 	end },
+	{ key = "L", desc = "Conexión / login (cambiar de máquina)", action = function()
+		require("sap-nvim.core.connection").choose()
+	end },
 	{ key = "q", desc = "Salir", action = function()
 		vim.cmd("qa")
 	end },
 }
+
+-- Abre una vista CDS / objeto RAP pidiendo tipo (por defecto ddls) y nombre.
+function M.open_cds()
+	vim.ui.input({ prompt = "Vista CDS / objeto RAP (NOMBRE o 'bdef NOMBRE'): " }, function(input)
+		if not input or vim.trim(input) == "" then
+			return
+		end
+		local kind, name = input:match("^(%S+)%s+(%S+)$")
+		if not kind then
+			kind, name = "ddls", vim.trim(input)
+		end
+		require("sap-nvim.core.cds").open_adt(kind:lower(), name)
+	end)
+end
 
 local LOGO = {
 	"",
@@ -276,6 +296,29 @@ function M.restore_session()
 	return n
 end
 
+-- Arranque del modo SAP: pide conexión+contraseña (si falta), restaura objetos SAP y
+-- abre el dashboard. El login se puede desactivar con vim.g.sap_login_on_start = false.
+function M.start()
+	local function go()
+		M.restore_session()
+		M.open_dashboard()
+	end
+	if vim.g.sap_login_on_start == false then
+		go()
+		return
+	end
+	local ok, conn = pcall(require, "sap-nvim.core.connection")
+	if ok then
+		-- Siempre preguntamos máquina + contraseña al arrancar (más seguro). Si dejas la
+		-- contraseña vacía y config.yml ya trae una, se usa esa (compatibilidad).
+		conn.choose(function()
+			vim.schedule(go)
+		end)
+	else
+		go()
+	end
+end
+
 -- ── Setup (GATED) ───────────────────────────────────────────────────────────
 function M.setup(opts)
 	opts = opts or {}
@@ -314,8 +357,7 @@ function M.setup(opts)
 				return -- abriste con un fichero/dir: respétalo
 			end
 			vim.schedule(function()
-				M.restore_session()
-				M.open_dashboard()
+				M.start()
 			end)
 		end,
 	})
@@ -332,8 +374,7 @@ function M.setup(opts)
 	-- de arriba ya no dispara en este arranque: lo lanzamos a mano si procede.
 	if vim.v.vim_did_enter == 1 and vim.fn.argc() == 0 then
 		vim.schedule(function()
-			M.restore_session()
-			M.open_dashboard()
+			M.start()
 		end)
 	end
 end

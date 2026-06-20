@@ -12,53 +12,154 @@
 
 local M = {}
 
-local state = { creds = nil, token = nil, cookies = nil }
+-- active_ctx: contexto elegido en runtime (login). passwords: contraseñas EN MEMORIA
+-- (nunca se escriben a disco), por contexto. Permite NO guardar la password en config.yml.
+local state = { creds = nil, token = nil, cookies = nil, active_ctx = nil, passwords = {} }
 
 -- ── Parseo del config.yml de sapcli (YAML simple, sin librería) ──────────────
-local function parse_creds()
-  local path = vim.fn.expand("~/.sapcli/config.yml")
-  local f = io.open(path, "r")
+local function read_config()
+  local f = io.open(vim.fn.expand("~/.sapcli/config.yml"), "r")
   if not f then return nil end
-  local txt = f:read("*a"); f:close()
+  local txt = f:read("*a")
+  f:close()
+  return txt
+end
 
-  local ctx = txt:match("current%-context:%s*([%w_%-]+)")
-  if not ctx then return nil end
-
-  -- Devuelve el valor `key` dentro del bloque indentado que empieza en `header:`.
-  local function field_in_block(header, key)
-    local in_block = false
-    for line in (txt .. "\n"):gmatch("([^\n]*)\n") do
-      if line:match("^%s*" .. vim.pesc(header) .. ":%s*$") then
-        in_block = true
-      elseif in_block and line:match("^%S") then
-        break -- siguiente sección de nivel 0
-      elseif in_block then
-        local v = line:match("^%s+" .. vim.pesc(key) .. ":%s*(.+)%s*$")
-        if v then return (v:gsub("^['\"]", ""):gsub("['\"]%s*$", "")) end
+-- Valor de `key` dentro del bloque indentado que empieza en `header:`.
+local function field_in_block(txt, header, key)
+  local in_block = false
+  for line in (txt .. "\n"):gmatch("([^\n]*)\n") do
+    if line:match("^%s*" .. vim.pesc(header) .. ":%s*$") then
+      in_block = true
+    elseif in_block and line:match("^%S") then
+      break -- siguiente sección de nivel 0
+    elseif in_block then
+      local v = line:match("^%s+" .. vim.pesc(key) .. ":%s*(.+)%s*$")
+      if v then
+        return (v:gsub("^['\"]", ""):gsub("['\"]%s*$", ""))
       end
     end
+  end
+  return nil
+end
+
+-- Construye las credenciales del contexto `ctx`. La password puede FALTAR (login pendiente).
+local function parse_connection(txt, ctx)
+  local conn = field_in_block(txt, ctx, "connection") or ctx
+  local user_key = field_in_block(txt, ctx, "user") or (ctx .. "-user")
+  local host = field_in_block(txt, conn, "ashost")
+  local user = field_in_block(txt, user_key, "user")
+  if not host or not user then
     return nil
   end
-
-  local conn = field_in_block(ctx, "connection") or ctx
-  local user_key = field_in_block(ctx, "user") or (ctx .. "-user")
-  local host = field_in_block(conn, "ashost")
-  local port = field_in_block(conn, "port")
-  local client = field_in_block(conn, "client")
-  local ssl = field_in_block(conn, "ssl")
-  local user = field_in_block(user_key, "user")
-  local pass = field_in_block(user_key, "password")
-  if not (host and user and pass) then return nil end
-
+  local port = field_in_block(txt, conn, "port")
+  local client = field_in_block(txt, conn, "client")
+  local ssl = field_in_block(txt, conn, "ssl")
+  local desc = field_in_block(txt, conn, "description")
+  local pass = field_in_block(txt, user_key, "password")
   host = host:gsub("^https?://", "")
   local scheme = (ssl == "false") and "http" or "https"
   local base = scheme .. "://" .. host .. (port and (":" .. port) or "")
-  return { base = base, client = client or "", user = user, pass = pass }
+  return {
+    context = ctx,
+    connection = conn,
+    description = desc or ctx,
+    host = host,
+    client = client or "",
+    user = user,
+    pass = pass,
+    base = base,
+  }
+end
+
+-- Nombres de contexto (las claves bajo `contexts:`).
+local function list_context_names(txt)
+  local names, in_block = {}, false
+  for line in (txt .. "\n"):gmatch("([^\n]*)\n") do
+    if line:match("^contexts:%s*$") then
+      in_block = true
+    elseif in_block and line:match("^%S") then
+      break
+    elseif in_block then
+      local name = line:match("^%s+([%w_%-]+):%s*$")
+      if name then
+        names[#names + 1] = name
+      end
+    end
+  end
+  return names
+end
+
+local function active_context(txt)
+  return state.active_ctx or txt:match("current%-context:%s*([%w_%-]+)")
+end
+
+-- Lista de conexiones disponibles (para el selector de login).
+function M.list_connections()
+  local txt = read_config()
+  if not txt then
+    return {}
+  end
+  local out = {}
+  for _, ctx in ipairs(list_context_names(txt)) do
+    local c = parse_connection(txt, ctx)
+    if c then
+      out[#out + 1] = c
+    end
+  end
+  return out
+end
+
+-- Selecciona la conexión activa + (opcional) password EN MEMORIA (no se escribe a disco).
+-- Invalida credenciales/token/cookies para forzar sesión limpia con la nueva conexión.
+function M.use_connection(ctx, password)
+  state.active_ctx = ctx
+  if password and password ~= "" then
+    state.passwords[ctx] = password
+  end
+  state.creds = nil
+  state.token = nil
+  pcall(os.remove, vim.fn.stdpath("cache") .. "/sap-nvim/adt_cookies.txt")
 end
 
 function M.creds()
-  if not state.creds then state.creds = parse_creds() end
-  return state.creds
+  if state.creds then
+    return state.creds
+  end
+  local txt = read_config()
+  if not txt then
+    return nil
+  end
+  local ctx = active_context(txt)
+  if not ctx then
+    return nil
+  end
+  local c = parse_connection(txt, ctx)
+  if not c then
+    return nil
+  end
+  local pass = state.passwords[ctx] or c.pass
+  if not pass or pass == "" then
+    return nil -- falta password → login pendiente (M.needs_login() == true)
+  end
+  c.pass = pass
+  state.creds = c
+  return c
+end
+
+-- ¿Hay conexión configurada (host/user) pero falta la contraseña? (para disparar el login)
+function M.needs_login()
+  local txt = read_config()
+  if not txt then
+    return false
+  end
+  local ctx = active_context(txt)
+  local c = ctx and parse_connection(txt, ctx)
+  if not c then
+    return false
+  end
+  local pass = state.passwords[ctx] or c.pass
+  return pass == nil or pass == ""
 end
 
 function M.is_available()
