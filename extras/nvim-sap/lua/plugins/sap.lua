@@ -17,7 +17,12 @@ return {
 			"saghen/blink.cmp",
 		},
 		config = function()
-			require("sap-nvim").setup({ sap_mode = true })
+			require("sap-nvim").setup({
+				sap_mode = true,
+				-- Formatear al guardar: CDS por llaves (local) y ABAP con el Pretty Printer
+				-- de SAP. Si el auto-formato de ABAP te molesta, pon on_save = false.
+				format = { on_save = true },
+			})
 		end,
 	},
 

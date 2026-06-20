@@ -429,7 +429,11 @@ function M.setup()
   -- Format-on-save opcional (config.format.on_save). Formatea ANTES de guardar (BufWritePre)
   -- con el Pretty Printer de SAP para objetos remotos. El usuario lo activa en setup().
   vim.api.nvim_create_autocmd("BufWritePre", {
-    pattern = { "*.abap", "*.clas.abap", "*.intf.abap", "*.prog.abap" },
+    pattern = {
+      "*.abap", "*.clas.abap", "*.intf.abap", "*.prog.abap",
+      -- CDS / RAP: el formateo por llaves es local e instantáneo (sin red).
+      "*.ddls", "*.dcl", "*.bdef", "*.ddlx", "*.srvd", "*.asddls", "*.cds",
+    },
     group = vim.api.nvim_create_augroup("sap_nvim_format_on_save", { clear = true }),
     callback = function()
       local ok, cfg = pcall(function() return require("sap-nvim.core.config").format() end)
