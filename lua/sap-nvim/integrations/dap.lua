@@ -48,20 +48,41 @@ local URI_GROUP = {
   { "/sap/bc/adt/programs/includes/([^/]+)", "include" },
   { "/sap/bc/adt/functions/groups/([^/]+)", "functiongroup" },
 }
+-- sourceReference para fuentes remotas (VFS): mapea ref<->uri ADT, dedupe por uri.
+local function source_ref(uri)
+  if state.srcref_by_uri[uri] then return state.srcref_by_uri[uri] end
+  local ref = state.srcctr
+  state.srcctr = state.srcctr + 1
+  state.srcrefs[ref] = uri
+  state.srcref_by_uri[uri] = ref
+  return ref
+end
+
+-- DAP source de un frame: si el objeto YA está en caché local -> path (alineado con el buffer
+-- real, para breakpoints). Si no -> sourceReference + fetch on-demand (Pilar 1, VFS remoto).
 local function frame_source(frame)
   local oks, source = pcall(require, "sap-nvim.core.source")
   local oko, objtype = pcall(require, "sap-nvim.core.objtype")
-  if not (oks and oko) then return nil end
   local name, group
   for _, p in ipairs(URI_GROUP) do
     local n = frame.uri and frame.uri:match(p[1])
     if n then name = n:upper(); group = p[2]; break end
   end
-  name = name or (frame.include or frame.program)
+  name = name or (frame.include or frame.program) or "ABAP"
   group = group or "program"
-  if not name then return nil end
-  local path = source.cache_dir() .. "/" .. objtype.gitfile(group, name)
-  return { name = name, path = path }
+
+  if oks and oko then
+    local path = source.cache_dir() .. "/" .. objtype.gitfile(group, name)
+    if vim.fn.filereadable(path) == 1 then
+      return { name = name, path = path }
+    end
+  end
+  -- remoto: el cliente pedirá el contenido con un request `source` (handlers.source).
+  local src_uri = frame.uri and frame.uri:gsub("#.*$", "")
+  if src_uri and src_uri ~= "" then
+    return { name = name, sourceReference = source_ref(src_uri) }
+  end
+  return nil
 end
 
 -- ── Wire DAP (framing Content-Length + JSON) ─────────────────────────────────
@@ -251,6 +272,20 @@ function handlers.variables(req)
   end)
 end
 
+-- Pilar 1 (VFS remoto): el cliente pide el contenido de una fuente remota por sourceReference.
+function handlers.source(req)
+  local args = req.arguments or {}
+  local ref = args.sourceReference or (args.source and args.source.sourceReference)
+  local uri = ref and state.srcrefs[ref]
+  if not uri then respond(req, { content = "" }); return end
+  local adt_http = require("sap-nvim.core.adt_http")
+  adt_http.request_async({ method = "GET", path = uri, accept = "text/plain" }, function(body)
+    vim.schedule(function()
+      respond(req, { content = (body and body:gsub("\r", "")) or "* (no se pudo cargar la fuente remota)" })
+    end)
+  end)
+end
+
 -- continue/next/stepIn/stepOut: respondemos ya y el step (que bloquea hasta la próxima
 -- parada o el fin) dispara stopped/terminated después.
 local function do_step(req, action, body)
@@ -299,7 +334,8 @@ local function start_server(callback)
     local sock = vim.loop.new_tcp()
     server:accept(sock)
     state = { sock = sock, seq = 1, server = server, source_uri = nil,
-      pending_bps = {}, frames = {}, varrefs = {}, varctr = 1, config = {} }
+      pending_bps = {}, frames = {}, varrefs = {}, varctr = 1, config = {},
+      current_frame = nil, srcrefs = {}, srcref_by_uri = {}, srcctr = 5000 }
     local buf = ""
     sock:read_start(function(rerr, chunk)
       if rerr or not chunk then pcall(function() sock:close() end); return end
