@@ -53,21 +53,11 @@ return {
 		commit = "4916d6592ede8c07973490d9322f187e07dfefac",
 		lazy = false,
 		config = function()
-			pcall(function()
-				require("nvim-treesitter").install({
-					"lua",
-					"vim",
-					"vimdoc",
-					"bash",
-					"json",
-					"yaml",
-					"markdown",
-					"markdown_inline",
-					"sql",
-				})
-			end)
-			-- En la rama main el highlight no se auto-activa: lo arrancamos por buffer.
-			-- pcall: si un filetype no tiene parser (abap/cds), no pasa nada (sintaxis nativa).
+			-- NO llamamos a require('nvim-treesitter').install(): en la rama main compila los
+			-- parsers con el CLI `tree-sitter`, que no está instalado, y peta en cada arranque.
+			-- Usamos los parsers que YA trae Neovim (markdown/lua/vim/vimdoc… → sirven para el
+			-- hover). En main el highlight no se auto-activa: lo arrancamos por buffer; el pcall
+			-- absorbe los filetypes sin parser (ABAP/CDS van con abap.vim; SQL/JSON con sintaxis).
 			vim.api.nvim_create_autocmd("FileType", {
 				group = vim.api.nvim_create_augroup("sapnvim_ts_start", { clear = true }),
 				callback = function(ev)
