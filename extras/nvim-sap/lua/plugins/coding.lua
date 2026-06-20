@@ -9,6 +9,17 @@ return {
 		commit = "78336bc89ee5365633bcf754d93df01678b5c08f",
 		event = "InsertEnter",
 		opts = {
+			-- Aceptar con Enter o Tab (como tu LazyVim). Y al navegar la lista NO sustituye
+			-- la palabra: solo resalta; se inserta al ACEPTAR (auto_insert=false). Con
+			-- preselect=false, Enter sigue haciendo salto de línea normal si no hay selección.
+			keymap = {
+				preset = "enter",
+				["<Tab>"] = { "accept", "fallback" },
+			},
+			completion = {
+				list = { selection = { preselect = false, auto_insert = false } },
+				documentation = { auto_show = true },
+			},
 			sources = {
 				default = { "abap_local", "sap_adt" },
 				per_filetype = {
