@@ -55,6 +55,7 @@ function M.setup(opts)
     "sap-nvim.core.inactive",
     "sap-nvim.integrations.completion",
     "sap-nvim.integrations.copilot",
+    "sap-nvim.integrations.dap",
     "sap-nvim.adapters.terminal",
   }
 

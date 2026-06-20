@@ -250,6 +250,15 @@ function M.get_stack(cb)
   end)
 end
 
+-- Selecciona un frame del stack (para inspeccionar sus variables). stackUri viene de
+-- get_stack (campo stackUri). PUT, sin body. cb(ok).
+function M.goto_stack(stackUri, cb)
+  if not stackUri then if cb then cb(false) end; return end
+  curl({ method = "PUT", path = stackUri }, function(_, status)
+    if cb then cb(tostring(status):match("^2") ~= nil) end
+  end)
+end
+
 -- ── 6) get_variables ──────────────────────────────────────────────────────────
 -- scope: id del nodo a expandir ("@ROOT" para los scopes; "@GLOBALS"/"@LOCALS"/<var id>
 --   para variables). Acepta string o lista de ids.
