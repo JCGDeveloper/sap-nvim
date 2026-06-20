@@ -161,9 +161,12 @@ function handlers.setBreakpoints(req)
   local bps = args.breakpoints or {}
   local resp_bps = {}
   for _, b in ipairs(bps) do
-    table.insert(state.pending_bps, { uri = uri, line = b.line })
-    -- verificación optimista; la real ocurre al setear en SAP (configurationDone).
-    table.insert(resp_bps, { verified = uri ~= nil, line = b.line })
+    state.bpctr = (state.bpctr or 0) + 1
+    local id = state.bpctr
+    table.insert(state.pending_bps, { uri = uri, line = b.line, id = id })
+    -- verificación optimista; la real (verified=false si SAP rechaza) se corrige en
+    -- configurationDone con un evento `breakpoint`.
+    table.insert(resp_bps, { id = id, verified = uri ~= nil, line = b.line })
   end
   if uri then state.source_uri = uri end
   respond(req, { breakpoints = resp_bps })
@@ -189,9 +192,17 @@ function handlers.configurationDone(req)
         return
       end
       if bp.uri then
-        dbg.set_breakpoint(bp.uri, bp.line, function(verified)
+        dbg.set_breakpoint(bp.uri, bp.line, function(verified, info)
           if not verified then
-            event("output", { category = "stderr", output = "[ABAP] Breakpoint L" .. bp.line .. " rechazado (línea no ejecutable).\n" })
+            local why = (info and info.errorMessage) or "SAP rechazó el breakpoint"
+            -- Marca el breakpoint como NO verificado en dap-ui (hueco) con el motivo.
+            if bp.id then
+              event("breakpoint", { reason = "changed",
+                breakpoint = { id = bp.id, verified = false, line = bp.line, message = why } })
+            end
+            event("output", { category = "stderr",
+              output = "[ABAP] Breakpoint L" .. bp.line .. " rechazado: " .. why ..
+                " (¿línea ejecutable? ¿buffer = versión activa en SAP?)\n" })
           end
           next_bp()
         end)
