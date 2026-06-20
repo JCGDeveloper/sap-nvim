@@ -109,6 +109,7 @@ end
 local function reset_varrefs()
   state.varrefs = {}
   state.varctr = 1
+  state.varids = {} -- [ref] = { [name] = adt_id }  para setVariable
 end
 local function new_varref(adt_id)
   local ref = state.varctr
@@ -138,6 +139,7 @@ function handlers.initialize(req)
   respond(req, {
     supportsConfigurationDoneRequest = true,
     supportsTerminateRequest = true,
+    supportsSetVariable = true,
     supportsStepInTargetsRequest = false,
     supportsEvaluateForHovers = false,
   })
@@ -259,8 +261,10 @@ function handlers.variables(req)
   local adt_id = ref and state.varrefs[ref]
   if not adt_id then respond(req, { variables = {} }); return end
   dbg.get_variables(adt_id, function(vars)
+    state.varids[ref] = state.varids[ref] or {}
     local out = {}
     for _, v in ipairs(vars) do
+      state.varids[ref][v.name or "?"] = v.id -- para setVariable
       out[#out + 1] = {
         name = v.name or "?",
         value = (v.value ~= "" and v.value) or (v.meta == "table" and ("table[" .. v.table_lines .. "]") or "''"),
@@ -269,6 +273,20 @@ function handlers.variables(req)
       }
     end
     respond(req, { variables = out })
+  end)
+end
+
+-- Pilar 2 — setVariable: mutar un escalar en runtime. El id ADT se resuelve por (ref, name).
+function handlers.setVariable(req)
+  local a = req.arguments or {}
+  local ref, name, value = a.variablesReference, a.name, a.value
+  local id = (ref and state.varids[ref] and state.varids[ref][name]) or name
+  dbg.set_variable(id, value, function(ok)
+    if ok then
+      respond(req, { value = value })
+    else
+      respond(req, { error = { id = 1, format = "No se pudo cambiar '" .. tostring(name) .. "' (¿escalar/autorización?)." } }, false)
+    end
   end)
 end
 

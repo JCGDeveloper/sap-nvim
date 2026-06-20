@@ -47,6 +47,11 @@ local function unxml(s)
   return (s or ""):gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"'):gsub("&apos;", "'"):gsub("&amp;", "&")
 end
 
+-- encodeURIComponent (para valores de query como variableName, que lleva @ \ -).
+local function urlenc(s)
+  return (tostring(s):gsub("[^%w%-_.!~*'()]", function(c) return string.format("%%%02X", string.byte(c)) end))
+end
+
 -- Extrae el mensaje de una <exc:exception> de ADT (o nil) + el subType (p.ej. debuggeeEnded).
 local function parse_exception(body)
   if not body or not body:find("exception", 1, true) then return nil end
@@ -66,7 +71,7 @@ local function curl(opts, cb)
   local url = c.base .. opts.path
   url = url .. (opts.path:find("?") and "&" or "?") .. "sap-client=" .. c.client
   if opts.query then
-    for k, v in pairs(opts.query) do url = url .. "&" .. k .. "=" .. tostring(v) end
+    for k, v in pairs(opts.query) do url = url .. "&" .. k .. "=" .. urlenc(v) end
   end
 
   local hdrfile = vim.fn.tempname()
@@ -329,6 +334,25 @@ function M.step(action, cb)
     end
     log("step", action .. " OK (HTTP " .. tostring(status) .. ").")
     if cb then cb({ ended = false }) end
+  end)
+end
+
+-- Cambia el valor de una variable escalar en runtime (Pilar 2). variableName = el ID ADT
+-- de la variable (p.ej. "SY-SUBRC" o "@GLOBALS\LV_X"). cb(ok, msg).
+function M.set_variable(variableName, value, cb)
+  curl({
+    method = "POST", path = "/sap/bc/adt/debugger",
+    query = { method = "setVariableValue", variableName = variableName },
+    body = value, content_type = "text/plain", accept = "application/xml",
+  }, function(body, status)
+    local msg = parse_exception(body)
+    if msg or not tostring(status):match("^2") then
+      fail("setvar", variableName .. " = '" .. value .. "' (HTTP " .. tostring(status) .. "): " .. (msg or "rechazado"))
+      if cb then cb(false, msg) end
+      return
+    end
+    log("setvar", variableName .. " = '" .. value .. "' OK.")
+    if cb then cb(true) end
   end)
 end
 
