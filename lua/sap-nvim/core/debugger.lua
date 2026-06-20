@@ -350,61 +350,9 @@ function M.stop(cb)
   end)
 end
 
--- ── orquestación de prueba (Fase 1: salida por :messages; la UI va en Fase 2) ──
-
--- Arranca una sesión sobre el buffer actual (objeto + línea del cursor) y, al parar en vivo,
--- vuelca stack + variables globales. Valida el cliente sin la UI/DAP todavía.
-function M.start_here()
-  if M.session then fail("start", "ya hay una sesión activa (:SapDebugStop primero)."); return end
-  local bufnr = vim.api.nvim_get_current_buf()
-  local source_uri = require("sap-nvim.core.intel").object_uri(bufnr)
-  if not source_uri then fail("start", "el buffer no es un objeto SAP (abre con :SapSearch)."); return end
-  local line = vim.api.nvim_win_get_cursor(0)[1]
-
-  M.init_session(function(ok)
-    if not ok then return end
-    M.set_breakpoint(source_uri, line, function(verified)
-      if not verified then M.stop(); return end
-      M.listen(function(_, _info)
-        log("start", "¡PARADO EN VIVO! Stack y variables:")
-        M.get_stack(function(frames)
-          for _, f in ipairs(frames) do
-            print(string.format("  #%s %-25s %s:%s  (%s)%s",
-              tostring(f.position or "?"), f.program or "?", f.include or "?", f.line,
-              f.eventName or "", f.systemProgram and " [sistema]" or ""))
-          end
-          M.get_variables("@GLOBALS", function(vars)
-            print("  ── variables (@GLOBALS) ──")
-            for _, v in ipairs(vars) do
-              print(string.format("  %-22s = %-28s [%s%s]", v.name or "?", v.value,
-                v.type or v.meta, v.expandable and ", expandible" or ""))
-            end
-            log("start", "OK. :SapDebugStep over|into|out|continue · :SapDebugStop para salir.")
-          end)
-        end)
-      end)
-    end)
-  end)
-end
-
-function M.setup()
-  vim.api.nvim_create_user_command("SapDebugStart", function() M.start_here() end,
-    { desc = "sap-nvim: Debug — breakpoint en la línea del cursor y escuchar" })
-  vim.api.nvim_create_user_command("SapDebugStop", function() M.stop() end,
-    { desc = "sap-nvim: Debug — cerrar la sesión" })
-  vim.api.nvim_create_user_command("SapDebugStep", function(a)
-    local map = { over = "stepOver", into = "stepInto", out = "stepReturn", continue = "stepContinue" }
-    M.step(map[a.args] or "stepOver", function(r)
-      if r.ended then log("step", "ejecución terminada — cerrando."); M.stop()
-      elseif not r.error then
-        M.get_stack(function(frames)
-          local f = frames[1]
-          if f then log("step", "parado en " .. (f.program or "?") .. ":" .. f.line) end
-        end)
-      end
-    end)
-  end, { desc = "sap-nvim: Debug — step (over|into|out|continue)", nargs = "?",
-    complete = function() return { "over", "into", "out", "continue" } end })
-end
+-- El control del debugger es 100% vía nvim-dap (integrations/dap.lua): <leader>db breakpoint,
+-- <leader>dc arrancar, <leader>di/do/dO step, <leader>dt terminar. Este módulo es SOLO el
+-- cliente del protocolo (sin comandos propios, para no competir por la sesión con dap).
+function M.setup() end
 
 return M
