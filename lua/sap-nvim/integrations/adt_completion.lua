@@ -39,6 +39,19 @@ function source:get_completions(ctx, callback)
 	local bufnr = ctx.bufnr or vim.api.nvim_get_current_buf()
 	local row = ctx.cursor[1]
 
+	-- PREFIJO A REEMPLAZAR según el contexto:
+	--   tras ->/=>/~  → lo que va DESPUÉS del operador (vacío en "lo_alv->")
+	--   tras @        → la anotación
+	--   si no         → la palabra normal
+	-- Antes se usaba #(word or p.word): al ser word=nil tras "->", reemplazaba #p.word
+	-- caracteres hacia atrás y se comía "lo_alv". El rango debe arrancar justo tras el "->".
+	local replace = before:match("[=%-]>([%w_]*)$")
+		or before:match("~([%w_]*)$")
+		or before:match("@([%w%._]*)$")
+		or before:match("[%w_/]+$")
+		or ""
+	local start_char = col - #replace
+
 	intel.proposals_async(bufnr, row, col, function(props)
 		local items = {}
 		for _, p in ipairs(props) do
@@ -50,8 +63,8 @@ function source:get_completions(ctx, callback)
 				textEdit = {
 					newText = p.word,
 					range = {
-						start = { line = ctx.cursor[1] - 1, character = ctx.cursor[2] - #(word or p.word) },
-						["end"] = { line = ctx.cursor[1] - 1, character = ctx.cursor[2] },
+						start = { line = row - 1, character = start_char },
+						["end"] = { line = row - 1, character = col },
 					},
 				},
 			}
