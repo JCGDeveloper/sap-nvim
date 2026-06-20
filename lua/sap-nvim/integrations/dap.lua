@@ -148,10 +148,15 @@ local function reset_varrefs()
 	state.varctr = 1
 	state.varids = {} -- [ref] = { [name] = adt_id }  para setVariable
 end
-local function new_varref(adt_id)
+-- info = { id, meta, lines }. Guardamos meta/lines para saber si al expandir es una TABLA
+-- (filas por getVariables) o una estructura/scope (campos por getChildVariables).
+local function new_varref(info)
+	if type(info) ~= "table" then
+		info = { id = info }
+	end
 	local ref = state.varctr
 	state.varctr = state.varctr + 1
-	state.varrefs[ref] = adt_id
+	state.varrefs[ref] = info
 	return ref
 end
 
@@ -320,28 +325,50 @@ function handlers.scopes(req)
 	end
 end
 
+-- Mapea una variable del debugger -> Variable DAP. Tablas/estructuras quedan expandibles.
+local function to_dap(ref, name, v)
+	state.varids[ref] = state.varids[ref] or {}
+	state.varids[ref][name] = v.id -- para setVariable
+	local value = (v.value and v.value ~= "" and v.value)
+		or (v.meta == "table" and ("Standard Table [" .. (v.table_lines or 0) .. " filas]"))
+		or (v.meta == "structure" and "{ … }")
+		or "''"
+	return {
+		name = name,
+		value = value,
+		type = v.type or v.meta,
+		variablesReference = v.expandable and new_varref({ id = v.id, meta = v.meta, lines = v.table_lines }) or 0,
+	}
+end
+
 function handlers.variables(req)
 	local ref = req.arguments and req.arguments.variablesReference
-	local adt_id = ref and state.varrefs[ref]
-	if not adt_id then
+	local info = ref and state.varrefs[ref]
+	if not info then
 		respond(req, { variables = {} })
 		return
 	end
-	dbg.get_variables(adt_id, function(vars)
-		state.varids[ref] = state.varids[ref] or {}
-		local out = {}
-		for _, v in ipairs(vars) do
-			state.varids[ref][v.name or "?"] = v.id -- para setVariable
-			out[#out + 1] = {
-				name = v.name or "?",
-				value = (v.value ~= "" and v.value)
-					or (v.meta == "table" and ("table[" .. v.table_lines .. "]") or "''"),
-				type = v.type or v.meta,
-				variablesReference = v.expandable and new_varref(v.id) or 0,
-			}
-		end
-		respond(req, { variables = out })
-	end)
+
+	if info.meta == "table" then
+		-- TABLA: las filas se piden por getVariables con IDs construidos ID[1]..ID[N].
+		local row_ids = dbg.table_row_ids(info.id, info.lines or 0)
+		dbg.get_vars_by_id(row_ids, function(rows)
+			local out = {}
+			for i, v in ipairs(rows) do
+				out[#out + 1] = to_dap(ref, "[" .. i .. "]", v)
+			end
+			respond(req, { variables = out })
+		end)
+	else
+		-- Estructura / scope: campos por getChildVariables.
+		dbg.get_variables(info.id, function(vars)
+			local out = {}
+			for _, v in ipairs(vars) do
+				out[#out + 1] = to_dap(ref, v.name or "?", v)
+			end
+			respond(req, { variables = out })
+		end)
+	end
 end
 
 -- Pilar 5 — jump-to-line: el cliente pide targets para una línea y luego salta a uno.

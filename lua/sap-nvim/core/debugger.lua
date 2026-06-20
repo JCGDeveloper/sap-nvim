@@ -500,6 +500,60 @@ function M.get_variables(scope, cb)
 	end)
 end
 
+-- getVariables: pide variables CONCRETAS por su ID. Es el endpoint para TABLAS (las filas
+-- NO salen por getChildVariables; se construyen sus ids ID[1]..ID[N] y se piden por aquí).
+-- También sirve para leer la metadata de una variable suelta. cb(vars).
+function M.get_vars_by_id(ids, cb)
+	ids = type(ids) == "table" and ids or { ids }
+	local b = {}
+	for _, id in ipairs(ids) do
+		b[#b + 1] = "<STPDA_ADT_VARIABLE><ID>" .. id .. "</ID></STPDA_ADT_VARIABLE>"
+	end
+	local body = '<?xml version="1.0" encoding="UTF-8" ?><asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0"><asx:values><DATA>'
+		.. table.concat(b)
+		.. "</DATA></asx:values></asx:abap>"
+	curl({
+		method = "POST",
+		path = "/sap/bc/adt/debugger",
+		query = { method = "getVariables" },
+		accept = "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.debugger.Variables",
+		content_type = "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.debugger.Variables",
+		body = body,
+	}, function(resp, status)
+		if parse_exception(resp) then
+			fail("vars", "getVariables error (HTTP " .. tostring(status) .. ")")
+			if cb then cb({}) end
+			return
+		end
+		local vars = {}
+		for v in (resp or ""):gmatch("<STPDA_ADT_VARIABLE>(.-)</STPDA_ADT_VARIABLE>") do
+			if #vars >= M.MAX_CHILDREN then break end
+			local meta = v:match("<META_TYPE>([^<]*)</META_TYPE>") or "simple"
+			vars[#vars + 1] = {
+				id = v:match("<ID>([^<]*)</ID>"),
+				name = v:match("<NAME>([^<]*)</NAME>"),
+				value = unxml((v:match("<VALUE>(.-)</VALUE>") or "")),
+				type = v:match("<DECLARED_TYPE_NAME>([^<]*)</DECLARED_TYPE_NAME>"),
+				meta = meta,
+				table_lines = tonumber(v:match("<TABLE_LINES>([^<]*)</TABLE_LINES>")) or 0,
+				expandable = (meta ~= "simple" and meta ~= "string"),
+			}
+		end
+		log("vars", #vars .. " var(s) by id.")
+		if cb then cb(vars) end
+	end)
+end
+
+-- IDs de las filas de una tabla: ID[1]..ID[min(lines, MAX_CHILDREN)] (igual que VSCode).
+function M.table_row_ids(id, lines)
+	local n = math.min(lines or 0, M.MAX_CHILDREN)
+	local ids = {}
+	for k = 1, n do
+		ids[#ids + 1] = (id:gsub("%[%]$", "")) .. "[" .. k .. "]"
+	end
+	return ids
+end
+
 -- ── 7) step ───────────────────────────────────────────────────────────────────
 -- action: stepInto | stepOver | stepReturn | stepContinue | stepRunToLine |
 --         stepJumpToLine | terminateDebuggee.
@@ -622,9 +676,103 @@ function M.stop(cb)
 	end)
 end
 
+-- SPIKE/diagnóstico: vuelca el XML CRUDO de una tabla (sus FILAS) y de la PRIMERA fila (sus
+-- CELDAS/columnas), para ver el formato exacto de los IDs. Ejecutar PARADO en un breakpoint.
+function M.dump_table(name)
+	if not M.session then
+		fail("dump", "no hay sesión de debug activa (para en un breakpoint primero).")
+		return
+	end
+	name = name:upper()
+	local function get_raw(parent, cb)
+		local body = '<?xml version="1.0" encoding="UTF-8" ?><asx:abap version="1.0" xmlns:asx="http://www.sap.com/abapxml"><asx:values><DATA><HIERARCHIES><STPDA_ADT_VARIABLE_HIERARCHY><PARENT_ID>'
+			.. parent
+			.. "</PARENT_ID></STPDA_ADT_VARIABLE_HIERARCHY></HIERARCHIES></DATA></asx:values></asx:abap>"
+		curl({
+			method = "POST",
+			path = "/sap/bc/adt/debugger",
+			query = { method = "getChildVariables" },
+			accept = "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.debugger.ChildVariables",
+			content_type = "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.debugger.ChildVariables",
+			body = body,
+		}, function(resp)
+			cb(resp or "")
+		end)
+	end
+
+	-- Busca el CHILD_ID real de `target` dentro del XML de un scope (puede venir como
+	-- HIERARCHY si es expandible, o como VARIABLE si es escalar).
+	local function find_id(xml, target)
+		for h in xml:gmatch("<STPDA_ADT_VARIABLE_HIERARCHY>(.-)</STPDA_ADT_VARIABLE_HIERARCHY>") do
+			local cid = h:match("<CHILD_ID>([^<]*)</CHILD_ID>")
+			local cname = h:match("<CHILD_NAME>([^<]*)</CHILD_NAME>")
+			if cid and (cid:upper():find(target, 1, true) or (cname and cname:upper() == target)) then
+				return cid
+			end
+		end
+		for v in xml:gmatch("<STPDA_ADT_VARIABLE>(.-)</STPDA_ADT_VARIABLE>") do
+			local id = v:match("<ID>([^<]*)</ID>")
+			if id and id:upper():find(target, 1, true) then return id end
+		end
+		return nil
+	end
+	-- Primer hijo (fila) de un XML: por VARIABLE o por HIERARCHY.
+	local function first_child(xml)
+		return xml:match("<STPDA_ADT_VARIABLE>.-<ID>([^<]+)</ID>")
+			or xml:match("<STPDA_ADT_VARIABLE_HIERARCHY>.-<CHILD_ID>([^<]+)</CHILD_ID>")
+	end
+
+	local scopes = { "@GLOBALS", "@LOCALS" }
+	local si = 0
+	local function try_scope()
+		si = si + 1
+		local scope = scopes[si]
+		if not scope then
+			fail("dump", name .. " no encontrado en @GLOBALS/@LOCALS. Pega el RAW del scope de arriba.")
+			return
+		end
+		get_raw(scope, function(scope_xml)
+			print("[dump] ════════ RAW scope " .. scope .. " ════════")
+			print(scope_xml)
+			local tid = find_id(scope_xml, name)
+			if not tid then
+				try_scope()
+				return
+			end
+			log("dump", name .. " → id=" .. tid .. " (en " .. scope .. "). Leyendo filas…")
+			get_raw(tid, function(rows_xml)
+				print("[dump] ════════ RAW FILAS (" .. tid .. ") ════════")
+				print(rows_xml)
+				print("[dump] ════════ fin FILAS ════════")
+				local row1 = first_child(rows_xml)
+				if not row1 then
+					fail("dump", "sin filas (¿tabla vacía?).")
+					return
+				end
+				log("dump", "primera fila id=" .. row1 .. " — leyendo celdas…")
+				get_raw(row1, function(cells_xml)
+					print("[dump] ════════ RAW CELDAS (fila " .. row1 .. ") ════════")
+					print(cells_xml)
+					print("[dump] ════════ fin CELDAS ════════")
+					log("dump", "Listo: pega de :messages los 3 bloques (scope, FILAS, CELDAS).")
+				end)
+			end)
+		end)
+	end
+	try_scope()
+end
+
 -- El control del debugger es 100% vía nvim-dap (integrations/dap.lua): <leader>db breakpoint,
--- <leader>dc arrancar, <leader>di/do/dO step, <leader>dt terminar. Este módulo es solo el
--- cliente del protocolo (sin comandos propios).
-function M.setup() end
+-- <leader>dc arrancar, <leader>di/do/dO step, <leader>dt terminar. Aquí solo el spike de tabla.
+function M.setup()
+	vim.api.nvim_create_user_command("SapDumpTable", function(a)
+		local n = (a.args ~= "" and a.args) or vim.fn.expand("<cexpr>")
+		if n and n ~= "" then
+			M.dump_table(n)
+		else
+			vim.notify("[sap-nvim] Pon el cursor sobre la tabla o usa :SapDumpTable NOMBRE", vim.log.levels.WARN)
+		end
+	end, { desc = "sap-nvim: SPIKE — volcar XML crudo de una tabla (filas+celdas)", nargs = "?" })
+end
 
 return M
