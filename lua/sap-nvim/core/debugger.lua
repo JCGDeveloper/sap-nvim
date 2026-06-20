@@ -14,6 +14,10 @@ local adt_http = require("sap-nvim.core.adt_http")
 
 local DEBUG = true
 
+-- Pilar 3: tope de filas/hijos que exponemos al expandir una variable, para no colapsar
+-- Neovim con tablas enormes (la API ADT de paginación real no está en abap-adt-api).
+M.MAX_CHILDREN = 500
+
 -- Estado de la sesión de depuración activa (una a la vez).
 -- { jar, csrf, terminalId, ideId, user, listener_job, debugSessionId, breakpoints }
 M.session = nil
@@ -287,7 +291,9 @@ function M.get_variables(scope, cb)
     if parse_exception(resp) then fail("vars", "error (HTTP " .. tostring(status) .. ")"); if cb then cb({}, {}) end; return end
     resp = resp or ""
     local vars = {}
+    local truncated = false
     for v in resp:gmatch("<STPDA_ADT_VARIABLE>(.-)</STPDA_ADT_VARIABLE>") do
+      if #vars >= M.MAX_CHILDREN then truncated = true; break end -- Pilar 3: tope anti-crash
       local meta = v:match("<META_TYPE>([^<]*)</META_TYPE>") or "simple"
       vars[#vars + 1] = {
         id = v:match("<ID>([^<]*)</ID>"),
@@ -299,6 +305,11 @@ function M.get_variables(scope, cb)
         -- expandible si NO es escalar (table/struct/object/dataref tienen hijos).
         expandable = (meta ~= "simple" and meta ~= "string"),
       }
+    end
+    if truncated then
+      vars[#vars + 1] = { id = "", name = "…",
+        value = "(>" .. M.MAX_CHILDREN .. " filas; paginación de tablas pendiente)",
+        type = "", meta = "info", table_lines = 0, expandable = false }
     end
     local scopes = {}
     for hy in resp:gmatch("<STPDA_ADT_VARIABLE_HIERARCHY>(.-)</STPDA_ADT_VARIABLE_HIERARCHY>") do
