@@ -1028,7 +1028,7 @@ function M.setup()
 					-- Usamos <cmd> en vez de función Lua para que Noice no lo intercepte
 					vim.keymap.set("n", "K", "<cmd>SapHover<CR>", { buffer = ev.buf, desc = "SAP Hover" })
 					vim.keymap.set("n", "gr", "<cmd>SapReferences<CR>", { buffer = ev.buf, desc = "SAP Referencias" })
-					vim.keymap.set("n", "gd", "<cmd>SapGotoType<CR>", { buffer = ev.buf, desc = "SAP Definición" })
+					vim.keymap.set("n", "gd", "<cmd>SapGotoDef<CR>", { buffer = ev.buf, desc = "SAP Definición" })
 				end
 			end, 1000) -- 1000ms de retraso estratégico
 		end,
@@ -1047,7 +1047,7 @@ function M.setup()
 					pcall(vim.keymap.del, "n", "K", { buffer = b })
 					vim.keymap.set("n", "K", "<cmd>SapHover<CR>", { buffer = b, desc = "SAP Hover" })
 					vim.keymap.set("n", "gr", "<cmd>SapReferences<CR>", { buffer = b, desc = "SAP Referencias" })
-					vim.keymap.set("n", "gd", "<cmd>SapGotoType<CR>", { buffer = b, desc = "SAP Definición" })
+					vim.keymap.set("n", "gd", "<cmd>SapGotoDef<CR>", { buffer = b, desc = "SAP Definición" })
 				end
 			end, 500)
 
