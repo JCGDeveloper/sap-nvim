@@ -1,50 +1,401 @@
 -- sap-nvim.core.debugger
--- Integración del depurador ABAP vía vsp
--- Requiere: vsp (MCP_SAP) compilado en ~/sap-mcp/vsp/
+-- Cliente del ADT Debugger (PATH B) — productización del spike validado en vivo.
+-- Protocolo de abap-adt-api/src/api/debugger.ts. Sesión STATEFUL mantenida por un cookie
+-- jar propio + cabecera X-sap-adt-sessiontype: stateful. Todo async por vim.fn.jobstart
+-- (sin --max-time, para que el long-poll de /listeners no muera). NO usa
+-- adt_http.request_async (su fallback de 12s mataría el long-poll).
+--
+-- IMPORTANTE: ADT no usa un "session id" en la URL; la sesión ES el cookie jar stateful.
+-- Guardamos debugSessionId solo para logging. La señal terminal "debuggeeEnded" (HTTP 500
+-- con subType=debuggeeEnded) es NORMAL: el programa se reanudó y terminó.
 
 local M = {}
+local adt_http = require("sap-nvim.core.adt_http")
 
-local VSP_PATH = vim.fn.expand("~/sap-mcp/vsp/vsp")
+local DEBUG = true
 
-function M.check_vsp()
-  local f = io.open(VSP_PATH, "r")
-  if not f then return false end
-  f:close()
-  return true
+-- Estado de la sesión de depuración activa (una a la vez).
+-- { jar, csrf, terminalId, ideId, user, listener_job, debugSessionId, breakpoints }
+M.session = nil
+
+-- ── logging ──────────────────────────────────────────────────────────────────
+
+local function log(tag, msg)
+  if DEBUG then
+    local line = "[dbg] " .. tag .. ": " .. msg
+    print(line)
+    vim.schedule(function() vim.notify(line, vim.log.levels.INFO) end)
+  end
+end
+local function fail(tag, msg)
+  local line = "[dbg] " .. tag .. " FALLO: " .. msg
+  print(line)
+  vim.schedule(function() vim.notify(line, vim.log.levels.ERROR) end)
 end
 
--- Iniciar depurador interactivo en terminal de Neovim
-function M.debug_terminal(opts)
-  opts = opts or {}
-  local program = opts.program or vim.fn.expand("%:t:r")
-  local line = opts.line or "1"
+-- ── util ─────────────────────────────────────────────────────────────────────
 
-  if not M.check_vsp() then
-    vim.notify("sap-nvim: vsp no encontrado. Ejecutá: cd ~/sap-mcp/vsp && go build -o vsp ./cmd/vsp", vim.log.levels.ERROR)
-    return
+math.randomseed(os.time())
+local function uuid()
+  return (("xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"):gsub("[xy]", function(c)
+    local v = (c == "x") and math.random(0, 15) or math.random(8, 11)
+    return string.format("%x", v)
+  end)):upper()
+end
+
+local function unxml(s)
+  return (s or ""):gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"'):gsub("&apos;", "'"):gsub("&amp;", "&")
+end
+
+-- Extrae el mensaje de una <exc:exception> de ADT (o nil) + el subType (p.ej. debuggeeEnded).
+local function parse_exception(body)
+  if not body or not body:find("exception", 1, true) then return nil end
+  local msg = body:match("<message[^>]*>([^<]*)</message>") or "excepción ADT"
+  local subtype = body:match('communicationFramework%.subType">([^<]*)<')
+  return unxml(msg), subtype
+end
+
+-- ── curl async (núcleo) ──────────────────────────────────────────────────────
+-- opts: { method, path, query, body, accept, content_type, csrf_fetch }
+-- cb(body, http_status, headers). Stateful + cookie jar SIEMPRE (la sesión de debug).
+local function curl(opts, cb)
+  local s = M.session
+  local c = adt_http.creds()
+  if not c or not s then if cb then cb(nil, "no-session") end; return end
+
+  local url = c.base .. opts.path
+  url = url .. (opts.path:find("?") and "&" or "?") .. "sap-client=" .. c.client
+  if opts.query then
+    for k, v in pairs(opts.query) do url = url .. "&" .. k .. "=" .. tostring(v) end
   end
 
-  -- Abrir terminal de Neovim con vsp debug
-  local cmd = string.format("%s debug --program %s --line %s", VSP_PATH, program, line)
+  local hdrfile = vim.fn.tempname()
+  local args = { "curl", "-sk", "-u", c.user .. ":" .. c.pass, "-b", s.jar, "-c", s.jar, "-D", hdrfile,
+    "-H", "X-sap-adt-sessiontype: stateful" }
+  vim.list_extend(args, { "-X", opts.method or "GET" })
+  if opts.csrf_fetch then vim.list_extend(args, { "-H", "X-CSRF-Token: Fetch" })
+  elseif s.csrf then vim.list_extend(args, { "-H", "X-CSRF-Token: " .. s.csrf }) end
+  if opts.accept then vim.list_extend(args, { "-H", "Accept: " .. opts.accept }) end
+  if opts.content_type then vim.list_extend(args, { "-H", "Content-Type: " .. opts.content_type }) end
 
-  vim.cmd("25vnew")
-  vim.bo.buftype = "terminal"
-  vim.api.nvim_terminal_open(vim.fn.startjob({ "bash", "-c", cmd }), {})
-  vim.cmd("startinsert")
-
-  vim.notify(string.format("sap-nvim: Debugger iniciado en %s:%s", program, line))
-end
-
--- Atajo rápido: debuggear programa actual
-function M.debug_current()
-  local prog = vim.fn.expand("%:t:r")
-  if prog == "" then
-    vim.notify("sap-nvim: Guardá el archivo primero", vim.log.levels.WARN)
-    return
+  local bodyfile
+  if opts.body then
+    bodyfile = vim.fn.tempname()
+    vim.fn.writefile(vim.split(opts.body, "\n"), bodyfile)
+    vim.list_extend(args, { "--data-binary", "@" .. bodyfile })
   end
-  M.debug_terminal({ program = prog, line = "1" })
+  vim.list_extend(args, { url })
+
+  local out = {}
+  return vim.fn.jobstart(args, {
+    stdout_buffered = true,
+    on_stdout = function(_, d) for _, l in ipairs(d) do out[#out + 1] = l end end,
+    on_exit = function(_, exit_code)
+      local headers = ""
+      pcall(function() headers = table.concat(vim.fn.readfile(hdrfile), "\n") end)
+      if bodyfile then pcall(os.remove, bodyfile) end
+      pcall(os.remove, hdrfile)
+      local status
+      for st in headers:gmatch("HTTP/[%d%.]+%s+(%d+)") do status = tonumber(st) end
+      status = status or ("curl-exit-" .. exit_code)
+      if cb then vim.schedule(function() cb(table.concat(out, "\n"), status, headers) end) end
+    end,
+  })
 end
 
-function M.setup(opts) end
+-- ── 1) init_session: cookie jar + CSRF ───────────────────────────────────────
+
+function M.init_session(cb)
+  if not adt_http.is_available() then fail("init", "ADT no disponible (config.yml/curl)."); if cb then cb(false) end; return end
+  local c = adt_http.creds()
+  local jar = vim.fn.stdpath("cache") .. "/sap-nvim/debug_" .. os.time() .. ".cookies"
+  vim.fn.mkdir(vim.fn.fnamemodify(jar, ":h"), "p")
+  pcall(os.remove, jar)
+
+  M.session = {
+    jar = jar, csrf = nil, terminalId = uuid(), ideId = uuid(),
+    user = c.user:upper(), listener_job = nil, debugSessionId = nil, breakpoints = {},
+  }
+  log("init", "sesión nueva user=" .. M.session.user)
+
+  curl({ method = "GET", path = "/sap/bc/adt/core/discovery", csrf_fetch = true }, function(_, status, headers)
+    local token = headers and headers:match("[Xx]%-[Cc][Ss][Rr][Ff]%-[Tt]oken:%s*(%S+)")
+    if not token then fail("init", "sin token CSRF (HTTP " .. tostring(status) .. ")"); if cb then cb(false) end; return end
+    M.session.csrf = token
+    log("init", "CSRF OK, sesión stateful lista.")
+    if cb then cb(true) end
+  end)
+end
+
+-- ── 2) set_breakpoint ─────────────────────────────────────────────────────────
+-- source_uri: ej. "/sap/bc/adt/programs/programs/znvim/source/main". line: número.
+-- cb(verified, info) — info = { id, errorMessage, uri }.
+function M.set_breakpoint(source_uri, line, cb)
+  local s = M.session
+  if not s then fail("bp", "sin sesión (init_session primero)."); if cb then cb(false, {}) end; return end
+  local uri = source_uri .. "#start=" .. line
+  local body = table.concat({
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<dbg:breakpoints scope="external" debuggingMode="user" requestUser="' .. s.user .. '"',
+    '  terminalId="' .. s.terminalId .. '" ideId="' .. s.ideId .. '" systemDebugging="false" deactivated="false"',
+    '  xmlns:dbg="http://www.sap.com/adt/debugger">',
+    '  <syncScope mode="full"></syncScope>',
+    '  <breakpoint xmlns:adtcore="http://www.sap.com/adt/core" kind="line" clientId="sapnvim"',
+    '    skipCount="0" adtcore:uri="' .. uri .. '"/>',
+    '</dbg:breakpoints>',
+  }, "\n")
+
+  curl({
+    method = "POST", path = "/sap/bc/adt/debugger/breakpoints",
+    body = body, content_type = "application/xml", accept = "application/xml",
+  }, function(resp, status)
+    local errmsg = resp and resp:match('errorMessage="([^"]+)"')
+    local id = resp and resp:match('<breakpoint[^>]-%sid="([^"]*)"')
+    if parse_exception(resp) or (errmsg and errmsg ~= "") then
+      fail("bp", "L" .. line .. " rechazado (HTTP " .. tostring(status) .. "): " .. (errmsg or "ver SAP"))
+      if cb then cb(false, { errorMessage = errmsg or "rechazado", uri = uri }) end
+      return
+    end
+    s.breakpoints[#s.breakpoints + 1] = { id = id, uri = uri, line = line }
+    log("bp", "L" .. line .. " creado (id=" .. (id and id:sub(1, 40) or "?") .. "…)")
+    if cb then cb(true, { id = id, uri = uri }) end
+  end)
+end
+
+-- ── 4) attach ─────────────────────────────────────────────────────────────────
+-- cb(ok, info) — info = { isPostMortem, debugSessionId, processId }.
+function M.attach(debuggeeId, cb)
+  curl({
+    method = "POST", path = "/sap/bc/adt/debugger",
+    query = { method = "attach", debuggeeId = debuggeeId, debuggingMode = "user",
+              requestUser = M.session.user, dynproDebugging = "true" },
+    accept = "application/xml",
+  }, function(body, status)
+    if parse_exception(body) then
+      fail("attach", "rechazado (HTTP " .. tostring(status) .. ")"); if cb then cb(false, {}) end; return
+    end
+    local info = {
+      isPostMortem = (body and body:match('isPostMortem="true"')) ~= nil,
+      debugSessionId = body and body:match('debugSessionId="([^"]*)"'),
+      processId = body and body:match('processId="([^"]*)"'),
+    }
+    M.session.debugSessionId = info.debugSessionId
+    log("attach", "OK sessionId=" .. (info.debugSessionId or "?") .. " postMortem=" .. tostring(info.isPostMortem))
+    if cb then cb(true, info) end
+  end)
+end
+
+-- ── 3) listen (long-poll) — ignora post-mortem, re-escucha hasta un live ─────
+-- cb(debuggeeId, attach_info) cuando hay una parada EN VIVO.
+function M.listen(cb)
+  local s = M.session
+  if not s then fail("listen", "sin sesión."); return end
+  log("listen", "long-poll /listeners… (ejecuta el objeto para parar en el breakpoint)")
+  s.listener_job = curl({
+    method = "POST", path = "/sap/bc/adt/debugger/listeners",
+    query = { debuggingMode = "user", requestUser = s.user, terminalId = s.terminalId,
+              ideId = s.ideId, checkConflict = "true", isNotifiedOnConflict = "true" },
+  }, function(body, status)
+    s.listener_job = nil
+    if not body or body == "" then fail("listen", "respuesta vacía (HTTP " .. tostring(status) .. ")"); return end
+    if body:find("conflictText", 1, true) then
+      fail("listen", "conflicto: ya hay un debugger ADT/Eclipse escuchando con este usuario."); return
+    end
+    local debuggee = body:match("<DEBUGGEE_ID>([^<]+)</DEBUGGEE_ID>") or body:match('debuggeeId="([^"]+)"')
+    if not debuggee then fail("listen", "sin DEBUGGEE_ID."); return end
+    log("listen", "debuggee capturado: " .. debuggee:sub(1, 20) .. "…")
+
+    -- Atachar para saber si es post-mortem; si lo es, terminarlo y volver a escuchar.
+    M.attach(debuggee, function(ok, info)
+      if not ok then return end
+      if info.isPostMortem then
+        log("listen", "⚠️ era un DUMP (post-mortem). Lo ignoro (terminateDebuggee) y vuelvo a escuchar. Limpia ST22.")
+        M.step("terminateDebuggee", function() M.listen(cb) end)
+        return
+      end
+      if cb then cb(debuggee, info) end
+    end)
+  end)
+end
+
+-- ── 5) get_stack ──────────────────────────────────────────────────────────────
+-- cb(frames) — frame = { program, include, line, position, stackUri, stackType,
+--                        eventName, systemProgram, uri }.
+function M.get_stack(cb)
+  curl({
+    method = "GET", path = "/sap/bc/adt/debugger/stack",
+    query = { method = "getStack", emode = "_", semanticURIs = "true" },
+    accept = "application/xml",
+  }, function(body, status)
+    if parse_exception(body) or not (body or ""):find("stackEntry", 1, true) then
+      fail("stack", "sin stack (HTTP " .. tostring(status) .. ")"); if cb then cb({}) end; return
+    end
+    local frames = {}
+    for attrs in body:gmatch("<stackEntry(.-)/?>") do
+      local uri = attrs:match('adtcore:uri="([^"]*)"') or attrs:match('stackUri="([^"]*)"')
+      frames[#frames + 1] = {
+        program = attrs:match('programName="([^"]*)"'),
+        include = attrs:match('includeName="([^"]*)"'),
+        line = tonumber(attrs:match('line="([^"]*)"')) or 1,
+        position = tonumber(attrs:match('stackPosition="([^"]*)"')),
+        stackUri = attrs:match('stackUri="([^"]*)"'),
+        stackType = attrs:match('stackType="([^"]*)"'),
+        eventName = attrs:match('eventName="([^"]*)"'),
+        systemProgram = attrs:match('systemProgram="true"') ~= nil,
+        uri = uri and unxml(uri) or nil,
+      }
+    end
+    log("stack", #frames .. " frame(s).")
+    if cb then cb(frames) end
+  end)
+end
+
+-- ── 6) get_variables ──────────────────────────────────────────────────────────
+-- scope: id del nodo a expandir ("@ROOT" para los scopes; "@GLOBALS"/"@LOCALS"/<var id>
+--   para variables). Acepta string o lista de ids.
+-- cb(vars, scopes) — vars = hojas; scopes = nodos hijos (para drill posterior).
+--   var = { id, name, value, type, meta, expandable, table_lines }.
+function M.get_variables(scope, cb)
+  local parents = type(scope) == "table" and scope or { scope or "@ROOT" }
+  local h = {}
+  for _, p in ipairs(parents) do
+    h[#h + 1] = "<STPDA_ADT_VARIABLE_HIERARCHY><PARENT_ID>" .. p .. "</PARENT_ID></STPDA_ADT_VARIABLE_HIERARCHY>"
+  end
+  local body = '<?xml version="1.0" encoding="UTF-8" ?><asx:abap version="1.0" xmlns:asx="http://www.sap.com/abapxml"><asx:values><DATA><HIERARCHIES>'
+    .. table.concat(h) .. '</HIERARCHIES></DATA></asx:values></asx:abap>'
+
+  curl({
+    method = "POST", path = "/sap/bc/adt/debugger", query = { method = "getChildVariables" },
+    accept = "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.debugger.ChildVariables",
+    content_type = "application/vnd.sap.as+xml; charset=UTF-8; dataname=com.sap.adt.debugger.ChildVariables",
+    body = body,
+  }, function(resp, status)
+    if parse_exception(resp) then fail("vars", "error (HTTP " .. tostring(status) .. ")"); if cb then cb({}, {}) end; return end
+    resp = resp or ""
+    local vars = {}
+    for v in resp:gmatch("<STPDA_ADT_VARIABLE>(.-)</STPDA_ADT_VARIABLE>") do
+      local meta = v:match("<META_TYPE>([^<]*)</META_TYPE>") or "simple"
+      vars[#vars + 1] = {
+        id = v:match("<ID>([^<]*)</ID>"),
+        name = v:match("<NAME>([^<]*)</NAME>"),
+        value = unxml((v:match("<VALUE>(.-)</VALUE>") or "")),
+        type = v:match("<DECLARED_TYPE_NAME>([^<]*)</DECLARED_TYPE_NAME>"),
+        meta = meta,
+        table_lines = tonumber(v:match("<TABLE_LINES>([^<]*)</TABLE_LINES>")) or 0,
+        -- expandible si NO es escalar (table/struct/object/dataref tienen hijos).
+        expandable = (meta ~= "simple" and meta ~= "string"),
+      }
+    end
+    local scopes = {}
+    for hy in resp:gmatch("<STPDA_ADT_VARIABLE_HIERARCHY>(.-)</STPDA_ADT_VARIABLE_HIERARCHY>") do
+      local cid = hy:match("<CHILD_ID>([^<]*)</CHILD_ID>")
+      local cname = hy:match("<CHILD_NAME>([^<]*)</CHILD_NAME>")
+      if cid then scopes[#scopes + 1] = { id = cid, name = (cname ~= "" and cname) or cid } end
+    end
+    log("vars", #vars .. " var(s), " .. #scopes .. " scope(s) bajo '" .. tostring(parents[1]) .. "'.")
+    if cb then cb(vars, scopes) end
+  end)
+end
+
+-- ── 7) step ───────────────────────────────────────────────────────────────────
+-- action: stepInto | stepOver | stepReturn | stepContinue | stepRunToLine |
+--         stepJumpToLine | terminateDebuggee.
+-- cb(result) — result = { ended=bool, error=string|nil }. ended=true cuando el debuggee
+--   terminó (HTTP 500 + subType=debuggeeEnded) → NO es un crash, es fin normal.
+function M.step(action, cb)
+  curl({
+    method = "POST", path = "/sap/bc/adt/debugger", query = { method = action },
+    accept = "application/xml",
+  }, function(body, status)
+    local msg, subtype = parse_exception(body)
+    if subtype == "debuggeeEnded" or (body and body:find("debuggeeEnded", 1, true)) then
+      log("step", action .. " → debuggee TERMINADO (fin normal de ejecución).")
+      if cb then cb({ ended = true }) end
+      return
+    end
+    if msg then
+      fail("step", action .. " error (HTTP " .. tostring(status) .. "): " .. msg)
+      if cb then cb({ ended = false, error = msg }) end
+      return
+    end
+    log("step", action .. " OK (HTTP " .. tostring(status) .. ").")
+    if cb then cb({ ended = false }) end
+  end)
+end
+
+-- ── stop / cleanup ─────────────────────────────────────────────────────────────
+
+function M.stop(cb)
+  local s = M.session
+  if not s then if cb then cb() end; return end
+  if s.listener_job then pcall(vim.fn.jobstop, s.listener_job); s.listener_job = nil end
+  curl({
+    method = "DELETE", path = "/sap/bc/adt/debugger/listeners",
+    query = { debuggingMode = "user", requestUser = s.user, terminalId = s.terminalId,
+              ideId = s.ideId, checkConflict = "false", notifyConflict = "true" },
+  }, function(_, status)
+    log("stop", "listener eliminado (HTTP " .. tostring(status) .. "). Sesión cerrada.")
+    pcall(os.remove, s.jar)
+    M.session = nil
+    if cb then cb() end
+  end)
+end
+
+-- ── orquestación de prueba (Fase 1: salida por :messages; la UI va en Fase 2) ──
+
+-- Arranca una sesión sobre el buffer actual (objeto + línea del cursor) y, al parar en vivo,
+-- vuelca stack + variables globales. Valida el cliente sin la UI/DAP todavía.
+function M.start_here()
+  if M.session then fail("start", "ya hay una sesión activa (:SapDebugStop primero)."); return end
+  local bufnr = vim.api.nvim_get_current_buf()
+  local source_uri = require("sap-nvim.core.intel").object_uri(bufnr)
+  if not source_uri then fail("start", "el buffer no es un objeto SAP (abre con :SapSearch)."); return end
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+
+  M.init_session(function(ok)
+    if not ok then return end
+    M.set_breakpoint(source_uri, line, function(verified)
+      if not verified then M.stop(); return end
+      M.listen(function(_, _info)
+        log("start", "¡PARADO EN VIVO! Stack y variables:")
+        M.get_stack(function(frames)
+          for _, f in ipairs(frames) do
+            print(string.format("  #%s %-25s %s:%s  (%s)%s",
+              tostring(f.position or "?"), f.program or "?", f.include or "?", f.line,
+              f.eventName or "", f.systemProgram and " [sistema]" or ""))
+          end
+          M.get_variables("@GLOBALS", function(vars)
+            print("  ── variables (@GLOBALS) ──")
+            for _, v in ipairs(vars) do
+              print(string.format("  %-22s = %-28s [%s%s]", v.name or "?", v.value,
+                v.type or v.meta, v.expandable and ", expandible" or ""))
+            end
+            log("start", "OK. :SapDebugStep over|into|out|continue · :SapDebugStop para salir.")
+          end)
+        end)
+      end)
+    end)
+  end)
+end
+
+function M.setup()
+  vim.api.nvim_create_user_command("SapDebugStart", function() M.start_here() end,
+    { desc = "sap-nvim: Debug — breakpoint en la línea del cursor y escuchar" })
+  vim.api.nvim_create_user_command("SapDebugStop", function() M.stop() end,
+    { desc = "sap-nvim: Debug — cerrar la sesión" })
+  vim.api.nvim_create_user_command("SapDebugStep", function(a)
+    local map = { over = "stepOver", into = "stepInto", out = "stepReturn", continue = "stepContinue" }
+    M.step(map[a.args] or "stepOver", function(r)
+      if r.ended then log("step", "ejecución terminada — cerrando."); M.stop()
+      elseif not r.error then
+        M.get_stack(function(frames)
+          local f = frames[1]
+          if f then log("step", "parado en " .. (f.program or "?") .. ":" .. f.line) end
+        end)
+      end
+    end)
+  end, { desc = "sap-nvim: Debug — step (over|into|out|continue)", nargs = "?",
+    complete = function() return { "over", "into", "out", "continue" } end })
+end
 
 return M
