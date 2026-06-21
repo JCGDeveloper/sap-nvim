@@ -339,8 +339,16 @@ function M.complete_debug()
 		add("== respuesta cruda (primeros 2000 chars) ==")
 		for _, l in ipairs(vim.split(body:sub(1, 2000), "\n", { plain = true })) do add(l) end
 	end
+	-- nvim_buf_set_lines rechaza items con "\n" (p.ej. vim.inspect multilínea o la respuesta
+	-- cruda): aplanamos cada entrada en líneas reales y quitamos "\r".
+	local flat = {}
+	for _, s in ipairs(out) do
+		for _, l in ipairs(vim.split(tostring(s):gsub("\r", ""), "\n", { plain = true })) do
+			flat[#flat + 1] = l
+		end
+	end
 	local buf = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_lines(buf, 0, -1, false, out)
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, flat)
 	vim.bo[buf].bufhidden = "wipe"
 	vim.cmd("botright split")
 	vim.api.nvim_win_set_buf(0, buf)
