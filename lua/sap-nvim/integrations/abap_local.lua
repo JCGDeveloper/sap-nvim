@@ -261,6 +261,23 @@ function source:get_completions(ctx, callback)
 		return function() end
 	end
 
+	-- En contextos donde SOLO tienen sentido las propuestas del servidor (sap_adt), callamos
+	-- los keywords ABAP para no taparlas: tras `wa-` (campo de estructura) y tras `TYPE `/`LIKE `
+	-- (tipos/tablas DDIC). Los miembros `->`/`=>`/`~` ya los silencia el `enabled` de la config.
+	do
+		local col = (ctx and ctx.cursor and ctx.cursor[2]) or vim.api.nvim_win_get_cursor(0)[2]
+		local before = (vim.api.nvim_get_current_line() or ""):sub(1, col)
+		local bl = before:lower()
+		if
+			before:match("[%w_]%-[%w_]*$") -- wa-campo (estructura, no `->`)
+			or bl:match("%s+type%s+[%w_/]*$")
+			or bl:match("%s+like%s+[%w_/]*$")
+		then
+			callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = false })
+			return function() end
+		end
+	end
+
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, row, false)
 	local items = {}
 	vim.list_extend(items, build_context_items(detect_context(lines, row)))

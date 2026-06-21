@@ -386,7 +386,7 @@ function M.complete_debug()
 		return
 	end
 
-	-- ABAP: endpoint de codecompletion, respuesta cruda.
+	-- ABAP: endpoint de codecompletion, respuesta cruda (SÍNCRONA, como referencia).
 	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
 	local body = adt_http.request({
 		method = "POST",
@@ -396,16 +396,20 @@ function M.complete_debug()
 		body = src,
 	}) or ""
 	local items = M.parse(body)
-	add("propuestas parseadas: " .. #items)
-	for i = 1, math.min(#items, 20) do
+	add("propuestas (SYNC text/plain): " .. #items)
+	for i = 1, math.min(#items, 10) do
 		add("  · " .. tostring(items[i].word) .. "  [kind " .. tostring(items[i].kind) .. "]")
 	end
-	add("")
-	add("== respuesta cruda (primeros 2000 chars) ==")
-	for _, l in ipairs(vim.split(body:sub(1, 2000), "\n", { plain = true })) do
-		add(l)
-	end
-	show()
+	-- Y AHORA la ruta EXACTA de blink (async/daemon, application/*): si aquí salen 0 pero
+	-- arriba salen N, el problema es el daemon/async (no el display de blink).
+	M.proposals_async(bufnr, row, col, function(aitems)
+		add("")
+		add("propuestas (ASYNC = ruta de blink): " .. #(aitems or {}))
+		for i = 1, math.min(#(aitems or {}), 10) do
+			add("  · " .. tostring(aitems[i].word) .. "  [kind " .. tostring(aitems[i].kind) .. " · plen " .. tostring(aitems[i].prefixlength) .. "]")
+		end
+		vim.schedule(show)
+	end)
 end
 
 local HL_NS = vim.api.nvim_create_namespace("sap_nvim_doc_highlight")
