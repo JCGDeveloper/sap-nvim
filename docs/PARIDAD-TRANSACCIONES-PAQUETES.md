@@ -3,8 +3,9 @@
 > Referencia función-por-función VSCode (`abap-adt-api` / `vscode_abap_remote_fs`) vs sap-nvim,
 > con endpoint/medio y el gap a implementar. Verificado contra el código real de `abap-adt-api`
 > (src/api/transports.ts, objectcreator.ts, nodeContents.ts) y las capacidades de `sapcli`.
-> Sistema de pruebas: sap-system.example.com:44310 cliente 501. Objetos JCG del usuario:
-> programa `ZCAR_PRACFINAL_JCG`, paquete (ver `package stat`), transacción `ZPFJCG`.
+> Sistema de pruebas: el host/cliente vienen de tu `~/.sapcli/config.yml` (no se anotan aquí).
+> Objetos de ejemplo del usuario: programa `ZCAR_PRACFINAL_JCG`, paquete (ver `package stat`),
+> transacción `ZPFJCG`.
 
 ## 1. Órdenes de transporte (CTS)
 
