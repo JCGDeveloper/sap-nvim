@@ -38,6 +38,7 @@ function M.setup(opts)
     "sap-nvim.core.home",
     "sap-nvim.core.transaction",
     "sap-nvim.core.gui",
+    "sap-nvim.core.sapgui",
     "sap-nvim.core.favorites",
     "sap-nvim.core.search",
     "sap-nvim.core.templates",

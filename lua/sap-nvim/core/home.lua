@@ -100,6 +100,20 @@ local MENU = {
 		end,
 	},
 	{
+		key = "g",
+		desc = "Abrir SAP GUI nativo (transacción o logon)",
+		action = function()
+			vim.ui.input({ prompt = "Transacción para SAP GUI (vacío = logon): " }, function(t)
+				local gui = require("sap-nvim.core.sapgui")
+				if t and vim.trim(t) ~= "" then
+					gui.transaction(t)
+				else
+					gui.open(nil)
+				end
+			end)
+		end,
+	},
+	{
 		key = "R",
 		desc = "Ejecutar programa (SE38)",
 		action = function()
