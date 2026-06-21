@@ -481,13 +481,22 @@ local function cds_alias_map(src)
 	return map
 end
 
--- GET ddicrepositoryaccess?datasource=<path> -> lista de nombres. `tabla.` da los campos;
--- `prefijo*` da las fuentes (tablas/vistas) que empiezan por el prefijo.
-local function ddic_access(path, cb)
+-- Query del endpoint ddicrepositoryaccess. OJO (igual que abap-adt-api/vscode):
+--   CAMPOS de una fuente -> { requestScope = "all", path = "TABLA." }   (NO datasource=)
+--   FUENTES por prefijo  -> { datasource = "PREFIJO*" }
+local function ddic_fields_query(tbl)
+	return { requestScope = "all", path = tbl .. "." }
+end
+local function ddic_sources_query(prefix)
+	return { datasource = prefix .. "*" }
+end
+
+-- GET ddicrepositoryaccess con la query dada -> lista de nombres (adtcore:name).
+local function ddic_access(query, cb)
 	adt.request_async({
 		method = "GET",
 		path = "/sap/bc/adt/ddic/ddl/ddicrepositoryaccess",
-		query = { datasource = path },
+		query = query,
 		accept = "application/*",
 	}, function(body)
 		local names, seen = {}, {}
@@ -513,7 +522,7 @@ function M.completion(bufnr, line, col, cb)
 	local alias, prefix = before:match("([%w_/]+)%.([%w_/]*)$")
 	if alias then
 		local tbl = cds_alias_map(src)[alias:lower()] or alias
-		ddic_access(tbl .. ".", function(names)
+		ddic_access(ddic_fields_query(tbl), function(names)
 			local items, pl = {}, prefix:lower()
 			for _, n in ipairs(names) do
 				if n:lower() ~= tbl:lower() and (pl == "" or n:lower():sub(1, #pl) == pl) then
@@ -528,7 +537,7 @@ function M.completion(bufnr, line, col, cb)
 	-- 2) tras from/join -> nombres de fuentes
 	local sprefix = before:match("[Ff][Rr][Oo][Mm]%s+([%w_/]+)$") or before:match("[Jj][Oo][Ii][Nn]%s+([%w_/]+)$")
 	if sprefix then
-		ddic_access(sprefix .. "*", function(names)
+		ddic_access(ddic_sources_query(sprefix), function(names)
 			local items = {}
 			for _, n in ipairs(names) do
 				items[#items + 1] = { word = n, kind = "2" }
@@ -547,18 +556,21 @@ function M.completion_debug(bufnr, line, col, cb)
 	local before = linetext:sub(1, col)
 	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
 	local info = { aliases = cds_alias_map(src) }
+	local query
 	local alias, prefix = before:match("([%w_/]+)%.([%w_/]*)$")
 	if alias then
 		info.kind, info.alias, info.prefix = "field", alias, prefix
 		info.table = info.aliases[alias:lower()] or alias
-		info.path = info.table .. "."
+		query = ddic_fields_query(info.table)
 	else
 		local sp = before:match("[Ff][Rr][Oo][Mm]%s+([%w_/]+)$") or before:match("[Jj][Oo][Ii][Nn]%s+([%w_/]+)$")
 		if sp then
-			info.kind, info.path = "source", sp .. "*"
+			info.kind = "source"
+			query = ddic_sources_query(sp)
 		end
 	end
-	if not info.path then
+	info.query = query
+	if not query then
 		cb(info, "(sin contexto de campo/fuente bajo el cursor)")
 		return
 	end
@@ -566,7 +578,7 @@ function M.completion_debug(bufnr, line, col, cb)
 	local body = adt.request({
 		method = "GET",
 		path = "/sap/bc/adt/ddic/ddl/ddicrepositoryaccess",
-		query = { datasource = info.path },
+		query = query,
 		accept = "application/*",
 	})
 	cb(info, body or "(nil)")

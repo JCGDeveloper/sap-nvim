@@ -344,7 +344,7 @@ function M.complete_debug()
 			add("contexto  : " .. tostring(info.kind))
 			add("alias map : " .. vim.inspect(info.aliases))
 			add("alias     : " .. tostring(info.alias) .. "  -> tabla: " .. tostring(info.table))
-			add("datasource: " .. tostring(info.path))
+			add("query     : " .. vim.inspect(info.query))
 			local names = {}
 			for nm in (body or ""):gmatch('adtcore:name="([^"]*)"') do names[#names + 1] = nm end
 			add("nombres parseados (adtcore:name): " .. #names)
