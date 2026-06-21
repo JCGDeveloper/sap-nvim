@@ -28,6 +28,9 @@ function source:get_completions(ctx, callback)
 	local annotation = before:match("@[%w%._]*$") ~= nil
 	local cds_field = before:match("[%w_/]+%.[%w_/]*$") ~= nil
 	local cds_anno_val = before:match("@[%w%._]+%s*:%s*['#]?[%w_#]*$") ~= nil
+	-- ABAP: acceso a campo de estructura `wa-campo` (guion, NO `->`, y sin espacio antes del
+	-- guion para no confundir con la resta `a - b`). El servidor ADT devuelve los campos.
+	local struct_field = before:match("[%w_]%-[%w_]*$") ~= nil
 
 	-- 🔥 FIX: Le decimos a Blink EXACTAMENTE qué letras acabas de teclear
 	-- para que sepa cómo filtrarlo y cómo reemplazarlo.
@@ -36,6 +39,8 @@ function source:get_completions(ctx, callback)
 		word = before:match(":%s*(['#]?[%w_#]*)$") or ""
 	elseif cds_field then
 		word = before:match("%.([%w_/]*)$") or ""
+	elseif struct_field then
+		word = before:match("%-([%w_]*)$") or "" -- lo tecleado tras el guion de estructura
 	elseif annotation then
 		word = before:match("@([%w%._]*)$") or ""
 	else
@@ -50,6 +55,7 @@ function source:get_completions(ctx, callback)
 		and not annotation
 		and not cds_field
 		and not cds_anno_val
+		and not struct_field
 		and #word < 2
 	then
 		callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = true })

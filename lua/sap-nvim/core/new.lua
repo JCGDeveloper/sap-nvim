@@ -72,15 +72,22 @@ local function create_transaction(name, desc, pkg, corrnr, ttype, prog)
   if corrnr and corrnr ~= "" then vim.list_extend(args, { "--corrnr", corrnr }) end
 
   notify("Creando transacción " .. name .. " en " .. pkg .. "...")
-  local err = {}
+  local out, err = {}, {}
   vim.fn.jobstart(args, {
+    on_stdout = function(_, data)
+      for _, l in ipairs(data) do if vim.trim(l) ~= "" then out[#out + 1] = vim.trim(l) end end
+    end,
     on_stderr = function(_, data)
       for _, l in ipairs(data) do if vim.trim(l) ~= "" then err[#err + 1] = vim.trim(l) end end
     end,
     on_exit = function(_, code)
       vim.schedule(function()
         if code ~= 0 then
-          notify("No se pudo crear " .. name .. ": " .. (err[1] or ("code " .. code)), vim.log.levels.ERROR)
+          -- Mostramos TODO lo que dijo sapcli/SAP (stderr y, si no, stdout) para diagnosticar.
+          local msg = (#err > 0 and table.concat(err, " | "))
+            or (#out > 0 and table.concat(out, " | "))
+            or ("code " .. code)
+          notify("No se pudo crear " .. name .. " (-t " .. tostring(ttype) .. "): " .. msg, vim.log.levels.ERROR)
           return
         end
         -- Una transacción no es código editable: no abrimos source.open.
@@ -131,39 +138,55 @@ local function extract_transport_id(line)
   return line:match("%u%u%uK%d+") or line:match("%u%u%u%uK%d+") or line:match("^(%S+)")
 end
 
--- callback(pkg)  — "$TMP" para local.
+-- Búsqueda SÍNCRONA de paquetes (informationsystem/search, objectType=DEVC), igual que
+-- VSCode, para autocompletar el paquete AL TECLEAR (Tab) en el prompt. Sync porque la
+-- completion de vim.fn.input ha de devolver la lista en el acto.
+local function package_search_sync(prefix)
+  local adt_http = require("sap-nvim.core.adt_http")
+  if not adt_http.is_available() then return {} end
+  prefix = (prefix or ""):upper()
+  local q = (prefix == "" and "*" or prefix .. "*")
+  local ok, body = pcall(adt_http.request, {
+    method = "GET",
+    path = "/sap/bc/adt/repository/informationsystem/search",
+    query = { operation = "quickSearch", query = q, maxResults = 50, objectType = "DEVC" },
+    accept = "application/*",
+  })
+  if not ok or not body then return {} end
+  local names, seen = {}, {}
+  for nm in body:gmatch('adtcore:name="([^"]*)"') do
+    nm = (nm:match("^(%S+)") or nm):upper() -- a veces "ZPKG (PACKAGE)"
+    if nm ~= "" and not seen[nm] then
+      seen[nm] = true
+      names[#names + 1] = nm
+    end
+  end
+  table.sort(names)
+  return names
+end
+
+-- Expuesta para la completion de vim.fn.input (la llama SapNvimPkgComplete).
+function M.package_complete(arglead)
+  return package_search_sync(arglead or "")
+end
+
+-- callback(pkg)  — "$TMP" para local. Prompt con autocompletado (Tab) de paquetes del sistema.
 local function ask_package(callback)
   local adt = require("sap-nvim.core.adt")
   local cfg = require("sap-nvim.core.config").new()
-  -- Default: el paquete configurado si lo hay; si no, el prefijo de búsqueda.
   local default_pkg = cfg.package or cfg.package_prefix or "Z"
-  if not adt.is_configured() then
-    vim.ui.input({ prompt = "Paquete ($TMP para local): ", default = cfg.package or "$TMP" }, function(pkg)
-      callback(((pkg and pkg ~= "") and pkg or "$TMP"):upper())
-    end)
-    return
+  local opts = { prompt = "Paquete (Tab=autocompletar · $TMP=local): ", default = default_pkg, cancelreturn = "\0" }
+  if adt.is_configured() then
+    opts.completion = "customlist,SapNvimPkgComplete" -- Tab → paquetes que empiezan por lo tecleado
   end
-  vim.ui.input({ prompt = "Paquete o prefijo a buscar ($TMP para local): ", default = default_pkg }, function(prefix)
-    if not prefix or prefix == "" or prefix:upper() == "$TMP" then callback("$TMP") return end
-    notify("Buscando paquetes en el sistema...")
-    adt.fetch_packages(prefix:upper() .. "*", function(packages, err)
-      vim.schedule(function()
-        if not packages or #packages == 0 then
-          notify((err or "Sin resultados") .. " — usando '" .. prefix:upper() .. "'", vim.log.levels.WARN)
-          callback(prefix:upper())
-          return
-        end
-        local items = { "$TMP  (local, sin transporte)" }
-        for _, p in ipairs(packages) do items[#items + 1] = p end
-        vim.ui.select(items, { prompt = "Paquete:", format_item = function(i) return i end },
-          function(choice)
-            if not choice then callback("$TMP") return end
-            if choice:match("^%$TMP") then callback("$TMP") return end
-            callback(choice:match("^(%S+)"))
-          end)
-      end)
-    end)
-  end)
+  local pkg = vim.fn.input(opts)
+  if pkg == "\0" then return end -- ESC cancela
+  pkg = vim.trim(pkg or "")
+  if pkg == "" or pkg:upper() == "$TMP" then
+    callback("$TMP")
+  else
+    callback(pkg:upper())
+  end
 end
 
 -- callback(transport_id)  — "" para ninguno. Solo se llama si pkg ~= "$TMP".
@@ -281,6 +304,13 @@ function M.setup()
     { desc = "sap-nvim: Crear objeto ABAP en el sistema y abrirlo" })
   vim.keymap.set("n", "<leader>an", function() M.new_object() end,
     { desc = "ABAP: Nuevo objeto (crear en SAP)" })
+
+  -- Función global para la completion (Tab) del prompt de paquete (vim.fn.input).
+  vim.cmd([[
+    function! SapNvimPkgComplete(A, L, P) abort
+      return luaeval("require('sap-nvim.core.new').package_complete(_A)", a:A)
+    endfunction
+  ]])
 end
 
 return M
