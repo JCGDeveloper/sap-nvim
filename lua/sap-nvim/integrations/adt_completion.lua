@@ -28,27 +28,20 @@ function source:get_completions(ctx, callback)
 	local annotation = before:match("@[%w%._]*$") ~= nil
 	local cds_field = before:match("[%w_/]+%.[%w_/]*$") ~= nil
 	local cds_anno_val = before:match("@[%w%._]+%s*:%s*['#]?[%w_#]*$") ~= nil
-	-- ABAP: acceso a campo de estructura `wa-campo` (guion, NO `->`, y sin espacio antes del
-	-- guion para no confundir con la resta `a - b`). El servidor ADT devuelve los campos.
 	local struct_field = before:match("[%w_]%-[%w_]*$") ~= nil
-	-- ABAP: tras `TYPE ` (o `LIKE `) sugerir tipos/tablas DDIC ya desde el espacio (como VSCode).
-	-- Requiere espacio antes de `type`/`like` para no saltar con variables como `lv_type`.
 	local bl = before:lower()
 	local type_ctx = bl:match("%s+type%s+[%w_/]*$") ~= nil or bl:match("%s+like%s+[%w_/]*$") ~= nil
 
-	-- 🔥 FIX: Le decimos a Blink EXACTAMENTE qué letras acabas de teclear
-	-- para que sepa cómo filtrarlo y cómo reemplazarlo.
 	local word = ""
 	if cds_anno_val then
 		word = before:match(":%s*(['#]?[%w_#]*)$") or ""
 	elseif cds_field then
 		word = before:match("%.([%w_/]*)$") or ""
 	elseif struct_field then
-		word = before:match("%-([%w_]*)$") or "" -- lo tecleado tras el guion de estructura
+		word = before:match("%-([%w_]*)$") or ""
 	elseif annotation then
 		word = before:match("@([%w%._]*)$") or ""
 	else
-		-- 🔥 FIX: Añadimos %$ para que sepa borrarlo al insertar la palabra completa
 		word = before:match("[%w_/%$]+$") or ""
 	end
 
@@ -63,7 +56,7 @@ function source:get_completions(ctx, callback)
 		and not type_ctx
 		and #word < 2
 	then
-		callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = true })
+		callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = false })
 		return function() end
 	end
 
@@ -74,39 +67,60 @@ function source:get_completions(ctx, callback)
 	intel.proposals_async(bufnr, row, col, function(props)
 		local items = {}
 		local typed_len = #word
+		-- blink mete el GUION en su "keyword" (vl_vbak- → keyword="vl_vbak-"), así que para que
+		-- los campos MATCHEEN les damos filterText con ese prefijo (vl_vbak-VBELN). El textEdit
+		-- reemplaza solo lo tecleado tras el guion. Sin esto blink filtra y oculta todo.
+		local struct_prefix = struct_field and (before:match("([%w_]+%-)[%w_]*$") or "") or nil
 
 		for _, p in ipairs(props) do
-			-- Rango a reemplazar: el PREFIXLENGTH del servidor (como VSCode) si viene; si no,
-			-- el heurístico de lo tecleado. Así `wa-campo`, namespaces `/x/` y `<fs>` van bien.
 			local plen = p.prefixlength or typed_len
 			local it = {
 				label = p.word,
 				kind = KIND_MAP[p.kind or ""] or Kind.Text,
 				labelDetails = { description = KIND_LABEL[p.kind or ""] or "SAP" },
-				source_name = "SAP",
 				insertText = p.word,
-				textEdit = {
+			}
+
+			if struct_field then
+				-- Campo de estructura tras `wa-`: filterText con el prefijo del guion + textEdit
+				-- que solo reemplaza lo escrito DESPUÉS del guion (typed_len chars).
+				it.filterText = struct_prefix .. p.word
+				it.textEdit = {
+					newText = p.word,
+					range = {
+						start = { line = ctx.cursor[1] - 1, character = ctx.cursor[2] - typed_len },
+						["end"] = { line = ctx.cursor[1] - 1, character = ctx.cursor[2] },
+					},
+				}
+			elseif plen > 0 then
+				-- Otros contextos: textEdit normal según el prefijo del servidor.
+				it.textEdit = {
 					newText = p.word,
 					range = {
 						start = { line = ctx.cursor[1] - 1, character = ctx.cursor[2] - plen },
 						["end"] = { line = ctx.cursor[1] - 1, character = ctx.cursor[2] },
 					},
-				},
-			}
+				}
+			end
 
 			if p.kind == "3" and member then
-				it.textEdit.newText = p.word .. "( $0 )"
-				it.insertText = p.word .. "( $0 )"
+				local newText = p.word .. "( $0 )"
+				it.insertText = newText
 				it.insertTextFormat = vim.lsp.protocol.InsertTextFormat.Snippet
+				if it.textEdit then
+					it.textEdit.newText = newText
+				end
 			end
 
 			items[#items + 1] = it
 		end
 
 		vim.schedule(function()
+			-- 🔥 FIX 2: Confirmamos a Blink que la lista está 100% terminada,
+			-- obligándole a mostrarla en pantalla inmediatamente.
 			callback({
 				items = items,
-				is_incomplete_backward = true,
+				is_incomplete_backward = false,
 				is_incomplete_forward = false,
 			})
 		end)
