@@ -70,6 +70,7 @@ function source:get_completions(ctx, callback)
 	local replace = before:match("[=%-]>([%w_]*)$")
 		or before:match("~([%w_]*)$")
 		or before:match("@([%w%._]*)$")
+		or before:match("(['#][%w_]*)$") -- valor de anotación CDS: 'campo o #ENUM (incluye el '/# )
 		or before:match("[%w_/]+$")
 		or ""
 	local start_char = col - #replace

@@ -510,13 +510,86 @@ local function ddic_access(query, cb)
 	end)
 end
 
+-- Valores de anotación tras ':'. Enums (#...) y booleanos van por tabla; las anotaciones
+-- "referencia a campo" (currencyCode/unitOfMeasure/text.element…) toman un campo del view.
+local ANNO_VALUES = {
+	["accesscontrol.authorizationcheck"] = { "#CHECK", "#NOT_REQUIRED", "#NOT_ALLOWED", "#PRIVILEGED_ONLY" },
+	["abapcatalog.preservekey"] = { "true", "false" },
+	["abapcatalog.compiler.comparefilter"] = { "true", "false" },
+	["clienthandling.type"] = { "#INHERITED", "#CLIENT_DEPENDENT", "#CLIENT_INDEPENDENT" },
+	["clienthandling.algorithm"] = { "#AUTOMATED", "#SESSION_VARIABLE", "#NONE" },
+	["clientdependent"] = { "true", "false" },
+	["metadata.allowextensions"] = { "true", "false" },
+	["metadata.ignorepropagatedannotations"] = { "true", "false" },
+	["objectmodel.usagetype.servicequality"] = { "#A", "#B", "#C", "#D", "#X" },
+	["objectmodel.usagetype.sizecategory"] = { "#XS", "#S", "#M", "#L", "#XL", "#XXL" },
+	["objectmodel.usagetype.dataclass"] = { "#TRANSACTIONAL", "#MASTER", "#ORGANIZATIONAL", "#CUSTOMIZING", "#META", "#MIXED" },
+	["objectmodel.datacategory"] = { "#DIMENSION", "#FACT", "#CUBE", "#TEXT", "#HIERARCHY", "#VALUE_HELP" },
+	["objectmodel.representativekey"] = { "true", "false" },
+	["analytics.datacategory"] = { "#DIMENSION", "#FACT", "#CUBE", "#AGGREGATIONLEVEL" },
+	["analytics.dataextraction.enabled"] = { "true", "false" },
+	["search.searchable"] = { "true", "false" },
+	["odata.publish"] = { "true", "false" },
+}
+local ANNO_FIELDREF = {
+	["semantics.amount.currencycode"] = true,
+	["semantics.quantity.unitofmeasure"] = true,
+	["semantics.currencycode"] = true,
+	["semantics.unitofmeasure"] = true,
+	["objectmodel.text.element"] = true,
+}
+
+-- Nombres EXPUESTOS del view (dentro de { }): el alias tras 'as', o el último segmento.
+local function view_elements(src)
+	local body = src:match("{(.-)}") or ""
+	local names, seen = {}, {}
+	for raw in (body .. "\n"):gmatch("(.-)\n") do
+		local l = raw:gsub("@%S+", ""):gsub("^%s+", ""):gsub("%s*,%s*$", "")
+		local seg = l:match("[Aa][Ss]%s+([%w_]+)%s*$") or l:match("([%w_]+)%s*$")
+		if seg and not seen[seg:lower()] and seg:lower() ~= "key" then
+			seen[seg:lower()] = true
+			names[#names + 1] = seg
+		end
+	end
+	return names
+end
+
+-- Items para el valor de la anotación `anno` (sin '@'), con el prefijo ya tecleado.
+local function annotation_values(anno, prefix, src)
+	local key = anno:lower()
+	local pl = prefix:lower():gsub("^['#]", "")
+	local out = {}
+	if ANNO_VALUES[key] then
+		for _, v in ipairs(ANNO_VALUES[key]) do
+			if pl == "" or v:lower():gsub("^#", ""):sub(1, #pl) == pl then
+				out[#out + 1] = { word = v, kind = "52" }
+			end
+		end
+	elseif ANNO_FIELDREF[key] then
+		for _, n in ipairs(view_elements(src)) do
+			if pl == "" or n:lower():sub(1, #pl) == pl then
+				out[#out + 1] = { word = "'" .. n .. "'", kind = "1" }
+			end
+		end
+	end
+	return out
+end
+
 -- Completado en un buffer CDS en (line,col). Entrega items {word,kind} por cb.
---   alias.campo  -> campos de la fuente resuelta (kind "1")
---   from/join X  -> fuentes que empiezan por X    (kind "2")
+--   @Anno...: valor   -> enums/booleanos o campos del view
+--   alias.campo       -> campos de la fuente resuelta (kind "1")
+--   from/join X       -> fuentes que empiezan por X    (kind "2")
 function M.completion(bufnr, line, col, cb)
 	local linetext = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)[1] or ""
 	local before = linetext:sub(1, col)
 	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+
+	-- 0) valor de anotación tras ':' (enums #..., booleanos o campo del view)
+	local anno, vprefix = before:match("@([%w%._]+)%s*:%s*(['#]?[%w_#]*)$")
+	if anno then
+		cb(annotation_values(anno, vprefix, src))
+		return
+	end
 
 	-- 1) alias.campo -> campos de la fuente
 	local alias, prefix = before:match("([%w_/]+)%.([%w_/]*)$")
