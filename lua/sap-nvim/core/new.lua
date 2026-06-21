@@ -69,6 +69,12 @@ local function create_transaction(name, desc, pkg, corrnr, ttype, prog)
   end
   local args = { "sapcli", "transaction", "create", name, desc, pkg, "-t", ttype }
   if prog and prog ~= "" then vim.list_extend(args, { "--report-name", prog }) end
+  -- sapcli EXIGE el nº de pantalla para report (y dialog): por defecto 1000.
+  if ttype == "report" then
+    vim.list_extend(args, { "--report-dynnr", vim.g.sap_report_dynnr or "1000" })
+  elseif ttype == "dialog" then
+    vim.list_extend(args, { "--program-dynnr", vim.g.sap_report_dynnr or "1000" })
+  end
   if corrnr and corrnr ~= "" then vim.list_extend(args, { "--corrnr", corrnr }) end
 
   notify("Creando transacción " .. name .. " en " .. pkg .. "...")
@@ -83,14 +89,23 @@ local function create_transaction(name, desc, pkg, corrnr, ttype, prog)
     on_exit = function(_, code)
       vim.schedule(function()
         if code ~= 0 then
-          -- Mostramos TODO lo que dijo sapcli/SAP (stderr y, si no, stdout) para diagnosticar.
           local msg = (#err > 0 and table.concat(err, " | "))
             or (#out > 0 and table.concat(out, " | "))
             or ("code " .. code)
           notify("No se pudo crear " .. name .. " (-t " .. tostring(ttype) .. "): " .. msg, vim.log.levels.ERROR)
+          -- Si el sistema NO tiene el endpoint ADT de creación de transacciones (IAM/blue,
+          -- /sap/bc/adt/aps/iam/tran), ofrecemos crearla en SE93 por SAP GUI (vía nativa).
+          if msg:find("aps/iam/tran", 1, true) or msg:lower():find("resourcenotfound", 1, true) then
+            vim.ui.select({ "Sí, abrir SE93 en SAP GUI", "No" }, {
+              prompt = "Tu sistema no permite crear transacciones por ADT. ¿Crearla en SE93 (SAP GUI)?",
+            }, function(ch)
+              if ch and ch:match("^Sí") then
+                require("sap-nvim.core.sapgui").transaction("SE93")
+              end
+            end)
+          end
           return
         end
-        -- Una transacción no es código editable: no abrimos source.open.
         notify(name .. " (transacción) creada.")
       end)
     end,
@@ -170,23 +185,59 @@ function M.package_complete(arglead)
   return package_search_sync(arglead or "")
 end
 
--- callback(pkg)  — "$TMP" para local. Prompt con autocompletado (Tab) de paquetes del sistema.
+-- Picker EN VIVO (snacks): según escribes, busca paquetes en el sistema (estilo VSCode).
+-- Devuelve true si lo abrió; false si no hay snacks (para caer al input con Tab).
+local function pick_package_live(default, cb)
+  local ok, Snacks = pcall(require, "snacks")
+  if not (ok and Snacks.picker) then
+    return false
+  end
+  return (pcall(Snacks.picker.pick, {
+    source = "sap_packages",
+    title = "Paquete SAP (escribe para buscar · $TMP = local)",
+    live = true, -- re-busca en el servidor según escribes
+    search = default or "Z",
+    limit_live = 200,
+    finder = function(_, fctx)
+      local q = ((fctx.filter and fctx.filter.search) or ""):gsub("%s+", "")
+      local items = { { text = "$TMP", package = "$TMP" } }
+      for _, n in ipairs(package_search_sync(q)) do
+        items[#items + 1] = { text = n, package = n }
+      end
+      return items
+    end,
+    format = "text",
+    confirm = function(picker, item)
+      picker:close()
+      cb(item and item.package or "$TMP")
+    end,
+  }))
+end
+
+-- callback(pkg)  — "$TMP" para local. Picker en vivo si hay snacks; si no, input con Tab.
 local function ask_package(callback)
   local adt = require("sap-nvim.core.adt")
   local cfg = require("sap-nvim.core.config").new()
   local default_pkg = cfg.package or cfg.package_prefix or "Z"
+  if
+    adt.is_configured()
+    and pick_package_live(default_pkg, function(pkg)
+      callback(((pkg and pkg ~= "") and pkg or "$TMP"):upper())
+    end)
+  then
+    return
+  end
+  -- Fallback: input con autocompletado por Tab.
   local opts = { prompt = "Paquete (Tab=autocompletar · $TMP=local): ", default = default_pkg, cancelreturn = "\0" }
   if adt.is_configured() then
-    opts.completion = "customlist,SapNvimPkgComplete" -- Tab → paquetes que empiezan por lo tecleado
+    opts.completion = "customlist,SapNvimPkgComplete"
   end
   local pkg = vim.fn.input(opts)
-  if pkg == "\0" then return end -- ESC cancela
-  pkg = vim.trim(pkg or "")
-  if pkg == "" or pkg:upper() == "$TMP" then
-    callback("$TMP")
-  else
-    callback(pkg:upper())
+  if pkg == "\0" then
+    return
   end
+  pkg = vim.trim(pkg or "")
+  callback(((pkg ~= "" and pkg) or "$TMP"):upper())
 end
 
 -- callback(transport_id)  — "" para ninguno. Solo se llama si pkg ~= "$TMP".
@@ -311,6 +362,39 @@ function M.setup()
       return luaeval("require('sap-nvim.core.new').package_complete(_A)", a:A)
     endfunction
   ]])
+
+  -- :SapDiscovery [filtro] — lista los endpoints ADT que SÍ existen en este sistema (para
+  -- saber qué funciones de sapcli son compatibles). Ej.: :SapDiscovery iam
+  vim.api.nvim_create_user_command("SapDiscovery", function(a)
+    local adt_http = require("sap-nvim.core.adt_http")
+    if not adt_http.is_available() then
+      notify("ADT no disponible (config.yml).", vim.log.levels.WARN)
+      return
+    end
+    notify("Consultando /sap/bc/adt/discovery ...")
+    adt_http.request_async({ method = "GET", path = "/sap/bc/adt/discovery", accept = "application/atomsvc+xml" }, function(body)
+      vim.schedule(function()
+        local filter = (a.args ~= "" and a.args:lower()) or nil
+        local seen, lines = {}, {}
+        for href in (body or ""):gmatch('href="([^"]*)"') do
+          if (not filter or href:lower():find(filter, 1, true)) and not seen[href] then
+            seen[href] = true
+            lines[#lines + 1] = href
+          end
+        end
+        table.sort(lines)
+        table.insert(lines, 1, "== ADT discovery · " .. #lines .. " endpoints" .. (filter and (" · filtro: " .. filter) or "") .. " ==")
+        if #lines == 1 then
+          lines[#lines + 1] = "(sin coincidencias — prueba sin filtro)"
+        end
+        local buf = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+        vim.bo[buf].bufhidden = "wipe"
+        vim.cmd("botright split")
+        vim.api.nvim_win_set_buf(0, buf)
+      end)
+    end)
+  end, { nargs = "?", desc = "sap-nvim: lista los endpoints ADT del sistema (discovery)" })
 end
 
 return M
