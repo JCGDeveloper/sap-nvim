@@ -27,10 +27,10 @@ function source:get_completions(ctx, callback)
 	local before = (ctx.line or ""):sub(1, col)
 	local bufnr = ctx.bufnr or vim.api.nvim_get_current_buf()
 
-	-- CDS/RAP se editan con filetype `abap`, pero el objeto trae group ddls/ddlx/dcl/bdef/srvd.
-	local meta = vim.b[bufnr].sap_obj
-	local CDS_GROUPS = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
-	local is_cds = meta ~= nil and CDS_GROUPS[meta.group] == true
+	-- CDS/RAP se editan con filetype `abap`. Detección robusta (extensión/contenido), no solo
+	-- sap_obj.group (que NO se fija al reabrir por sesión o editar el fichero de caché).
+	local ok_cds, cdsmod = pcall(require, "sap-nvim.core.cds")
+	local is_cds = ok_cds and cdsmod.is_cds_buf(bufnr) == true
 	local manual = ctx.trigger ~= nil and ctx.trigger.kind == "manual"
 
 	local is_type_declaration = before:match("TYPE%s+REF%s+TO%s+[%w_]*$") ~= nil

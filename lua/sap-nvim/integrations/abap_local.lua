@@ -25,10 +25,10 @@ function source:enabled()
   end
   -- CDS/RAP se editan con filetype `abap`, pero los keywords ABAP (START-OF-SELECTION,
   -- FIELD-SYMBOLS, READ TABLE…) son RUIDO ahí y tapaban las anotaciones (@) y los campos.
-  -- En un objeto CDS no aportamos nada: manda `sap_adt` (anotaciones, campos, fuentes).
-  local meta = vim.b.sap_obj
-  local CDS_G = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
-  if meta and CDS_G[meta.group] then
+  -- En un objeto CDS no aportamos nada: manda `sap_adt`. Detección robusta (no solo sap_obj:
+  -- al reabrir por sesión/editar el fichero de caché no está fijado).
+  local ok, cds = pcall(require, "sap-nvim.core.cds")
+  if ok and cds.is_cds_buf(0) then
     return false
   end
   return true

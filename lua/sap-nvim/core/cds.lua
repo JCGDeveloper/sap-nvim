@@ -575,6 +575,39 @@ local function annotation_values(anno, prefix, src)
 	return out
 end
 
+-- ¿Es este buffer un objeto CDS/RAP? Robusto: no depende solo de sap_obj (que NO se fija al
+-- reabrir por sesión o al editar el fichero de caché directamente). Mira tambien la extensión
+-- del fichero (.ddls/.ddlx/.dcl/.bdef/.srvd) y el contenido (define view / behavior / @AbapCatalog).
+local CDS_GROUPS = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+function M.is_cds_buf(bufnr)
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
+	local meta = vim.b[bufnr].sap_obj
+	if meta and CDS_GROUPS[meta.group] then
+		return true
+	end
+	local name = vim.api.nvim_buf_get_name(bufnr)
+	local ext = name:match("%.([%w]+)$")
+	if ext and CDS_GROUPS[ext:lower()] then
+		return true
+	end
+	for _, l in ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, 60, false)) do
+		local ll = l:lower():gsub("^%s+", "")
+		if ll:match("^define%s+view")
+			or ll:match("^define%s+root%s+view")
+			or ll:match("^define%s+behavior")
+			or ll:match("^define%s+custom%s+entity")
+			or ll:match("^define%s+abstract%s+entity")
+			or ll:match("^define%s+table%s+function")
+			or ll:match("^annotate%s+view")
+			or ll:match("^extend%s+view")
+			or ll:match("^@abapcatalog")
+		then
+			return true
+		end
+	end
+	return false
+end
+
 -- Completado en un buffer CDS en (line,col). Entrega items {word,kind} por cb.
 --   @Anno...: valor   -> enums/booleanos o campos del view
 --   alias.campo       -> campos de la fuente resuelta (kind "1")

@@ -222,10 +222,10 @@ function M.proposals_async(bufnr, line, col, cb)
 
 	-- CDS/RAP: el codecompletion de ABAP NO sirve para DDL (devuelve ParameterValueInvalid).
 	-- Resolvemos el alias del FROM/JOIN y pedimos campos/fuentes a ddicrepositoryaccess (VSCode).
-	local cmeta = vim.b[bufnr].sap_obj
-	local CDS_G = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
-	if cmeta and CDS_G[cmeta.group] then
-		require("sap-nvim.core.cds").completion(bufnr, line, col, function(items)
+	-- Detección robusta (no solo sap_obj: al reabrir por sesión no está fijado).
+	local cds = require("sap-nvim.core.cds")
+	if cds.is_cds_buf(bufnr) then
+		cds.completion(bufnr, line, col, function(items)
 			cb(items or {})
 		end)
 		return
