@@ -26,12 +26,13 @@ function M.setup(opts)
     },
   })
 
-  -- Atajo para mostrar herramientas MCP
+  -- Panel lateral de MCP (servidores + herramientas) — la UI de mcphub.nvim.
+  vim.keymap.set("n", "<leader>aM", "<cmd>MCPHub<cr>", { desc = "MCP: abrir panel (MCPHub)" })
+
+  -- Atajos rápidos: servidores / herramientas.
   vim.keymap.set("n", "<leader>am", function()
     mcphub.show_servers()
   end, { desc = "MCP: Mostrar servidores" })
-
-  -- Atajo para ejecutar herramienta MCP
   vim.keymap.set("n", "<leader>at", function()
     mcphub.show_tools()
   end, { desc = "MCP: Mostrar herramientas" })
