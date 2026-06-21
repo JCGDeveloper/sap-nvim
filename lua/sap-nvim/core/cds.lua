@@ -476,8 +476,12 @@ local function cds_alias_map(src)
 		map[alias:lower()] = tbl
 	end
 	-- from/join sin alias: la fuente es su propio "alias".
-	for tbl in src:gmatch("[Ff][Rr][Oo][Mm]%s+([%w_/]+)") do map[tbl:lower()] = map[tbl:lower()] or tbl end
-	for tbl in src:gmatch("[Jj][Oo][Ii][Nn]%s+([%w_/]+)") do map[tbl:lower()] = map[tbl:lower()] or tbl end
+	for tbl in src:gmatch("[Ff][Rr][Oo][Mm]%s+([%w_/]+)") do
+		map[tbl:lower()] = map[tbl:lower()] or tbl
+	end
+	for tbl in src:gmatch("[Jj][Oo][Ii][Nn]%s+([%w_/]+)") do
+		map[tbl:lower()] = map[tbl:lower()] or tbl
+	end
 	return map
 end
 
@@ -485,8 +489,10 @@ end
 --   CAMPOS de una fuente -> { requestScope = "all", path = "TABLA." }   (NO datasource=)
 --   FUENTES por prefijo  -> { datasource = "PREFIJO*" }
 local function ddic_fields_query(tbl)
-	return { requestScope = "all", path = tbl .. "." }
+	-- 🔥 FIX: SAP exige que el nombre de la tabla esté en MAYÚSCULAS en el path
+	return { requestScope = "all", path = tbl:upper() .. "." }
 end
+
 local function ddic_sources_query(prefix)
 	return { datasource = prefix .. "*" }
 end
@@ -523,7 +529,14 @@ local ANNO_VALUES = {
 	["metadata.ignorepropagatedannotations"] = { "true", "false" },
 	["objectmodel.usagetype.servicequality"] = { "#A", "#B", "#C", "#D", "#X" },
 	["objectmodel.usagetype.sizecategory"] = { "#XS", "#S", "#M", "#L", "#XL", "#XXL" },
-	["objectmodel.usagetype.dataclass"] = { "#TRANSACTIONAL", "#MASTER", "#ORGANIZATIONAL", "#CUSTOMIZING", "#META", "#MIXED" },
+	["objectmodel.usagetype.dataclass"] = {
+		"#TRANSACTIONAL",
+		"#MASTER",
+		"#ORGANIZATIONAL",
+		"#CUSTOMIZING",
+		"#META",
+		"#MIXED",
+	},
 	["objectmodel.datacategory"] = { "#DIMENSION", "#FACT", "#CUBE", "#TEXT", "#HIERARCHY", "#VALUE_HELP" },
 	["objectmodel.representativekey"] = { "true", "false" },
 	["analytics.datacategory"] = { "#DIMENSION", "#FACT", "#CUBE", "#AGGREGATIONLEVEL" },
@@ -559,6 +572,7 @@ local function annotation_values(anno, prefix, src)
 	local key = anno:lower()
 	local pl = prefix:lower():gsub("^['#]", "")
 	local out = {}
+
 	if ANNO_VALUES[key] then
 		for _, v in ipairs(ANNO_VALUES[key]) do
 			if pl == "" or v:lower():gsub("^#", ""):sub(1, #pl) == pl then
@@ -570,6 +584,11 @@ local function annotation_values(anno, prefix, src)
 			if pl == "" or n:lower():sub(1, #pl) == pl then
 				out[#out + 1] = { word = "'" .. n .. "'", kind = "1" }
 			end
+		end
+	else
+		-- 🔥 FIX: Si es una anotación libre (como EndUserText.label), te sugerimos comillas
+		if pl == "" then
+			out[#out + 1] = { word = "''", kind = "1" }
 		end
 	end
 	return out
@@ -592,7 +611,8 @@ function M.is_cds_buf(bufnr)
 	end
 	for _, l in ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, 60, false)) do
 		local ll = l:lower():gsub("^%s+", "")
-		if ll:match("^define%s+view")
+		if
+			ll:match("^define%s+view")
 			or ll:match("^define%s+root%s+view")
 			or ll:match("^define%s+behavior")
 			or ll:match("^define%s+custom%s+entity")
@@ -612,6 +632,50 @@ end
 --   @Anno...: valor   -> enums/booleanos o campos del view
 --   alias.campo       -> campos de la fuente resuelta (kind "1")
 --   from/join X       -> fuentes que empiezan por X    (kind "2")
+local CDS_KEYWORDS = {
+	"define view entity",
+	"define root view entity",
+	"define abstract entity",
+	"define custom entity",
+	"as select from",
+	"as projection on",
+	"extend view",
+	"extend view entity",
+	"with parameters",
+	"association",
+	"composition",
+	"to parent",
+	"inner join",
+	"left outer join",
+	"right outer join",
+	"cross join",
+	"on",
+	"key",
+	"cast",
+	"case",
+	"when",
+	"then",
+	"else",
+	"end",
+	"is null",
+	"is not null",
+	"is initial",
+	"is not initial",
+	"sum",
+	"min",
+	"max",
+	"avg",
+	"count",
+	"$projection",
+	"$session.system_date",
+	"$session.system_language",
+	"$session.client",
+	"$session.user",
+	"true",
+	"false",
+}
+
+-- Completado en un buffer CDS en (line,col). Entrega items {word,kind} por cb.
 function M.completion(bufnr, line, col, cb)
 	local linetext = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)[1] or ""
 	local before = linetext:sub(1, col)
@@ -632,7 +696,7 @@ function M.completion(bufnr, line, col, cb)
 			local items, pl = {}, prefix:lower()
 			for _, n in ipairs(names) do
 				if n:lower() ~= tbl:lower() and (pl == "" or n:lower():sub(1, #pl) == pl) then
-					items[#items + 1] = { word = n, kind = "1" }
+					items[#items + 1] = { word = n:lower(), kind = "1" }
 				end
 			end
 			cb(items)
@@ -653,7 +717,30 @@ function M.completion(bufnr, line, col, cb)
 		return
 	end
 
-	cb({})
+	-- 3) El nombre de las anotaciones en sí mismas (@OData, @EndUserText...)
+	local aprefix = before:match("@([%w%._]*)$")
+	if aprefix then
+		M.annotation_proposals(aprefix, cb)
+		return
+	end
+
+	-- 🔥 4) FALLBACK: Keywords nativas de CDS (incluyendo variables con $)
+	local word = before:match("[%w_%$]+$") or ""
+	local wl = word:lower()
+	local items = {}
+
+	if #wl >= 1 then
+		local seen_kw = {}
+		for _, kw in ipairs(CDS_KEYWORDS) do
+			-- Si lo que escribes coincide con el principio de la keyword
+			if kw:sub(1, #wl) == wl and not seen_kw[kw] then
+				seen_kw[kw] = true
+				items[#items + 1] = { word = kw, kind = "52" } -- 52 = Keyword
+			end
+		end
+	end
+
+	cb(items)
 end
 
 -- Diagnóstico: resuelve el contexto y devuelve (info, cuerpo_crudo) de ddicrepositoryaccess.

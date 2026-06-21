@@ -212,20 +212,29 @@ function M.proposals_async(bufnr, line, col, cb)
 	local linetext = vim.api.nvim_get_current_line()
 	local before = linetext:sub(1, col)
 
-	if before:match("@[%w%._]*$") then
-		local prefix = before:match("@([%w%._]*)$") or ""
-		require("sap-nvim.core.cds").annotation_proposals(prefix, function(items)
+	-- 🔥 FIX: Delegar TODO el completado de CDS al motor inteligente de cds.lua
+	-- Si es un archivo CDS, no usamos el motor de ABAP estándar.
+	local meta = vim.b[bufnr].sap_obj
+	local is_cds_file = meta
+		and (
+			meta.group == "ddls"
+			or meta.group == "ddlx"
+			or meta.group == "dcl"
+			or meta.group == "bdef"
+			or meta.group == "srvd"
+		)
+
+	if is_cds_file or is_sap_ft(vim.bo.filetype) and vim.bo.filetype ~= "abap" then
+		require("sap-nvim.core.cds").completion(bufnr, line, col, function(items)
 			cb(items or {})
 		end)
 		return
 	end
 
-	-- CDS/RAP: el codecompletion de ABAP NO sirve para DDL (devuelve ParameterValueInvalid).
-	-- Resolvemos el alias del FROM/JOIN y pedimos campos/fuentes a ddicrepositoryaccess (VSCode).
-	-- Detección robusta (no solo sap_obj: al reabrir por sesión no está fijado).
-	local cds = require("sap-nvim.core.cds")
-	if cds.is_cds_buf(bufnr) then
-		cds.completion(bufnr, line, col, function(items)
+	-- Anotaciones en ABAP normal (fuera de CDS)
+	if before:match("@[%w%._]*$") then
+		local prefix = before:match("@([%w%._]*)$") or ""
+		require("sap-nvim.core.cds").annotation_proposals(prefix, function(items)
 			cb(items or {})
 		end)
 		return
@@ -261,7 +270,7 @@ function M.proposals_async(bufnr, line, col, cb)
 	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
 	local q = { uri = uri .. context_suffix(bufnr) .. "%23start=" .. line .. "," .. col, signalCompleteness = "true" }
 
-	-- Aquí solo llega ABAP (CDS se resolvió arriba con ddicrepositoryaccess).
+	-- ABAP normal
 	adt_http.request_async({
 		method = "POST",
 		path = "/sap/bc/adt/abapsource/codecompletion/proposal",
@@ -312,7 +321,9 @@ function M.complete_debug()
 	local meta = vim.b[bufnr].sap_obj
 	local uri = M.object_uri(bufnr)
 	local out = {}
-	local function add(s) out[#out + 1] = s end
+	local function add(s)
+		out[#out + 1] = s
+	end
 	add("== sap-nvim · diagnóstico de completado ==")
 	add("filetype  : " .. vim.bo[bufnr].filetype)
 	add("sap_obj   : " .. vim.inspect(meta))
@@ -346,12 +357,18 @@ function M.complete_debug()
 			add("alias     : " .. tostring(info.alias) .. "  -> tabla: " .. tostring(info.table))
 			add("query     : " .. vim.inspect(info.query))
 			local names = {}
-			for nm in (body or ""):gmatch('adtcore:name="([^"]*)"') do names[#names + 1] = nm end
+			for nm in (body or ""):gmatch('adtcore:name="([^"]*)"') do
+				names[#names + 1] = nm
+			end
 			add("nombres parseados (adtcore:name): " .. #names)
-			for i = 1, math.min(#names, 30) do add("  · " .. names[i]) end
+			for i = 1, math.min(#names, 30) do
+				add("  · " .. names[i])
+			end
 			add("")
 			add("== respuesta cruda ddicrepositoryaccess (primeros 2500 chars) ==")
-			for _, l in ipairs(vim.split((body or ""):sub(1, 2500), "\n", { plain = true })) do add(l) end
+			for _, l in ipairs(vim.split((body or ""):sub(1, 2500), "\n", { plain = true })) do
+				add(l)
+			end
 			vim.schedule(show)
 		end)
 		return
@@ -381,7 +398,9 @@ function M.complete_debug()
 	end
 	add("")
 	add("== respuesta cruda (primeros 2000 chars) ==")
-	for _, l in ipairs(vim.split(body:sub(1, 2000), "\n", { plain = true })) do add(l) end
+	for _, l in ipairs(vim.split(body:sub(1, 2000), "\n", { plain = true })) do
+		add(l)
+	end
 	show()
 end
 
