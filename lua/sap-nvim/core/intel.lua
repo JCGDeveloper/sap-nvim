@@ -522,54 +522,79 @@ function M.definition_target(bufnr, row, col, filter)
 	return (target and target ~= "" and target ~= "not_used") and uri_to_object(unxml(target)) or nil
 end
 
--- 🎯 SOLUCIÓN AL GD: Enrutamiento inteligente entre ABAP y CDS
+-- 🎯 SOLUCIÓN DEFINITIVA AL GD: Tablas DDIC y navegación local perfectas
 function M.goto_definition(filter)
 	if filter == true then
 		filter = "typeDefinition"
-	elseif not filter then
-		filter = "definition"
 	end
+	filter = filter or "definition"
+
 	local bufnr = vim.api.nvim_get_current_buf()
 	local row, col = unpack(vim.api.nvim_win_get_cursor(0))
-	local obj = M.definition_target(bufnr, row, col, filter)
-	if not obj and filter == "definition" then
-		obj = M.definition_target(bufnr, row, col, "typeDefinition")
+	local meta = vim.b[bufnr].sap_obj
+	local word = vim.fn.expand("<cword>")
+
+	-- Función auxiliar: si ADT no sabe dónde ir, forzamos la búsqueda en el DDIC
+	local function search_ddic(w)
+		if not w or w == "" then
+			return nil
+		end
+		local body = adt_http.request({
+			method = "GET",
+			path = "/sap/bc/adt/ddic/ddl/ddicrepositoryaccess",
+			query = { datasource = w, uriRequired = "X" },
+			accept = "application/*",
+		})
+		local target = body and body:match('adtcore:uri="([^"]*)"')
+		if target and target ~= "" and target ~= "not_used" then
+			return uri_to_object(unxml(target))
+		end
+		return nil
 	end
+
+	-- 1. ADT intenta resolver la posición
+	local obj = M.definition_target(bufnr, row, col, filter)
+
+	-- 2. Si la respuesta nos deja en la MISMA LÍNEA (ej: encima de un TABLES: tabla)
+	-- significa que ADT lo considera "origen". Le exigimos buscar el TIPO en el DDIC.
+	local is_exact_same_line = (obj and meta and obj.name == meta.name:upper() and obj.line == row)
+
+	if not obj or is_exact_same_line then
+		local ddic_obj = search_ddic(word)
+		if ddic_obj then
+			obj = ddic_obj
+		end
+	end
+
+	-- 3. Si definitivamente no hay objeto en SAP, fallback al gD nativo
 	if not obj then
-		vim.notify("SAP: Sin def. Buscando local...", vim.log.levels.INFO)
+		vim.notify("SAP: Sin def remota. Buscando local...", vim.log.levels.INFO)
 		pcall(vim.cmd, "normal! gD")
 		return true
 	end
-	local meta = vim.b[bufnr].sap_obj
+
+	-- 4. El objeto está en ESTE mismo archivo (Variables locales, method, types)
 	if meta and meta.name:upper() == obj.name and obj.line then
-		pcall(vim.api.nvim_win_set_cursor, 0, { obj.line, obj.col or 0 })
-		vim.cmd("normal! zz")
+		if obj.line ~= row then
+			-- Salta internamente a la línea correcta sin recargar el archivo
+			pcall(vim.api.nvim_win_set_cursor, 0, { obj.line, obj.col or 0 })
+			vim.cmd("normal! zz")
+		else
+			-- Si sigue sin moverse, usamos el gD nativo para que busque la palabra
+			pcall(vim.cmd, "normal! gD")
+		end
 	else
+		-- 5. El objeto está en OTRO archivo (Tabla DDIC, Clase, Include, CDS)
 		local cds_groups = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
 		if cds_groups[obj.group] then
 			require("sap-nvim.core.cds").open_adt(obj.group, obj.name, { line = obj.line, col = obj.col })
 		else
-			require("sap-nvim.core.source").open(obj.name, obj.group, { line = obj.line, col = obj.col })
+			require("sap-nvim.core.source").open(obj.name:upper(), obj.group, { line = obj.line, col = obj.col })
 		end
 	end
+
 	return true
 end
-
-local ADT_KIND_MAP = {
-	["CLAS/I"] = "Importing",
-	["INTF/I"] = "Importing",
-	["CLAS/E"] = "Exporting",
-	["INTF/E"] = "Exporting",
-	["CLAS/C"] = "Changing",
-	["INTF/C"] = "Changing",
-	["CLAS/R"] = "Returning",
-	["INTF/R"] = "Returning",
-	["PROG/P"] = "Parameter",
-	["PROG/S"] = "Select-Option",
-}
-
-local hover_win = nil
-
 function M.hover()
 	vim.lsp.handlers["textDocument/hover"] = function() end
 	if hover_win and vim.api.nvim_win_is_valid(hover_win) then
@@ -1207,6 +1232,9 @@ function M.setup()
 	vim.api.nvim_create_user_command("SapReferences", function()
 		M.references()
 	end, { desc = "sap-nvim: Referencias" })
+	vim.api.nvim_create_user_command("SapGotoDef", function()
+		M.goto_definition("definition")
+	end, { desc = "sap-nvim: Ir a definición" })
 	vim.api.nvim_create_user_command("SapGotoType", function()
 		M.goto_definition("typeDefinition")
 	end, { desc = "sap-nvim: Ir al tipo" })
