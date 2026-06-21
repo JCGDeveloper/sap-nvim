@@ -13,11 +13,14 @@ local function open_url(url)
 
 	-- 1. Específico para WSL usando ruta absoluta de Windows
 	if vim.fn.has("wsl") == 1 then
-		-- Usamos la ruta absoluta a PowerShell para que no dependa del $PATH de Linux
+		-- Usamos la ruta absoluta a PowerShell para que no dependa del $PATH de Linux.
+		-- IMPORTANTE: pasamos los argumentos como LISTA (sin shell de Linux de por medio) y
+		-- escapamos la URL para PowerShell duplicando las comillas simples (`'` → `''`). Así
+		-- una URL con caracteres raros (p.ej. un tcode con comilla) no puede "escapar" del
+		-- Start-Process ni inyectar comandos.
 		local ps_path = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-		local cmd = string.format([[%s -NoProfile -Command "Start-Process '%s'"]], ps_path, url)
-
-		local out = vim.fn.system(cmd)
+		local ps_url = "'" .. tostring(url):gsub("'", "''") .. "'"
+		local out = vim.fn.system({ ps_path, "-NoProfile", "-Command", "Start-Process " .. ps_url })
 		if vim.v.shell_error ~= 0 then
 			notify("Error al abrir navegador: " .. out, vim.log.levels.ERROR)
 			-- Te copiamos la URL al portapapeles por si falla Windows
@@ -249,20 +252,21 @@ function M.setup()
 	end, { desc = "sap-nvim: Ejecutar clase (if_oo_adt_classrun~main)", nargs = "?" })
 
 	-- Atajos: <leader>ax ejecutar transacción, <leader>aR ejecutar el programa del buffer.
+	-- SIEMPRE pregunta antes de abrir el navegador: ejecutar la palabra bajo el cursor
+	-- automáticamente disparaba la WebGUI "porque sí" (cualquier variable/keyword de 3-20
+	-- letras parecía un tcode). Ahora se pre-rellena el cuadro con esa palabra como sugerencia,
+	-- pero hace falta confirmar con ↵ para lanzar el navegador.
 	vim.keymap.set("n", "<leader>ax", function()
 		local w = vim.fn.expand("<cword>")
-		-- Solo auto-ejecutar la palabra bajo el cursor como transacción si estamos en un
-		-- buffer ABAP y parece un código de transacción. Fuera de un programa (dashboard,
-		-- otro filetype, palabra rara) SIEMPRE mostramos el cuadro para elegir/escribir.
+		local default = ""
 		if vim.bo.filetype == "abap" and w and w:match("^[%w_/]+$") and #w >= 3 and #w <= 20 then
-			M.run_transaction(w)
-		else
-			vim.ui.input({ prompt = "Transacción: " }, function(v)
-				if v and v ~= "" then
-					M.run_transaction(v)
-				end
-			end)
+			default = w:upper()
 		end
+		vim.ui.input({ prompt = "Transacción (↵ ejecuta en WebGUI): ", default = default }, function(v)
+			if v and vim.trim(v) ~= "" then
+				M.run_transaction(vim.trim(v))
+			end
+		end)
 	end, { desc = "ABAP: Ejecutar transacción (WebGUI)" })
 	vim.keymap.set("n", "<leader>aR", function()
 		M.run_program()
