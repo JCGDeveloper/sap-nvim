@@ -12,8 +12,10 @@ function source:enabled()
 end
 
 function source:get_trigger_characters()
-	-- ":" y " " disparan tras TYPE REF TO; "@" dispara las anotaciones CDS.
-	return { ">", "-", "=", "~", "(", ",", ":", " ", "@" }
+	-- ":" y " " disparan tras TYPE REF TO; "@" las anotaciones CDS; "." los campos tras un
+	-- alias (CDS: `B.`), y "[" dentro de los corchetes de asociación. En ABAP el gate ignora
+	-- "." / "[" (no consultan al servidor), así que añadirlos no mete ruido.
+	return { ">", "-", "=", "~", "(", ",", ":", " ", "@", ".", "[" }
 end
 
 local Kind = vim.lsp.protocol.CompletionItemKind
@@ -23,6 +25,13 @@ local KIND_LABEL = { ["1"] = "variable", ["2"] = "clase/tipo", ["3"] = "método"
 function source:get_completions(ctx, callback)
 	local col = ctx.cursor[2]
 	local before = (ctx.line or ""):sub(1, col)
+	local bufnr = ctx.bufnr or vim.api.nvim_get_current_buf()
+
+	-- CDS/RAP se editan con filetype `abap`, pero el objeto trae group ddls/ddlx/dcl/bdef/srvd.
+	local meta = vim.b[bufnr].sap_obj
+	local CDS_GROUPS = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+	local is_cds = meta ~= nil and CDS_GROUPS[meta.group] == true
+	local manual = ctx.trigger ~= nil and ctx.trigger.kind == "manual"
 
 	local is_type_declaration = before:match("TYPE%s+REF%s+TO%s+[%w_]*$") ~= nil
 	local member = before:match("[=%-]>[%w_]*$") ~= nil or before:match("~[%w_]*$") ~= nil
@@ -30,13 +39,26 @@ function source:get_completions(ctx, callback)
 	local annotation = before:match("@[%w%._]*$") ~= nil
 	local word = before:match("[%w_/][%w_/]*$")
 
-	if not member and not call and not is_type_declaration and not annotation and (not word or #word < 2) then
+	-- ¿Pedimos propuestas al servidor ADT?
+	local ask
+	if manual then
+		ask = true -- Ctrl-Space (como en Eclipse): pregunta SIEMPRE al servidor.
+	elseif is_cds then
+		-- En CDS deja decidir al servidor: campos tras `alias.`, valores de anotación tras
+		-- `:`, dentro de corchetes `[ ... ]`, o cualquier palabra empezada.
+		ask = word ~= nil or member or call or annotation
+			or before:match("[%w_]%.[%w_]*$") ~= nil
+			or before:match(":%s*['#]?[%w_]*$") ~= nil
+			or before:match("%[%s*[%w_]*$") ~= nil
+	else
+		ask = member or call or is_type_declaration or annotation or (word ~= nil and #word >= 2)
+	end
+	if not ask then
 		callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = true })
 		return function() end
 	end
 
 	local intel = require("sap-nvim.core.intel")
-	local bufnr = ctx.bufnr or vim.api.nvim_get_current_buf()
 	local row = ctx.cursor[1]
 
 	-- PREFIJO A REEMPLAZAR según el contexto:
