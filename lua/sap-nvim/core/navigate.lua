@@ -17,12 +17,31 @@ end
 M._back = {}
 local function push_here()
   local b = vim.api.nvim_get_current_buf()
+  -- No apilar buffers "scratch" (dashboard, popups nofile, sin nombre): de ahí `-` debe ir
+  -- al dashboard, no "volver" a una pantalla efímera ya destruida.
+  if vim.bo[b].buftype ~= "" then return end
+  local name = vim.api.nvim_buf_get_name(b)
+  if name == "" then return end
   local pos = vim.api.nvim_win_get_cursor(0)
-  table.insert(M._back, { buf = b, path = vim.api.nvim_buf_get_name(b), lnum = pos[1], col = pos[2] })
+  -- Dedupe: si la cima ya es esta misma posición (p.ej. un caller apiló el origen y luego
+  -- source.open lo vuelve a intentar justo antes de cambiar de buffer), no la dupliques.
+  local top = M._back[#M._back]
+  if top and top.buf == b and top.lnum == pos[1] then return end
+  table.insert(M._back, { buf = b, path = name, lnum = pos[1], col = pos[2] })
 end
+-- Público: otros módulos (core/source al abrir CUALQUIER objeto: gd, búsqueda, browse,
+-- include…) apilan la posición de origen para que `-` recorra hacia atrás los programas
+-- visitados y, al agotar la pila, caiga al dashboard.
+M.push_here = push_here
 function M.back()
   local loc = table.remove(M._back)
   if not loc then
+    -- Nada que deshacer: en modo SAP, `-` cae como backstop final a la pantalla de inicio
+    -- (dashboard). En modo normal no tocamos nada: solo avisamos.
+    if vim.g.sap_mode then
+      local ok, home = pcall(require, "sap-nvim.core.home")
+      if ok then home.open_dashboard() return end
+    end
     notify("No hay archivo anterior en la navegación.")
     return
   end

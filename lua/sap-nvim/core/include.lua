@@ -91,6 +91,8 @@ function M.create_under_cursor()
 
         if code == 200 or code == 201 then
           notify(name .. " creado. Abriendo...")
+          -- (source.open apila el programa actual en la pila de navegación, así que dentro
+          --  del include recién abierto `-` vuelve a la línea donde se escribió INCLUDE ...)
           require("sap-nvim.core.source").open(name, "include")
         else
           local msg = (body or ""):match("<message[^>]->([^<]+)</") or (body or ""):match("adtcore:type=\"EXCEPTION\"[^>]->([^<]+)")

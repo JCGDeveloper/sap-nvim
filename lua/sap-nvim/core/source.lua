@@ -115,6 +115,11 @@ function M.open(name, group, opts)
         -- jobstart entrega un último elemento "" por el EOF: lo descartamos.
         if out[#out] == "" then table.remove(out) end
         vim.fn.writefile(out, path)
+        -- Apila el ORIGEN (el buffer actual, aún sin cambiar) en la pila de navegación para
+        -- que `-` vuelva al objeto anterior. Cubre TODA apertura (gd, búsqueda, browse,
+        -- include…). push_here ignora scratch/dashboard y deduplica, así que es seguro
+        -- aunque el caller ya hubiera apilado.
+        pcall(function() require("sap-nvim.core.navigate").push_here() end)
         -- `noswapfile`: los archivos de caché son artefactos del plugin (la fuente real es
         -- SAP, se re-leen al abrir), así que no queremos swap ni el aviso E325 "swap file
         -- already exists" al reabrirlos tras un cierre/cuelgue previo.
