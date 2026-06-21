@@ -12,18 +12,15 @@ function M.setup(opts)
     return
   end
 
+  -- Servidor MCP de ADT (fr0ster/mcp-abap-adt): CRUD completo + activar/testear/transportes.
+  -- Instalado global (`npm i -g @mcp-abap-adt/core` -> binario `mcp-abap-adt` en el PATH) con la
+  -- conexión en un .env (modo 600). El MISMO server que ya usa Claude Code.
+  local env_path = vim.fn.expand(opts.abap_adt_env_path or "~/.config/mcp-abap-adt/.env")
   mcphub.setup({
     servers = opts.servers or {
-      -- ARC-1: Servidor MCP seguro para SAP ADT
-      {
-        name = "arc-1",
-        cmd = { "node", opts.arc1_path or "~/arc-1/server.js" },
-        env = opts.arc1_env or {},
-      },
-      -- mcp-abap-adt-api: Servidor MCP ligero
       {
         name = "abap-adt",
-        cmd = { "node", opts.abap_adt_path or "~/mcp-abap-abap-adt-api/dist/index.js" },
+        cmd = opts.abap_adt_cmd or { "mcp-abap-adt", "--env-path", env_path },
         env = opts.abap_adt_env or {},
       },
     },
