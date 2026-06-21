@@ -144,18 +144,17 @@ function M.create_transport()
 	if not adt_http.is_available() then
 		return
 	end
+	-- NO exige estar dentro de un objeto: si hay uno abierto, lo usamos como referencia; si
+	-- no, se crea la orden referida al PAQUETE (su URI ADT es una referencia válida para el
+	-- endpoint de creación), igual que crear una orden "suelta" en SE01/SE10.
 	local ref, pkg = current_object()
-	if not ref or ref == "" then
-		notify("Abre un objeto ABAP primero.", vim.log.levels.WARN)
-		return
-	end
 
 	local function ask_pkg(cb)
 		if pkg and pkg ~= "" then
 			cb(pkg)
 		else
 			vim.ui.input({ prompt = "Paquete (DEVCLASS): " }, function(p)
-				if p and p ~= "" then
+				if p and vim.trim(p) ~= "" then
 					cb(p:upper())
 				end
 			end)
@@ -163,6 +162,8 @@ function M.create_transport()
 	end
 
 	ask_pkg(function(devclass)
+		-- Referencia del objeto: el objeto abierto, o el paquete si no hay ninguno.
+		local objref = (ref and ref ~= "") and ref or ("/sap/bc/adt/packages/" .. devclass:lower())
 		vim.ui.input({ prompt = "Descripción de la orden: " }, function(desc)
 			if not desc or vim.trim(desc) == "" then
 				return
@@ -175,7 +176,7 @@ function M.create_transport()
 				.. xmlesc(desc)
 				.. "</REQUEST_TEXT>"
 				.. "<REF>"
-				.. xmlesc(ref)
+				.. xmlesc(objref)
 				.. "</REF><OPERATION>I</OPERATION></DATA></asx:values></asx:abap>"
 
 			notify("Creando orden de transporte…")
