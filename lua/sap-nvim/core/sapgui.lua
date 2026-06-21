@@ -78,7 +78,15 @@ end
 -- abre el SAP GUI de Windows asociado a `.sap`.
 local function launch(lines)
 	local tmp = vim.fn.tempname() .. ".sap"
-	vim.fn.writefile(lines, tmp)
+	-- El SAP GUI de Windows EXIGE CRLF; con LF lo rechaza ("no es un acceso directo de SAP GUI").
+	-- Escribimos en binario con \r\n para no depender del 'fileformat' de Neovim.
+	local f = io.open(tmp, "wb")
+	if f then
+		f:write(table.concat(lines, "\r\n") .. "\r\n")
+		f:close()
+	else
+		vim.fn.writefile(lines, tmp)
+	end
 	if vim.fn.has("wsl") == 1 then
 		local win = vim.trim(vim.fn.system({ "wslpath", "-w", tmp }))
 		local ps = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
