@@ -192,16 +192,25 @@ local function cookie_file()
   return dir .. "/adt_cookies.txt"
 end
 
+-- Credenciales para curl SIN exponerlas en argv (cualquiera con `ps` vería `-u user:pass`).
+-- En su lugar pasamos `-K -` y curl lee `user = "u:p"` de STDIN. La contraseña NO toca disco
+-- (igual que el resto del módulo) ni la línea de comandos. En POST el cuerpo va por
+-- `--data-binary @fichero`, así que STDIN queda libre para esta config.
+local function curl_cfg(c)
+  local esc = function(s) return (tostring(s or "")):gsub("\\", "\\\\"):gsub('"', '\\"') end
+  return 'user = "' .. esc(c.user .. ":" .. c.pass) .. '"\n'
+end
+
 -- Obtiene (y cachea) el token CSRF y el cookie-jar de la sesión. Sync.
 local function ensure_token(c)
   if state.token then return state.token end
   local hdr = vim.fn.tempname()
   vim.fn.system({
-    "curl", "-sk", "-u", c.user .. ":" .. c.pass,
+    "curl", "-sk", "-K", "-",
     "-c", cookie_file(), "-H", "X-CSRF-Token: Fetch",
     "-D", hdr, "-o", "/dev/null",
     c.base .. "/sap/bc/adt/core/discovery?sap-client=" .. c.client,
-  })
+  }, curl_cfg(c))
   local lines = vim.fn.readfile(hdr); pcall(os.remove, hdr)
   for _, l in ipairs(lines) do
     local t = l:match("^[Xx]%-[Cc][Ss][Rr][Ff]%-[Tt]oken:%s*(%S+)")
@@ -224,7 +233,7 @@ function M.request(opts)
     for k, v in pairs(opts.query) do url = url .. "&" .. k .. "=" .. v end
   end
 
-  local args = { "curl", "-sk", "-u", c.user .. ":" .. c.pass, "-b", cookie_file() }
+  local args = { "curl", "-sk", "-K", "-", "-b", cookie_file() }
   if opts.accept then vim.list_extend(args, { "-H", "Accept: " .. opts.accept }) end
   if (opts.method or "GET"):upper() == "POST" then
     local token = ensure_token(c)
@@ -234,12 +243,12 @@ function M.request(opts)
     vim.fn.writefile(vim.split(opts.body or "", "\n"), bodyfile)
     vim.list_extend(args, { "--data-binary", "@" .. bodyfile })
     vim.list_extend(args, { url })
-    local out = vim.fn.system(args)
+    local out = vim.fn.system(args, curl_cfg(c))
     pcall(os.remove, bodyfile)
     return out
   else
     vim.list_extend(args, { url })
-    return vim.fn.system(args)
+    return vim.fn.system(args, curl_cfg(c))
   end
 end
 
@@ -252,7 +261,7 @@ local function build_args(c, opts)
   if opts.query then
     for k, v in pairs(opts.query) do url = url .. "&" .. k .. "=" .. v end
   end
-  local args = { "curl", "-sk", "-u", c.user .. ":" .. c.pass, "-b", cookie_file() }
+  local args = { "curl", "-sk", "-K", "-", "-b", cookie_file() }
   if opts.accept then vim.list_extend(args, { "-H", "Accept: " .. opts.accept }) end
   local bodyfile
   if (opts.method or "GET"):upper() == "POST" then
@@ -273,7 +282,7 @@ local function curl_request_async(opts, cb)
   if not c then cb(nil); return end
   local args, bodyfile = build_args(c, opts)
   local out = {}
-  return vim.fn.jobstart(args, {
+  local job = vim.fn.jobstart(args, {
     stdout_buffered = true,
     on_stdout = function(_, data) for _, l in ipairs(data) do out[#out + 1] = l end end,
     on_exit = function()
@@ -281,6 +290,13 @@ local function curl_request_async(opts, cb)
       cb(table.concat(out, "\n"))
     end,
   })
+  -- Las credenciales van por STDIN (`-K -`), no por argv. Cerramos stdin para que curl
+  -- termine de leer la config y continúe con la petición.
+  if job and job > 0 then
+    pcall(vim.fn.chansend, job, curl_cfg(c))
+    pcall(vim.fn.chanclose, job, "stdin")
+  end
+  return job
 end
 
 -- Solo se desactiva si el daemon NI ARRANCA (no por un timeout puntual).
@@ -347,7 +363,7 @@ function M.raw(opts)
   if opts.query then for k, v in pairs(opts.query) do url = url .. "&" .. k .. "=" .. v end end
 
   local method = (opts.method or "GET"):upper()
-  local args = { "curl", "-sk", "-u", c.user .. ":" .. c.pass, "-b", cookie_file(), "-c", cookie_file() }
+  local args = { "curl", "-sk", "-K", "-", "-b", cookie_file(), "-c", cookie_file() }
   vim.list_extend(args, { "-X", method })
   if method ~= "GET" then
     local token = ensure_token(c)
@@ -367,7 +383,7 @@ function M.raw(opts)
   local hdrfile = vim.fn.tempname()
   vim.list_extend(args, { "-D", hdrfile, url })
 
-  local body = vim.fn.system(args)
+  local body = vim.fn.system(args, curl_cfg(c))
   local headers, code = "", 0
   pcall(function()
     headers = table.concat(vim.fn.readfile(hdrfile), "\n")

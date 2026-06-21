@@ -24,31 +24,29 @@ function M.setup(opts)
         return {}, "Especifica un paquete SAP (sap://Z_MI_PAQUETE)"
       end
 
-      local handle = io.popen("sapcli search " .. package .. " 2>/dev/null")
-      if not handle then
-        return {}, "sapcli no encontrado"
+      -- vim.fn.system con LISTA: invoca sapcli directamente (sin shell), así un nombre de
+      -- paquete con metacaracteres no puede inyectar comandos.
+      local out = vim.fn.system({ "sapcli", "search", package })
+      if vim.v.shell_error ~= 0 then
+        return {}, "sapcli falló al buscar " .. package
       end
 
       local entries = {}
-      for line in handle:lines() do
-        table.insert(entries, {
-          name = line,
-          type = "file",
-        })
+      for line in (out or ""):gmatch("[^\r\n]+") do
+        if vim.trim(line) ~= "" then
+          table.insert(entries, { name = line, type = "file" })
+        end
       end
-      handle:close()
       return entries
     end,
 
     --- Leer objeto remoto
     read = function(_, url)
       local object = url.path:match("^/(.+)$") or ""
-      local handle = io.popen("sapcli cat " .. object .. " 2>/dev/null")
-      if not handle then
+      local content = vim.fn.system({ "sapcli", "cat", object })
+      if vim.v.shell_error ~= 0 then
         return "", "Error leyendo " .. object
       end
-      local content = handle:read("*a")
-      handle:close()
       return content
     end,
 
@@ -61,7 +59,7 @@ function M.setup(opts)
         f:write(data)
         f:close()
       end
-      os.execute("sapcli put " .. object .. " " .. tmpfile .. " 2>/dev/null")
+      vim.fn.system({ "sapcli", "put", object, tmpfile })
       os.remove(tmpfile)
       return true
     end,
