@@ -74,27 +74,46 @@ local function build_shortcut(conn, fn, ticket)
 	return lines
 end
 
--- Escribe el .sap y lo lanza con el SO. En WSL: ruta Windows (wslpath) + Start-Process, así lo
--- abre el SAP GUI de Windows asociado a `.sap`.
+-- Contenido del .sap como texto CRLF (Windows lo exige; con LF dice "no es un acceso directo").
+local function sap_content(lines)
+	return table.concat(lines, "\r\n") .. "\r\n"
+end
+
+-- Escribe el .sap y lo lanza con el SO.
+-- En WSL: el SAP GUI RECHAZA shortcuts en rutas de red (\\wsl.localhost\...). Por eso lo
+-- escribimos en un directorio LOCAL de Windows (C:\Users\Public\sap-nvim) y lanzamos esa ruta.
 local function launch(lines)
-	local tmp = vim.fn.tempname() .. ".sap"
-	-- El SAP GUI de Windows EXIGE CRLF; con LF lo rechaza ("no es un acceso directo de SAP GUI").
-	-- Escribimos en binario con \r\n para no depender del 'fileformat' de Neovim.
-	local f = io.open(tmp, "wb")
-	if f then
-		f:write(table.concat(lines, "\r\n") .. "\r\n")
-		f:close()
-	else
-		vim.fn.writefile(lines, tmp)
-	end
+	local content = sap_content(lines)
 	if vim.fn.has("wsl") == 1 then
-		local win = vim.trim(vim.fn.system({ "wslpath", "-w", tmp }))
+		local dir_wsl, dir_win = "/mnt/c/Users/Public/sap-nvim", "C:\\Users\\Public\\sap-nvim"
+		pcall(vim.fn.mkdir, dir_wsl, "p")
+		local fname = "shortcut_" .. os.time() .. ".sap"
+		local f = io.open(dir_wsl .. "/" .. fname, "wb")
+		if not f then
+			notify("No pude escribir el shortcut en " .. dir_wsl, vim.log.levels.ERROR)
+			return
+		end
+		f:write(content)
+		f:close()
+		local win_path = dir_win .. "\\" .. fname
 		local ps = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-		vim.fn.system({ ps, "-NoProfile", "-Command", "Start-Process '" .. win:gsub("'", "''") .. "'" })
+		vim.fn.system({ ps, "-NoProfile", "-Command", "Start-Process '" .. win_path:gsub("'", "''") .. "'" })
 		if vim.v.shell_error ~= 0 then
 			notify("No se pudo lanzar el SAP GUI en Windows (¿instalado y .sap asociado?).", vim.log.levels.ERROR)
 		end
-	elseif vim.ui and vim.ui.open then
+		vim.defer_fn(function()
+			pcall(os.remove, dir_wsl .. "/" .. fname)
+		end, 60000)
+		return
+	end
+	-- Linux nativo / Mac
+	local tmp = vim.fn.tempname() .. ".sap"
+	local f = io.open(tmp, "wb")
+	if f then
+		f:write(content)
+		f:close()
+	end
+	if vim.ui and vim.ui.open then
 		pcall(vim.ui.open, tmp)
 	else
 		notify("No sé abrir .sap en esta plataforma.", vim.log.levels.WARN)
