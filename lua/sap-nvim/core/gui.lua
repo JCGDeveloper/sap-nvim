@@ -7,10 +7,9 @@ local function notify(msg, level)
 	vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
--- Abre una URL en el navegador de Windows desde WSL
-local function open_url(url)
+-- Abre una URL en el navegador de Windows (desde WSL) o el del SO.
+local function open_in_browser(url)
 	notify("Lanzando navegador en Windows...", vim.log.levels.INFO)
-
 	-- 1. Específico para WSL usando ruta absoluta de Windows
 	if vim.fn.has("wsl") == 1 then
 		-- Usamos la ruta absoluta a PowerShell para que no dependa del $PATH de Linux.
@@ -23,20 +22,57 @@ local function open_url(url)
 		local out = vim.fn.system({ ps_path, "-NoProfile", "-Command", "Start-Process " .. ps_url })
 		if vim.v.shell_error ~= 0 then
 			notify("Error al abrir navegador: " .. out, vim.log.levels.ERROR)
-			-- Te copiamos la URL al portapapeles por si falla Windows
-			vim.fn.setreg("+", url)
+			vim.fn.setreg("+", url) -- al portapapeles por si falla Windows
 		end
 		return
 	end
-
-	-- 2. Fallbacks para Linux Nativo o Mac
+	-- 2. Fallbacks para Linux nativo o Mac
 	if vim.ui and vim.ui.open then
 		pcall(vim.ui.open, url)
 		return
 	end
-
 	notify("No se pudo abrir automáticamente. URL copiada al portapapeles.", vim.log.levels.WARN)
 	vim.fn.setreg("+", url)
+end
+
+-- Abre la URL en un navegador DENTRO de Neovim: carbonyl (Chromium en terminal) en un split.
+local function open_in_terminal(url)
+	if vim.fn.executable("carbonyl") == 0 then
+		notify("carbonyl no está instalado (npm i -g carbonyl). Abriendo en el navegador.", vim.log.levels.WARN)
+		open_in_browser(url)
+		return
+	end
+	notify("Abriendo WebGUI en la terminal (carbonyl)...", vim.log.levels.INFO)
+	vim.cmd("botright new") -- buffer vacío en split horizontal para el terminal
+	vim.api.nvim_win_set_height(0, math.max(20, math.floor(vim.o.lines * 0.7)))
+	vim.b.sap_webgui = true
+	-- jobstart con term=true engancha un terminal al buffer actual (nvim 0.10+). q sale del modo
+	-- terminal; el split se cierra con :q. carbonyl: ratón + scroll + JS (Chromium real).
+	vim.fn.jobstart({ "carbonyl", url }, { term = true })
+	vim.cmd("startinsert")
+end
+
+-- Punto único: SIEMPRE pregunta dónde abrir (1 navegador / 2 terminal), salvo que el usuario
+-- fije vim.g.sap_gui_viewer = "browser"|"terminal" para no preguntar.
+local function open_url(url)
+	local pref = vim.g.sap_gui_viewer
+	if pref == "browser" then
+		return open_in_browser(url)
+	elseif pref == "terminal" then
+		return open_in_terminal(url)
+	end
+	vim.ui.select({ "1. Navegador (Windows)", "2. Terminal (dentro de Neovim)" }, {
+		prompt = "¿Dónde abrir la WebGUI?",
+	}, function(choice)
+		if not choice then
+			return
+		end
+		if choice:match("^2") then
+			open_in_terminal(url)
+		else
+			open_in_browser(url)
+		end
+	end)
 end
 
 local function base_client()
