@@ -217,6 +217,23 @@ function source:get_completions(ctx, callback)
   -- Solo necesitamos las líneas hasta el cursor para detectar el contexto.
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, row, false)
 
+  -- PRIORIDAD POR CONTEXTO (CDS): los objetos CDS se editan con filetype `abap`, pero tras
+  -- `alias.` o `from/join` SOLO tienen sentido los campos/fuentes (los aporta `sap_adt` por
+  -- ddicrepositoryaccess). Aquí callamos los keywords ABAP para no tapar esa lista.
+  local meta = vim.b[bufnr].sap_obj
+  local CDS_G = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+  if meta and CDS_G[meta.group] then
+    local col = (ctx and ctx.cursor and ctx.cursor[2]) or vim.api.nvim_win_get_cursor(0)[2]
+    local before = (lines[row] or ""):sub(1, col)
+    if before:match("[%w_]%.[%w_]*$")
+      or before:match("[Ff][Rr][Oo][Mm]%s+[%w_/]*$")
+      or before:match("[Jj][Oo][Ii][Nn]%s+[%w_/]*$")
+    then
+      callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = false })
+      return function() end
+    end
+  end
+
   local items = {}
   vim.list_extend(items, build_context_items(detect_context(lines, row)))
   vim.list_extend(items, build_static_items())
