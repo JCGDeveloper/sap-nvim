@@ -541,6 +541,37 @@ function M.completion(bufnr, line, col, cb)
 	cb({})
 end
 
+-- Diagnóstico: resuelve el contexto y devuelve (info, cuerpo_crudo) de ddicrepositoryaccess.
+function M.completion_debug(bufnr, line, col, cb)
+	local linetext = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)[1] or ""
+	local before = linetext:sub(1, col)
+	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+	local info = { aliases = cds_alias_map(src) }
+	local alias, prefix = before:match("([%w_/]+)%.([%w_/]*)$")
+	if alias then
+		info.kind, info.alias, info.prefix = "field", alias, prefix
+		info.table = info.aliases[alias:lower()] or alias
+		info.path = info.table .. "."
+	else
+		local sp = before:match("[Ff][Rr][Oo][Mm]%s+([%w_/]+)$") or before:match("[Jj][Oo][Ii][Nn]%s+([%w_/]+)$")
+		if sp then
+			info.kind, info.path = "source", sp .. "*"
+		end
+	end
+	if not info.path then
+		cb(info, "(sin contexto de campo/fuente bajo el cursor)")
+		return
+	end
+	-- Síncrono por curl (sin daemon) para ver la verdad del servidor en el diagnóstico.
+	local body = adt.request({
+		method = "GET",
+		path = "/sap/bc/adt/ddic/ddl/ddicrepositoryaccess",
+		query = { datasource = info.path },
+		accept = "application/*",
+	})
+	cb(info, body or "(nil)")
+end
+
 local RAP_PATH = {
 	ddls = "/sap/bc/adt/ddic/ddl/sources/%s",
 	ddlx = "/sap/bc/adt/ddic/ddlx/sources/%s",

@@ -338,15 +338,20 @@ function M.complete_debug()
 
 	local CDS_G = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
 	if meta and CDS_G[meta.group] then
-		-- CDS: ruta nueva (ddicrepositoryaccess). Mostramos el alias resuelto y los campos.
+		-- CDS: ruta nueva (ddicrepositoryaccess). Mostramos contexto, datasource y XML crudo.
 		add("ruta      : CDS (ddicrepositoryaccess)")
-		local alias = before:match("([%w_/]+)%.[%w_/]*$")
-		add("alias bajo cursor: " .. tostring(alias))
-		require("sap-nvim.core.cds").completion(bufnr, row, col, function(items)
-			add("propuestas: " .. #(items or {}))
-			for i = 1, math.min(#(items or {}), 40) do
-				add("  · " .. tostring(items[i].word) .. "  [kind " .. tostring(items[i].kind) .. "]")
-			end
+		require("sap-nvim.core.cds").completion_debug(bufnr, row, col, function(info, body)
+			add("contexto  : " .. tostring(info.kind))
+			add("alias map : " .. vim.inspect(info.aliases))
+			add("alias     : " .. tostring(info.alias) .. "  -> tabla: " .. tostring(info.table))
+			add("datasource: " .. tostring(info.path))
+			local names = {}
+			for nm in (body or ""):gmatch('adtcore:name="([^"]*)"') do names[#names + 1] = nm end
+			add("nombres parseados (adtcore:name): " .. #names)
+			for i = 1, math.min(#names, 30) do add("  · " .. names[i]) end
+			add("")
+			add("== respuesta cruda ddicrepositoryaccess (primeros 2500 chars) ==")
+			for _, l in ipairs(vim.split((body or ""):sub(1, 2500), "\n", { plain = true })) do add(l) end
 			vim.schedule(show)
 		end)
 		return
