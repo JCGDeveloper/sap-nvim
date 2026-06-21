@@ -158,7 +158,7 @@ HTTP, vía el binario `vsp` en `~/sap-mcp/vsp` o reimplementación).
 - **SDD primero:** para cada feature nueva, escribir/actualizar su brief en `briefs/`
   (objetivo, comandos sapcli/ADT verificados, requisitos, archivos, verificación) ANTES de
   codificar. Patrón de referencia: `core/source.lua`, `core/navigate.lua`, `core/data.lua`.
-- **Verificar EN VIVO** cada cambio contra el contexto `PruebasJoaquin` con objetos
+- **Verificar EN VIVO** cada cambio contra el contexto `<tu-contexto-de-pruebas>` con objetos
   **propios** (`ZCAR_*`, `ZRJCG_*`), NUNCA sobre objetos estándar SAP, dejando el sistema
   como estaba (patrón roundtrip + revert).
 - **Módulos limpios:** un módulo por feature en `lua/sap-nvim/core/`, registrado en

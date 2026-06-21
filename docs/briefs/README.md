@@ -9,7 +9,7 @@ Lanzar con `isolation: worktree` (copia aislada del repo) y pasarle:
 > Lee `docs/briefs/<Fxx>.md` y `docs/SDD-PARIDAD-VSCODE.md`. Implementa la feature
 > siguiendo el patrón de `lua/sap-nvim/core/source.lua` y `core/navigate.lua`. Registra
 > el módulo en `lua/sap-nvim/init.lua` y los keymaps/ayuda en `core/keymaps.lua`.
-> Verifica en vivo contra el contexto `PruebasJoaquin` con un objeto `ZCAR_*` propio,
+> Verifica en vivo contra el contexto `<tu-contexto-de-pruebas>` con un objeto `ZCAR_*` propio,
 > sin tocar objetos estándar SAP, dejando el sistema como estaba.
 
 ## Convenciones (todas las features)

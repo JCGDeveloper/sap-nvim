@@ -1,88 +1,106 @@
-# Configuración de Servidores MCP para SAP
+# Capa de IA — servidor MCP de ADT + agentes que programan en SAP
 
-## ARC-1 (Recomendado para Producción)
+Esto conecta un **servidor MCP de ABAP ADT** a un agente de IA (Claude Code) para que pueda
+**leer, escribir, activar, ejecutar, testear y depurar** ABAP en tu sistema — con barreras de
+seguridad. Es **opcional** y vive fuera del repo (en `~/.config` y `~/.claude`); aquí solo se
+documenta el procedimiento. **No pongas credenciales en el repo.**
 
-### Instalación
-```bash
-git clone https://github.com/marianfoo/arc-1.git ~/sap-mcp-servers/arc-1
-cd ~/sap-mcp-servers/arc-1
-npm install
+---
+
+## 1. Servidor MCP (CRUD ADT)
+
+Usamos **[`fr0ster/mcp-abap-adt`](https://github.com/fr0ster/mcp-abap-adt)** (`@mcp-abap-adt/core`):
+CRUD completo on-prem S/4 (clases, interfaces, FUGR/FM, programas, CDS/RAP, DDIC), activación,
+transportes, ejecución y runtime (dumps/SAT). ~168 herramientas.
+
+```sh
+npm install -g @mcp-abap-adt/core      # binario `mcp-abap-adt` en el PATH
 ```
 
-### Configuración
-Crear archivo `.env`:
-
+### Conexión (auth) — `~/.config/mcp-abap-adt/.env` (modo 600, NO en el repo)
 ```env
-# Conexión SAP
-SAP_ADT_URL=https://sap.example.com:443
-SAP_CLIENT=100
-SAP_USER=tu_usuario
-SAP_PASS=tu_contraseña
-
-# Seguridad
-ARC_DEFAULT_DENY=true
-ARC_ALLOWED_PACKAGES=Z*,Y*
-ARC_READ_ONLY=false
+SAP_URL=https://<host>:<puerto-https>      # p.ej. https://miSistema:44300
+SAP_CLIENT=<cliente>
+SAP_LANGUAGE=EN
+SAP_AUTH_TYPE=basic
+SAP_SYSTEM_TYPE=onprem                     # imprescindible on-prem (habilita Programs, etc.)
+SAP_USERNAME=<usuario>
+SAP_PASSWORD=<contraseña>
+SAP_RESPONSIBLE=<usuario>
+TLS_REJECT_UNAUTHORIZED=0                   # si el cert es autofirmado
+```
+```sh
+chmod 600 ~/.config/mcp-abap-adt/.env
 ```
 
-### Herramientas MCP Expuestas
+### Registrar en Claude Code
+```sh
+claude mcp add abap-adt --scope user -- mcp-abap-adt --env-path ~/.config/mcp-abap-adt/.env
+claude mcp list                            # debe mostrar  abap-adt … ✔ Connected
+```
 
-| Herramienta | Descripción |
+---
+
+## 2. Agentes ABAP (`~/.claude/agents/`)
+
+| Agente | Rol |
 |---|---|
-| `abap_search` | Buscar objetos en el repositorio SAP |
-| `abap_get_source` | Leer código fuente de un objeto |
-| `abap_set_source` | Modificar código fuente |
-| `abap_activate` | Activar objetos |
-| `abap_syntax_check` | Verificar sintaxis |
-| `abap_get_table` | Obtener definición de tabla DDIC |
-| `abap_get_table_contents` | Leer datos de una tabla |
-| `abap_lock` | Bloquear objeto para edición |
-| `abap_unlock` | Liberar bloqueo |
-| `abap_atc_run` | Ejecutar ABAP Test Cockpit |
-| `abap_aunit_run` | Ejecutar pruebas unitarias |
+| `abap-orchestrator` | Coordina el bucle spec → implementa → activa → testea → revisa |
+| `abap-implementer` | Crea/actualiza objetos y los **activa**; corrige errores de activación |
+| `abap-tester` | **AUnit + ATC** (Clean ABAP); bloqueante |
+| `abap-reviewer` | Revisión Clean ABAP (nombres, sintaxis moderna, SQL, errores) |
+| `abap-debugger` | **Debug post-mortem**: dumps (ST22), reproducir, perfilar (SAT), causa raíz, fix |
 
-## mcp-abap-adt-api (Ligero)
+> No hay step-debugger interactivo por MCP (breakpoints/variables) — eso es el depurador manual
+> de nvim (`<leader>ad`). El agente hace diagnóstico post-mortem + reproducción + perfilado.
 
-### Instalación
-```bash
-git clone https://github.com/mario-andreschak/mcp-abap-abap-adt-api.git ~/sap-mcp-servers/mcp-abap-adt-api
-cd ~/sap-mcp-servers/mcp-abap-adt-api
-npm install
+Uso (tras reiniciar Claude Code):
+> *"Usa el **abap-orchestrator**: crea ZCL_DEMO con un método que lea 10 filas de VBAK y las
+> muestre; actívala, ejecútala y pasa AUnit + ATC."*
+> *"Usa el **abap-debugger**: ZNVIM ha dado un dump, dime por qué y arréglalo."*
+
+---
+
+## 3. Convenciones y restricciones del proyecto
+
+**`~/.claude/sap/conventions.md`** — nomenclatura por proyecto, restricciones DURAS (lo prohibido),
+reglas obligatorias, sintaxis nueva y la variante ATC de la empresa. Los agentes lo leen y lo
+**obedecen**. Edítalo para "mandarles" las reglas de tu empresa/proyecto.
+
+---
+
+## 4. Seguridad — solo lectura en estándar, escritura solo Z/Y
+
+Un **hook** `PreToolUse` (`~/.claude/hooks/abap-zonly-guard.py`, registrado en
+`~/.claude/settings.json`) **bloquea** cualquier `Create/Update/Delete/Write` del MCP sobre objetos
+que no sean `Z*/Y*` (o namespace `/.../`). Las lecturas pasan. Capas:
+
+1. **Autorizaciones de SAP** — tu usuario de dev no puede modificar estándar (muro real).
+2. **Agentes** — instruidos para `Z*/Y*` y cliente sandbox.
+3. **Hook** — bloqueo duro a nivel de herramienta (probado).
+
+```jsonc
+// ~/.claude/settings.json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "mcp__abap-adt__.*",
+        "hooks": [ { "type": "command",
+          "command": "python3 ~/.claude/hooks/abap-zonly-guard.py" } ] }
+    ]
+  }
+}
 ```
 
-### Uso con Neovim
+---
 
-```lua
--- mcphub.nvim
-require("mcphub").setup({
-  servers = {
-    {
-      name = "arc-1",
-      cmd = { "node", "~/sap-mcp-servers/arc-1/server.js" },
-    },
-  },
-})
-```
+## 5. Usarlo desde Neovim
 
-### Ejemplo de Interacción con IA
+- **Chat natural**: `coder/claudecode.nvim` (en `~/.config/nvim-sap/lua/plugins/ai.lua`) abre
+  Claude Code en un panel — **`<leader>ii`**. Usa tu suscripción (sin API key); el Claude que abre
+  ya tiene el MCP + agentes + convenciones + hook. `<leader>is` (visual) envía selección;
+  `<leader>id`/`ix` aceptan/rechazan los diffs propuestos.
+- **Inspeccionar el MCP**: `mcphub.nvim` (en `~/.config/nvim-sap/lua/plugins/mcp.lua` +
+  `~/.config/mcphub/servers.json`) — **`<leader>aM`** (`:MCPHub`) para ver/ejecutar tools una a una.
 
-```
-Usuario: "Explícame cómo funciona ZCL_FACTURACION y corrígeme el error"
-
-1. IA usa abap_search → localiza ZCL_FACTURACION
-2. IA usa abap_get_source → lee el código
-3. IA analiza: detecta variable no inicializada
-4. IA usa abap_syntax_check → verifica corrección
-5. IA usa abap_set_source → aplica el fix
-6. IA usa abap_activate → activa en SAP
-7. IA responde: "Error corregido: v_total no estaba inicializado. 
-   Añadí v_total = 0 antes del loop. Objeto activado."
-```
-
-### Seguridad
-
-ARC-1 implementa:
-- **Default deny**: Sin permiso explícito, la IA solo puede leer
-- **Package whitelist**: Solo paquetes Z*, Y* permitidos
-- **Principal propagation**: Opera con tu usuario SAP real
-- **Read-only mode**: Opción para sistemas productivos
+> Avante/codecompanion necesitan una API key de LLM; por eso usamos Claude Code (suscripción).

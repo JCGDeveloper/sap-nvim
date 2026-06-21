@@ -52,7 +52,7 @@ ADT, y por cada feature un consumidor (`intel.lua` completion, `intel.hover`, `i
 `intel.refs`). Reutiliza `object_uri(group,name)` (mapa group→URI ADT) ya en `intel.lua`.
 
 ## Verificación
-Cada endpoint, en vivo contra `PruebasJoaquin`, sobre objetos propios y del sistema
+Cada endpoint, en vivo contra `<tu-contexto-de-pruebas>`, sobre objetos propios y del sistema
 (solo lectura). Ya verificado: completion (50 propuestas tras `cl_abap_typedescr=>`).
 
 ## Seguridad

@@ -24,7 +24,7 @@ ya hace mejor**. Cero regresiones, cero riesgo para SAP.
 2. Delegas la construcción al **implementador**; la investigación al **investigador**.
 3. NINGUNA feature se cierra sin pasar por el **validador de código** (correctitud, carga
    en nvim, estilo) Y el **auditor de seguridad** (§7). Ambos son bloqueantes.
-4. La validación EN VIVO contra `PruebasJoaquin` con objetos propios (`ZCAR_*`,`ZRJCG_*`)
+4. La validación EN VIVO contra tu contexto de pruebas con objetos propios (`ZCAR_*`,`ZRJCG_*`)
    la hace el USUARIO; tú preparas el roundtrip+revert y se lo pides.
 5. Reutiliza módulos existentes (`objtype`, `adt`, `source`, `config`); no dupliques.
 6. Atajos ABAP siempre buffer-local en `keymaps.lua` (FileType abap) — `<leader>a` choca

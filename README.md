@@ -4,6 +4,9 @@ Un plugin de Neovim para desarrollo ABAP en SAP. Se integra con `sapcli` y `abap
 traer herramientas de nivel Eclipse/VSCode a Neovim: diagnósticos en tiempo real, activación
 con quickfix, runner de tests, gestión de transportes, explorador de objetos, soporte CDS y más.
 
+> 📖 **[Manual de usuario completo → `docs/MANUAL.md`](docs/MANUAL.md)** — instalación, todas las
+> funciones, atajos y la capa de IA (agentes que programan en SAP).
+
 ---
 
 ## Requisitos

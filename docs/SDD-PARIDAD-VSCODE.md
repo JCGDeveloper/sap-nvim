@@ -161,6 +161,6 @@ sapcli verificados, archivos a tocar y criterios de verificación en vivo.
 
 ## 8. Verificación
 
-Cada feature se valida **en vivo contra el sistema** (contexto `PruebasJoaquin`) con un
+Cada feature se valida **en vivo contra el sistema** (contexto `<tu-contexto-de-pruebas>`) con un
 objeto de prueba propio (p.ej. paquete/programa `ZCAR_*`), nunca sobre objetos estándar SAP,
 y dejando el sistema en su estado original (patrón roundtrip + revert ya usado).
