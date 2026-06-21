@@ -167,8 +167,10 @@ function M.parse(body)
 		for block in body:gmatch("<SCC_COMPLETION>(.-)</SCC_COMPLETION>") do
 			local id = block:match("<IDENTIFIER>([^<]*)</IDENTIFIER>")
 			local kind = block:match("<KIND>([^<]*)</KIND>")
+			-- PREFIXLENGTH: nº de chars ANTES del cursor que la propuesta reemplaza (como VSCode).
+			local plen = tonumber(block:match("<PREFIXLENGTH>([^<]*)</PREFIXLENGTH>"))
 			if id and id ~= "" and id ~= "@end" then
-				items[#items + 1] = { word = id, kind = kind }
+				items[#items + 1] = { word = id, kind = kind, prefixlength = plen }
 			end
 		end
 	end
@@ -270,12 +272,14 @@ function M.proposals_async(bufnr, line, col, cb)
 	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
 	local q = { uri = uri .. context_suffix(bufnr) .. "%23start=" .. line .. "," .. col, signalCompleteness = "true" }
 
-	-- ABAP normal
+	-- ABAP normal. Content-Type `application/*` EXACTAMENTE como el cliente oficial
+	-- (abap-adt-api: codeCompletion). Con `text/plain` el servidor parsea mal/rechaza la
+	-- fuente en varios contextos (TYPE, `wa-campo`), igual que pasaba en CDS.
 	adt_http.request_async({
 		method = "POST",
 		path = "/sap/bc/adt/abapsource/codecompletion/proposal",
 		query = q,
-		content_type = "text/plain",
+		content_type = "application/*",
 		body = src,
 	}, function(body)
 		cb(M.parse(body))

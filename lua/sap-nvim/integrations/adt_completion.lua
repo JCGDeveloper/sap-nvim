@@ -31,6 +31,10 @@ function source:get_completions(ctx, callback)
 	-- ABAP: acceso a campo de estructura `wa-campo` (guion, NO `->`, y sin espacio antes del
 	-- guion para no confundir con la resta `a - b`). El servidor ADT devuelve los campos.
 	local struct_field = before:match("[%w_]%-[%w_]*$") ~= nil
+	-- ABAP: tras `TYPE ` (o `LIKE `) sugerir tipos/tablas DDIC ya desde el espacio (como VSCode).
+	-- Requiere espacio antes de `type`/`like` para no saltar con variables como `lv_type`.
+	local bl = before:lower()
+	local type_ctx = bl:match("%s+type%s+[%w_/]*$") ~= nil or bl:match("%s+like%s+[%w_/]*$") ~= nil
 
 	-- 🔥 FIX: Le decimos a Blink EXACTAMENTE qué letras acabas de teclear
 	-- para que sepa cómo filtrarlo y cómo reemplazarlo.
@@ -56,6 +60,7 @@ function source:get_completions(ctx, callback)
 		and not cds_field
 		and not cds_anno_val
 		and not struct_field
+		and not type_ctx
 		and #word < 2
 	then
 		callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = true })
@@ -71,6 +76,9 @@ function source:get_completions(ctx, callback)
 		local typed_len = #word
 
 		for _, p in ipairs(props) do
+			-- Rango a reemplazar: el PREFIXLENGTH del servidor (como VSCode) si viene; si no,
+			-- el heurístico de lo tecleado. Así `wa-campo`, namespaces `/x/` y `<fs>` van bien.
+			local plen = p.prefixlength or typed_len
 			local it = {
 				label = p.word,
 				kind = KIND_MAP[p.kind or ""] or Kind.Text,
@@ -80,7 +88,7 @@ function source:get_completions(ctx, callback)
 				textEdit = {
 					newText = p.word,
 					range = {
-						start = { line = ctx.cursor[1] - 1, character = ctx.cursor[2] - typed_len },
+						start = { line = ctx.cursor[1] - 1, character = ctx.cursor[2] - plen },
 						["end"] = { line = ctx.cursor[1] - 1, character = ctx.cursor[2] },
 					},
 				},
