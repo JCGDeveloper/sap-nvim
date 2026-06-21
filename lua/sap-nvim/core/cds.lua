@@ -462,6 +462,85 @@ function M.annotation_proposals(prefix, cb)
 	end)
 end
 
+-- ── Completado de campos / fuentes CDS (como VSCode) ──────────────────────────
+-- El endpoint /abapsource/codecompletion NO sirve para DDL (lanza ParameterValueInvalid).
+-- VSCode resuelve el alias del FROM/JOIN y pide campos/fuentes a `ddicrepositoryaccess`.
+
+-- Mapa alias->fuente leyendo los from/join del fuente CDS.
+local function cds_alias_map(src)
+	local map = {}
+	for tbl, alias in src:gmatch("[Ff][Rr][Oo][Mm]%s+([%w_/]+)%s+[Aa][Ss]%s+([%w_/]+)") do
+		map[alias:lower()] = tbl
+	end
+	for tbl, alias in src:gmatch("[Jj][Oo][Ii][Nn]%s+([%w_/]+)%s+[Aa][Ss]%s+([%w_/]+)") do
+		map[alias:lower()] = tbl
+	end
+	-- from/join sin alias: la fuente es su propio "alias".
+	for tbl in src:gmatch("[Ff][Rr][Oo][Mm]%s+([%w_/]+)") do map[tbl:lower()] = map[tbl:lower()] or tbl end
+	for tbl in src:gmatch("[Jj][Oo][Ii][Nn]%s+([%w_/]+)") do map[tbl:lower()] = map[tbl:lower()] or tbl end
+	return map
+end
+
+-- GET ddicrepositoryaccess?datasource=<path> -> lista de nombres. `tabla.` da los campos;
+-- `prefijo*` da las fuentes (tablas/vistas) que empiezan por el prefijo.
+local function ddic_access(path, cb)
+	adt.request_async({
+		method = "GET",
+		path = "/sap/bc/adt/ddic/ddl/ddicrepositoryaccess",
+		query = { datasource = path },
+		accept = "application/*",
+	}, function(body)
+		local names, seen = {}, {}
+		for nm in (body or ""):gmatch('adtcore:name="([^"]*)"') do
+			if nm ~= "" and not seen[nm] then
+				seen[nm] = true
+				names[#names + 1] = nm
+			end
+		end
+		cb(names)
+	end)
+end
+
+-- Completado en un buffer CDS en (line,col). Entrega items {word,kind} por cb.
+--   alias.campo  -> campos de la fuente resuelta (kind "1")
+--   from/join X  -> fuentes que empiezan por X    (kind "2")
+function M.completion(bufnr, line, col, cb)
+	local linetext = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)[1] or ""
+	local before = linetext:sub(1, col)
+	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+
+	-- 1) alias.campo -> campos de la fuente
+	local alias, prefix = before:match("([%w_/]+)%.([%w_/]*)$")
+	if alias then
+		local tbl = cds_alias_map(src)[alias:lower()] or alias
+		ddic_access(tbl .. ".", function(names)
+			local items, pl = {}, prefix:lower()
+			for _, n in ipairs(names) do
+				if n:lower() ~= tbl:lower() and (pl == "" or n:lower():sub(1, #pl) == pl) then
+					items[#items + 1] = { word = n, kind = "1" }
+				end
+			end
+			cb(items)
+		end)
+		return
+	end
+
+	-- 2) tras from/join -> nombres de fuentes
+	local sprefix = before:match("[Ff][Rr][Oo][Mm]%s+([%w_/]+)$") or before:match("[Jj][Oo][Ii][Nn]%s+([%w_/]+)$")
+	if sprefix then
+		ddic_access(sprefix .. "*", function(names)
+			local items = {}
+			for _, n in ipairs(names) do
+				items[#items + 1] = { word = n, kind = "2" }
+			end
+			cb(items)
+		end)
+		return
+	end
+
+	cb({})
+end
+
 local RAP_PATH = {
 	ddls = "/sap/bc/adt/ddic/ddl/sources/%s",
 	ddlx = "/sap/bc/adt/ddic/ddlx/sources/%s",

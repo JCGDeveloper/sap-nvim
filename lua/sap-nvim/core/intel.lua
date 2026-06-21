@@ -220,6 +220,17 @@ function M.proposals_async(bufnr, line, col, cb)
 		return
 	end
 
+	-- CDS/RAP: el codecompletion de ABAP NO sirve para DDL (devuelve ParameterValueInvalid).
+	-- Resolvemos el alias del FROM/JOIN y pedimos campos/fuentes a ddicrepositoryaccess (VSCode).
+	local cmeta = vim.b[bufnr].sap_obj
+	local CDS_G = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+	if cmeta and CDS_G[cmeta.group] then
+		require("sap-nvim.core.cds").completion(bufnr, line, col, function(items)
+			cb(items or {})
+		end)
+		return
+	end
+
 	local before_lower = before:lower()
 	local is_type = before_lower:match("type%s+ref%s+to%s+([%w_]*)$")
 
@@ -250,17 +261,12 @@ function M.proposals_async(bufnr, line, col, cb)
 	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
 	local q = { uri = uri .. context_suffix(bufnr) .. "%23start=" .. line .. "," .. col, signalCompleteness = "true" }
 
-	-- CDS/RAP: el cliente oficial (abap-adt-api) postea la fuente como `application/*`. ABAP
-	-- sigue con `text/plain` (funciona). El group viene en sap_obj (ddls/ddlx/dcl/bdef/srvd).
-	local cmeta = vim.b[bufnr].sap_obj
-	local CDS_G = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
-	local ctype = (cmeta and CDS_G[cmeta.group]) and "application/*" or "text/plain"
-
+	-- Aquí solo llega ABAP (CDS se resolvió arriba con ddicrepositoryaccess).
 	adt_http.request_async({
 		method = "POST",
 		path = "/sap/bc/adt/abapsource/codecompletion/proposal",
 		query = q,
-		content_type = ctype,
+		content_type = "text/plain",
 		body = src,
 	}, function(body)
 		cb(M.parse(body))
@@ -314,44 +320,64 @@ function M.complete_debug()
 	add("cursor    : línea " .. row .. ", col " .. col)
 	add("antes     : '" .. before .. "'")
 	add("adt avail : " .. tostring(adt_http.is_available()))
+
+	-- Vuelca `out` (aplanando "\n") a un scratch.
+	local function show()
+		local flat = {}
+		for _, s in ipairs(out) do
+			for _, l in ipairs(vim.split(tostring(s):gsub("\r", ""), "\n", { plain = true })) do
+				flat[#flat + 1] = l
+			end
+		end
+		local buf = vim.api.nvim_create_buf(false, true)
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, flat)
+		vim.bo[buf].bufhidden = "wipe"
+		vim.cmd("botright split")
+		vim.api.nvim_win_set_buf(0, buf)
+	end
+
+	local CDS_G = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+	if meta and CDS_G[meta.group] then
+		-- CDS: ruta nueva (ddicrepositoryaccess). Mostramos el alias resuelto y los campos.
+		add("ruta      : CDS (ddicrepositoryaccess)")
+		local alias = before:match("([%w_/]+)%.[%w_/]*$")
+		add("alias bajo cursor: " .. tostring(alias))
+		require("sap-nvim.core.cds").completion(bufnr, row, col, function(items)
+			add("propuestas: " .. #(items or {}))
+			for i = 1, math.min(#(items or {}), 40) do
+				add("  · " .. tostring(items[i].word) .. "  [kind " .. tostring(items[i].kind) .. "]")
+			end
+			vim.schedule(show)
+		end)
+		return
+	end
+
 	if not uri then
 		add("")
 		add(">> object_uri es nil: el buffer no tiene sap_obj con un group conocido (ddls/...).")
 		add(">> Abre el CDS con el dashboard [C] o :SapCdsOpen ddls <NOMBRE> para fijar group=ddls.")
-	else
-		local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
-		local CDS_G = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
-		local ctype = (meta and CDS_G[meta.group]) and "application/*" or "text/plain"
-		add("content-type: " .. ctype)
-		local body = adt_http.request({
-			method = "POST",
-			path = "/sap/bc/adt/abapsource/codecompletion/proposal",
-			query = { uri = uri .. "%23start=" .. row .. "," .. col, signalCompleteness = "true" },
-			content_type = ctype,
-			body = src,
-		}) or ""
-		local items = M.parse(body)
-		add("propuestas parseadas: " .. #items)
-		for i = 1, math.min(#items, 20) do
-			add("  · " .. tostring(items[i].word) .. "  [kind " .. tostring(items[i].kind) .. "]")
-		end
-		add("")
-		add("== respuesta cruda (primeros 2000 chars) ==")
-		for _, l in ipairs(vim.split(body:sub(1, 2000), "\n", { plain = true })) do add(l) end
+		show()
+		return
 	end
-	-- nvim_buf_set_lines rechaza items con "\n" (p.ej. vim.inspect multilínea o la respuesta
-	-- cruda): aplanamos cada entrada en líneas reales y quitamos "\r".
-	local flat = {}
-	for _, s in ipairs(out) do
-		for _, l in ipairs(vim.split(tostring(s):gsub("\r", ""), "\n", { plain = true })) do
-			flat[#flat + 1] = l
-		end
+
+	-- ABAP: endpoint de codecompletion, respuesta cruda.
+	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+	local body = adt_http.request({
+		method = "POST",
+		path = "/sap/bc/adt/abapsource/codecompletion/proposal",
+		query = { uri = uri .. "%23start=" .. row .. "," .. col, signalCompleteness = "true" },
+		content_type = "text/plain",
+		body = src,
+	}) or ""
+	local items = M.parse(body)
+	add("propuestas parseadas: " .. #items)
+	for i = 1, math.min(#items, 20) do
+		add("  · " .. tostring(items[i].word) .. "  [kind " .. tostring(items[i].kind) .. "]")
 	end
-	local buf = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_lines(buf, 0, -1, false, flat)
-	vim.bo[buf].bufhidden = "wipe"
-	vim.cmd("botright split")
-	vim.api.nvim_win_set_buf(0, buf)
+	add("")
+	add("== respuesta cruda (primeros 2000 chars) ==")
+	for _, l in ipairs(vim.split(body:sub(1, 2000), "\n", { plain = true })) do add(l) end
+	show()
 end
 
 local HL_NS = vim.api.nvim_create_namespace("sap_nvim_doc_highlight")
