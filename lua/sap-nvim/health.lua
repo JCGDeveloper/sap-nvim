@@ -39,25 +39,33 @@ end
 function M.check()
   start("sap-nvim: required tools")
 
+  -- sapcli es el ÚNICO imprescindible: el plugin lee/escribe objetos a través de él.
   if has("sapcli") then
     ok("sapcli: " .. vim.fn.exepath("sapcli"))
   else
-    err("sapcli not found", { "Install: pipx install git+https://github.com/jfilak/sapcli.git" })
+    err("sapcli not found", {
+      "Re-run the installer (instala sapcli con el Python correcto >=3.12 vía uv):",
+      "  bash ~/sap-nvim/scripts/bootstrap.sh",
+    })
   end
 
+  start("sap-nvim: optional tools")
+
+  -- abaplint = linting LOCAL opcional. El chequeo de sintaxis REAL lo hace SAP al activar,
+  -- así que sin abaplint el plugin funciona igual. Necesita Node >= 18.
   if has("abaplint") then
     ok("abaplint: " .. vim.fn.exepath("abaplint"))
   else
-    err("abaplint not found", { "Install: npm install -g @abaplint/cli" })
+    warn("abaplint not found (OPCIONAL: solo linting local; SAP valida al activar)", {
+      "Necesita Node >= 18. Si lo quieres: npm install -g @abaplint/cli",
+    })
   end
 
   if has("node") then
     ok("node: " .. vim.fn.exepath("node"))
   else
-    warn("node not found (abaplint runs on Node.js)", { "Install Node.js: https://nodejs.org" })
+    info("node not found (solo lo necesita abaplint, que es opcional)")
   end
-
-  start("sap-nvim: optional tools")
 
   if has("efm-langserver") then
     ok("efm-langserver found (enables vim.lsp.buf.format bridge)")
@@ -65,13 +73,15 @@ function M.check()
     info("efm-langserver not found (optional; only needed for LSP-based formatting)")
   end
 
-  start("sap-nvim: tree-sitter parsers")
+  start("sap-nvim: tree-sitter parsers (opcional)")
 
+  -- Los parsers tree-sitter son OPCIONALES: el resaltado de ABAP/CDS usa la sintaxis
+  -- nativa de Neovim (abap.vim), no tree-sitter. Sin parser todo funciona igual.
   for _, lang in ipairs({ "abap", "cds" }) do
     if ts_parser_present(lang) then
       ok("tree-sitter '" .. lang .. "' parser installed")
     else
-      warn("tree-sitter '" .. lang .. "' parser not found", { "Run :TSInstall " .. lang })
+      info("tree-sitter '" .. lang .. "' no instalado — OPCIONAL (resaltado nativo). Si lo quieres: :TSInstall " .. lang)
     end
   end
 
