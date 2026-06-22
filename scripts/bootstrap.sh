@@ -216,16 +216,76 @@ check_nvim_version() {
   fi
 }
 
-if cmd_exists nvim; then
+# Asegura un descargador (curl o wget) para bajar el tarball de Neovim.
+ensure_downloader() {
+  if cmd_exists curl || cmd_exists wget; then return 0; fi
+  info "Instalando curl..."
+  case "$PKG_MANAGER" in
+    brew) brew install curl || true ;;
+    apt)  sudo apt-get install -y curl || true ;;
+    dnf)  sudo dnf install -y curl || true ;;
+    pacman) sudo pacman -S --noconfirm curl || true ;;
+  esac
+}
+
+download_to() { # $1=url  $2=destino
+  if cmd_exists curl; then curl -fsSL "$1" -o "$2"
+  elif cmd_exists wget; then wget -qO "$2" "$1"
+  else return 1; fi
+}
+
+# Instala Neovim RECIENTE desde el tarball OFICIAL (Linux x86_64/arm64). El apt de
+# Debian/Ubuntu trae versiones viejas (<0.10) inservibles para el plugin. Lo pone en
+# /opt/nvim + symlink en /usr/local/bin (que va ANTES de /usr/bin en el PATH, así gana
+# al neovim viejo de apt sin tocar configs de shell). macOS usa brew (está al día).
+install_neovim_tarball() {
+  ensure_downloader
+  local candidates tmp got=""
+  case "$ARCH" in
+    x86_64|amd64)  candidates="nvim-linux-x86_64.tar.gz nvim-linux64.tar.gz" ;;
+    aarch64|arm64) candidates="nvim-linux-arm64.tar.gz nvim-linux-arm64.tar.gz" ;;
+    *) err "Arquitectura $ARCH sin tarball oficial — instala Neovim >= $NVIM_VERSION_MIN a mano."; ERRORS=$((ERRORS + 1)); return 1 ;;
+  esac
+  tmp="$(mktemp -d)"
+  for asset in $candidates; do
+    info "Descargando Neovim estable ($asset)..."
+    if download_to "https://github.com/neovim/neovim/releases/download/stable/$asset" "$tmp/nvim.tgz"; then
+      got="$asset"; break
+    fi
+  done
+  if [ -z "$got" ]; then
+    err "No pude descargar Neovim. Instálalo a mano (>= $NVIM_VERSION_MIN): https://github.com/neovim/neovim/releases/latest"
+    ERRORS=$((ERRORS + 1)); rm -rf "$tmp"; return 1
+  fi
+  sudo rm -rf /opt/nvim
+  sudo mkdir -p /opt/nvim
+  sudo tar -xzf "$tmp/nvim.tgz" -C /opt/nvim --strip-components=1
+  sudo ln -sf /opt/nvim/bin/nvim /usr/local/bin/nvim
+  hash -r 2>/dev/null || true
+  rm -rf "$tmp"
+  ok "Neovim instalado en /opt/nvim (symlink en /usr/local/bin)"
+}
+
+# ¿hay que (re)instalar nvim? Sí si falta o es < mínimo.
+nvim_needs_install() {
+  cmd_exists nvim || return 0
+  local v; v=$(nvim --version | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+  version_ge "${v:-0.0}" "$NVIM_VERSION_MIN" && return 1 || return 0
+}
+
+if nvim_needs_install; then
+  if cmd_exists nvim; then
+    warn "El Neovim de tu gestor es viejo; instalo una versión reciente que lo reemplace en el PATH."
+  else
+    info "Instalando Neovim..."
+  fi
+  if [ "$OS" = "macos" ]; then
+    brew install neovim || brew upgrade neovim || true
+  else
+    install_neovim_tarball
+  fi
   check_nvim_version
 else
-  info "Instalando Neovim..."
-  case "$PKG_MANAGER" in
-    brew) brew install neovim ;;
-    apt)  sudo apt-get install -y neovim ;;
-    dnf)  sudo dnf install -y neovim ;;
-    pacman) sudo pacman -S --noconfirm neovim ;;
-  esac
   check_nvim_version
 fi
 
@@ -246,12 +306,19 @@ install_pkg() {
   fi
 
   info "Instalando $pkg..."
+  local rc=0
   case "$PKG_MANAGER" in
-    brew) brew install "$brew_name" ;;
-    apt)  sudo apt-get install -y "$apt_name" ;;
-    dnf)  sudo dnf install -y "$dnf_name" ;;
-    pacman) sudo pacman -S --noconfirm "$pacman_name" ;;
+    brew) brew install "$brew_name" || rc=$? ;;
+    apt)  sudo apt-get install -y "$apt_name" || rc=$? ;;
+    dnf)  sudo dnf install -y "$dnf_name" || rc=$? ;;
+    pacman) sudo pacman -S --noconfirm "$pacman_name" || rc=$? ;;
   esac
+  if [ "$rc" -ne 0 ]; then
+    # Herramientas como lazygit no están en el apt de Ubuntu/Debian. Son OPCIONALES:
+    # avisamos y seguimos, NO abortamos el bootstrap por ellas.
+    warn "No se pudo instalar '$pkg' (no está en tu gestor o falló). Es opcional — continúo."
+    return 0
+  fi
   ok "$pkg instalado"
 }
 
@@ -355,17 +422,27 @@ if cmd_exists sapcli; then
 else
   ensure_pipx
   info "Instalando sapcli desde git (no está publicado en PyPI)..."
-  pipx install git+https://github.com/jfilak/sapcli.git
-  ok "sapcli instalado"
+  if pipx install git+https://github.com/jfilak/sapcli.git; then
+    ok "sapcli instalado"
+  else
+    err "No se pudo instalar sapcli (lo usa el plugin para leer/escribir objetos)."
+    warn "Reintenta luego: pipx install git+https://github.com/jfilak/sapcli.git"
+    ERRORS=$((ERRORS + 1))
+  fi
 fi
 
-# 6.2 abaplint (paquete @abaplint/cli — provee el binario `abaplint`)
+# 6.2 abaplint (paquete @abaplint/cli — provee el binario `abaplint`). OPCIONAL: solo
+# linting local; el check real lo hace SAP al activar. Necesita Node moderno (>=18), así
+# que en distros con Node viejo (p.ej. Ubuntu jammy) puede fallar — no abortamos por ello.
 if cmd_exists abaplint; then
   ok "abaplint $(abaplint --version)"
 else
-  info "Instalando abaplint..."
-  npm install -g @abaplint/cli
-  ok "abaplint instalado"
+  info "Instalando abaplint (opcional)..."
+  if npm install -g @abaplint/cli 2>/dev/null; then
+    ok "abaplint instalado"
+  else
+    warn "abaplint no se instaló (¿Node viejo?). Es opcional. Para tenerlo: actualiza Node >=18 y 'npm i -g @abaplint/cli'."
+  fi
 fi
 
 # ─── 7. sap-nvim ────────────────────────────────────────────────────────────
