@@ -273,7 +273,9 @@ function source:get_completions(ctx, callback)
 			or bl:match("%s+type%s+[%w_/]*$")
 			or bl:match("%s+like%s+[%w_/]*$")
 		then
-			callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = false })
+			-- 🔥 FIX: Mandamos true en incomplete para que Blink no asuma
+			-- que la búsqueda ha terminado y permita a sap_adt brillar.
+			callback({ items = {}, is_incomplete_backward = true, is_incomplete_forward = true })
 			return function() end
 		end
 	end
