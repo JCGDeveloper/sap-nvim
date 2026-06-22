@@ -433,20 +433,53 @@ ensure_pipx() {
   pipx ensurepath >/dev/null 2>&1 || true
 }
 
-# 6.1 sapcli — NO está en PyPI; se instala desde el repo git (vía pipx, PEP 668 safe)
-if cmd_exists sapcli; then
-  ok "sapcli $(sapcli --version 2>&1 | head -1)"
-else
-  ensure_pipx
-  info "Instalando sapcli desde git (no está publicado en PyPI)..."
-  if pipx install git+https://github.com/jfilak/sapcli.git; then
-    ok "sapcli instalado"
+# 6.1 sapcli — NO está en PyPI; se instala desde git. Lo metemos en un VENV DEDICADO
+# (determinista, sin depender de los caprichos de pipx, que en Ubuntu jammy fallaba en
+# silencio) y enlazamos el ejecutable a ~/.local/bin. Requiere python3-venv (paso [5/8]).
+install_sapcli() {
+  if cmd_exists sapcli; then
+    ok "sapcli $(sapcli --version 2>&1 | head -1)"
+    return 0
+  fi
+  local venv="$HOME/.local/share/sapcli-venv"
+  info "Instalando sapcli en un venv dedicado ($venv)..."
+  if ! python3 -c "import ensurepip, venv" 2>/dev/null; then
+    warn "python3-venv/ensurepip no disponible; intento instalarlo..."
+    case "$PKG_MANAGER" in
+      apt) sudo apt-get install -y python3-venv python3-pip || true ;;
+      dnf) sudo dnf install -y python3-pip || true ;;
+    esac
+  fi
+  rm -rf "$venv"
+  if ! python3 -m venv "$venv"; then
+    err "No pude crear el venv de sapcli (revisa python3-venv)."
+    ERRORS=$((ERRORS + 1)); return 1
+  fi
+  "$venv/bin/python" -m pip install --upgrade pip >/dev/null 2>&1 || true
+  info "pip install git+sapcli (puede tardar; si falla, el error sale justo debajo)..."
+  if "$venv/bin/python" -m pip install "git+https://github.com/jfilak/sapcli.git"; then
+    mkdir -p "$HOME/.local/bin"
+    local exe="$venv/bin/sapcli"
+    [ -x "$exe" ] || exe="$(find "$venv/bin" -maxdepth 1 -iname 'sapcli*' -type f 2>/dev/null | head -1)"
+    if [ -n "$exe" ] && [ -x "$exe" ]; then
+      ln -sf "$exe" "$HOME/.local/bin/sapcli"
+      export PATH="$HOME/.local/bin:$PATH"; hash -r 2>/dev/null || true
+      if cmd_exists sapcli; then
+        ok "sapcli instalado ($(sapcli --version 2>&1 | head -1))"
+      else
+        warn "sapcli instalado en $venv pero ~/.local/bin no está en tu PATH. Reabre la shell."
+      fi
+    else
+      err "sapcli se instaló pero no encuentro su ejecutable en $venv/bin (mira: ls $venv/bin)."
+      ERRORS=$((ERRORS + 1))
+    fi
   else
-    err "No se pudo instalar sapcli (lo usa el plugin para leer/escribir objetos)."
-    warn "Reintenta luego: pipx install git+https://github.com/jfilak/sapcli.git"
+    err "Falló 'pip install sapcli' (el error real está JUSTO ARRIBA — pégamelo)."
+    warn "Reintenta a mano: $venv/bin/python -m pip install git+https://github.com/jfilak/sapcli.git"
     ERRORS=$((ERRORS + 1))
   fi
-fi
+}
+install_sapcli
 
 # 6.2 abaplint (paquete @abaplint/cli — provee el binario `abaplint`). OPCIONAL: solo
 # linting local; el check real lo hace SAP al activar. Necesita Node moderno (>=18), así
