@@ -27,6 +27,10 @@ SAPCLI_CONFIG_DIR="$HOME/.sapcli"
 REPO_URL="https://github.com/JCGDeveloper/sap-nvim.git"
 NVIM_VERSION_MIN="0.10"
 
+# Contador de errores acumulado durante TODO el script (no solo en la validación final),
+# para que cosas como "Neovim demasiado viejo" cuenten como fallo real.
+ERRORS=0
+
 # Colores
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -183,9 +187,37 @@ fi
 
 header "[2/8] Neovim"
 
+# Compara dos versiones "mayor.menor": ¿$1 >= $2?
+version_ge() {
+  [ "$(printf '%s\n%s\n' "$2" "$1" | sort -t. -k1,1n -k2,2n | head -1)" = "$2" ]
+}
+
+check_nvim_version() {
+  local ver
+  ver=$(nvim --version | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+  if [ -z "$ver" ]; then
+    warn "No pude leer la versión de Neovim."
+    return 0
+  fi
+  if version_ge "$ver" "$NVIM_VERSION_MIN"; then
+    ok "Neovim v$ver (>= $NVIM_VERSION_MIN requerido)"
+  else
+    err "Neovim v$ver es DEMASIADO VIEJA — sap-nvim necesita >= $NVIM_VERSION_MIN."
+    warn "Tu gestor ($PKG_MANAGER) trae una versión antigua. Instala una reciente:"
+    case "$PKG_MANAGER" in
+      apt)    warn "  sudo add-apt-repository ppa:neovim-ppa/unstable && sudo apt update && sudo apt install neovim";;
+      dnf)    warn "  sudo dnf install -y neovim   (o el COPR de neovim si sigue vieja)";;
+      pacman) warn "  sudo pacman -S neovim   (Arch suele estar al día)";;
+      brew)   warn "  brew install neovim   (suele estar al día)";;
+      *)      warn "  Descarga el AppImage oficial: https://github.com/neovim/neovim/releases";;
+    esac
+    warn "  Alternativa universal (AppImage): https://github.com/neovim/neovim/releases/latest"
+    ERRORS=$((ERRORS + 1))
+  fi
+}
+
 if cmd_exists nvim; then
-  NVIM_VER=$(nvim --version | head -1 | grep -oE '[0-9]+\.[0-9]+')
-  ok "Neovim v$NVIM_VER"
+  check_nvim_version
 else
   info "Instalando Neovim..."
   case "$PKG_MANAGER" in
@@ -194,7 +226,7 @@ else
     dnf)  sudo dnf install -y neovim ;;
     pacman) sudo pacman -S --noconfirm neovim ;;
   esac
-  ok "Neovim instalado"
+  check_nvim_version
 fi
 
 # ─── 3. Dependencias del sistema ────────────────────────────────────────────
@@ -498,7 +530,7 @@ fi
 
 header "📋 VALIDACIÓN FINAL"
 
-ERRORS=0
+# ERRORS NO se reinicia aquí: ya viene acumulando desde arriba (p.ej. Neovim viejo).
 
 validate_cmd() {
   local name="$1" label="${2:-$1}"
