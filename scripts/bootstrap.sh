@@ -500,8 +500,36 @@ install_sap_ide() {
   add_sap_alias
 }
 
+# Arranca nvim-sap en HEADLESS para que lazy instale los plugins (blink/telescope/
+# snacks/dap…) y los parsers tree-sitter SIN que el compañero tenga que abrirlo a mano.
+# Best-effort y SIEMPRE con timeout: un headless con config grande puede colgarse, así que
+# NUNCA bloquea el script (si falla, queda el arranque manual de toda la vida).
+warmup_sap_ide() {
+  cmd_exists nvim || return 0
+  [ -d "$NVIM_SAP_CONFIG" ] || return 0
+  if ! cmd_exists timeout; then
+    warn "Sin 'timeout': no arranco nvim-sap en headless. Ábrelo a mano una vez (lazy instala todo)."
+    return 0
+  fi
+  info "Arrancando nvim-sap en headless para instalar sus plugins (best-effort, máx 300s)..."
+  if NVIM_APPNAME=nvim-sap timeout 300 nvim --headless "+Lazy! sync" +qa >/dev/null 2>&1; then
+    ok "Plugins de nvim-sap instalados"
+  else
+    warn "No se completó en headless (timeout/UI). Abre 'nvim-sap' una vez a mano para terminar."
+  fi
+  # Los parsers de nvim-sap viven en su propio data dir (~/.local/share/nvim-sap), aparte del
+  # nvim normal, así que se instalan dentro de nvim-sap.
+  info "Instalando parsers tree-sitter (abap, cds) en nvim-sap (best-effort, máx 180s)..."
+  if NVIM_APPNAME=nvim-sap timeout 180 nvim --headless "+TSInstallSync abap" "+TSInstallSync cds" +qa >/dev/null 2>&1; then
+    ok "Parsers tree-sitter instalados en nvim-sap"
+  else
+    warn "Parsers no instalados en headless. Dentro de nvim-sap corre: :TSInstall abap cds"
+  fi
+}
+
 header "[Extra] IDE SAP aislado (nvim-sap)"
 install_sap_ide
+warmup_sap_ide
 
 # ─── Tree-sitter parsers ──────────────────────────────────────────────────
 
@@ -607,14 +635,19 @@ echo "════════════════════════�
 if [ $ERRORS -eq 0 ]; then
   echo -e "  ${GREEN}${BOLD}✅ Todo listo!${NC} ($OS/$ARCH)"
   echo ""
-  echo "  Próximos pasos:"
-  echo "  1. source ~/.zshrc (o reabre la terminal)  → activa el alias 'nvim-sap'"
-  echo "  2. nvim-sap           → IDE SAP completo (1ª vez: lazy instala todo, espera y reinicia)"
-  echo "  3. :SapSetup          → Configurar conexión SAP (dentro de nvim-sap)"
-  echo "  4. <leader>an         → Crear nuevo objeto ABAP"
-  echo "  5. <leader>ah         → Ayuda de comandos"
+  echo "  Los plugins del IDE ya se instalaron en headless. Solo te quedan 3 pasos:"
   echo ""
-  echo "  (El IDE 'nvim-sap' es una config aislada y NO toca tu Neovim normal.)"
+  echo -e "  ${BOLD}1)${NC} source ~/.zshrc        ${CYAN}# (o reabre la terminal) → activa el alias 'nvim-sap'${NC}"
+  echo -e "  ${BOLD}2)${NC} nvim-sap               ${CYAN}# abre el IDE SAP completo${NC}"
+  echo -e "  ${BOLD}3)${NC} :SapSetup              ${CYAN}# dentro de nvim-sap: mete host/usuario/cliente de tu SAP${NC}"
+  echo ""
+  echo "  Comprueba que todo está en verde con:  :checkhealth sap-nvim"
+  echo "  Luego:  <leader>an (nuevo objeto) · <leader>ah (ayuda) · <leader>aS (buscar)"
+  echo ""
+  echo "  Notas:"
+  echo "   • Si al abrir nvim-sap ves plugins instalándose, espera y reinícialo una vez."
+  echo "   • Necesitas red/VPN al servidor SAP para que :SapSetup conecte."
+  echo "   • El IDE 'nvim-sap' es una config AISLADA y NO toca tu Neovim normal."
   echo ""
   echo "  En un archivo .abap:"
   echo "    gd  → ir a definición"
