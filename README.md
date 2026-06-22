@@ -404,10 +404,17 @@ Crea el archivo local con el template de cabecera correcto y lo abre para editar
 
 | Atajo | Comando | Descripción |
 |-------|---------|-------------|
+| `<leader>aS` | `:SapSearchLive` | Búsqueda global **en vivo** (Telescope, ADT). `<C-f>` filtra por tipo |
+| `<leader>cc` | `:SapSearchCds` | Búsqueda **en vivo de CDS / RAP** (arranca filtrada a DDLS) |
 | `<leader>afs` | `:SapSearch` | Buscar objetos en SAP por patrón de nombre |
 | `<leader>afb` | `:SapBrowse` | Explorar todos los objetos de un paquete |
 
-Al elegir un objeto de cualquiera de los dos pickers, intenta abrirlo localmente; si no lo
+El picker en vivo resuelve contra ADT a cada tecla (debounce 200 ms). Dentro del picker,
+**`<C-f>`** (Ctrl+F) abre el selector de tipo de objeto (Database Table, Program, Class, CDS
+View, Data Element…) y refiltra la búsqueda —igual que el filtro de tipo de VSCode, usando
+`&objectType=<GRUPO>`—. El de CDS solo ofrece grupos CDS/RAP (DDLS/DDLX/DCL/BDEF/SRVD/SRVB).
+
+Al elegir un objeto de cualquiera de los pickers, intenta abrirlo localmente; si no lo
 encuentra, ofrece hacer checkout.
 
 ---
@@ -589,6 +596,8 @@ Después autenticá una sola vez: `:Copilot auth` (usa tu login de GitHub de la 
 | `<leader>aD` | `:SapDiff` | Diff del buffer local vs la versión activa del sistema |
 | `<leader>ai` | `:SapInactive` | Objetos inactivos — abrir o activar de a uno |
 | `<leader>an` | `:SapNew` | Nuevo objeto ABAP con pickers de paquete/transporte del sistema |
+| `<leader>aS` | `:SapSearchLive` | Búsqueda global en vivo (Telescope); `<C-f>` filtra por tipo |
+| `<leader>cc` | `:SapSearchCds` | Búsqueda en vivo de CDS / RAP |
 | `<leader>afs` | `:SapSearch` | Buscar objetos en SAP |
 | `<leader>afb` | `:SapBrowse` | Explorar contenido de un paquete |
 | `<leader>ack` | `:SapCheckout` | Checkout de un paquete completo al sistema de archivos local |

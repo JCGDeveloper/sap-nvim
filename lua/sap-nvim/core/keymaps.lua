@@ -176,7 +176,7 @@ sap-nvim atajos:
 		{ "<leader>cs", "<cmd>SapCdsSql<cr>", "Ver SQL Nativo" },
 		{ "<leader>co", "<cmd>SapCdsOData<cr>", "Generar OData" },
 		{ "<leader>cg", "<cmd>SapCdsGraph<cr>", "Grafo RAP" },
-		{ "<leader>cc", ":SapCdsOpen ", "Abrir CDS" },
+		{ "<leader>cc", "<cmd>SapSearchCds<cr>", "Buscar/Abrir CDS (en vivo)" },
 	}
 
 	vim.api.nvim_create_autocmd("FileType", {

@@ -22,7 +22,7 @@
 |---|---|---|---|
 |8|abapfs.activate|`:SapActivate`/`<leader>aa`|✅|
 |9|abapfs.activateMultiple|—|➕ (activar paquete: `package activate`)|
-|10|abapfs.search|`:SapSearch`/`<leader>afs` (NO en vivo)|~ → **búsqueda en vivo**|
+|10|abapfs.search|`:SapSearchLive`/`<leader>aS` **en vivo + filtro de tipo `<C-f>`** (`&objectType`); CDS: `:SapSearchCds`/`<leader>cc`|✅|
 |11|abapfs.create|`:SapNew`/`<leader>an`|✅|
 |12|abapfs.createInEditor|crear + abrir|✅|
 |13|abapfs.execute|`:SapRun`/`<leader>aR`|✅|
@@ -102,14 +102,14 @@ configureFeeds/refreshFeedInbox/viewFeedEntry/markAllFeedsRead/markFeedFolderRea
 
 ## Resumen (de 92)
 - **✅ hecho:** ~26 (núcleo de edición, navegación, transacciones, transportes, paquetes, AUnit/ATC-run, datos, crear/borrar, activar).
-- **~ parcial/mejorar:** ~10 (búsqueda→en vivo, showdocu, cleanCode, manageTextElements, pickObject, transportUser, diff→revisiones, rapGen).
+- **~ parcial/mejorar:** ~9 (showdocu, cleanCode, manageTextElements, pickObject, transportUser, diff→revisiones, rapGen). _(búsqueda en vivo + filtro de tipo: hecha ✅)_
 - **➕ FALTA (a implementar):** ~20 núcleo: quickfix, changeInclude, extractMethod, runClass, createtestinclude, gestión ATC, favoritos, comparediff/remotediff/revisiones, abapGit (pull/push/repos/branch), transportAddUser/openTransportObject, exportToJson, showdocu completo.
 - **⏸ nicho/diferido:** ~30 (feeds, trazas, dumps, blame, S4H copilot, GUI embebida, walkthrough, setupCleaner, transportObjectDiff/openLocation/RunAtc/Revision, clearPassword/changePassword).
 - **N/A:** runInEmbeddedGui (webview), showWalkThrough.
 
 ## Orden de ejecución para "idéntico" (núcleo primero)
 1. **changeInclude** → fijar programa principal del include (arregla `gd` cross-include). [BUG]
-2. **search en vivo** (searchObject as-you-type).
+2. ~~**search en vivo** (searchObject as-you-type)~~ ✅ hecho — `<C-f>` filtra por tipo (`&objectType`).
 3. **quickfix / code actions** (fixProposals + fixEdits).
 4. **extractMethod**, **runClass**, **createtestinclude**.
 5. **gestión ATC** (exenciones, navegación, refresh).

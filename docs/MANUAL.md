@@ -55,6 +55,11 @@ Al arrancar sin argumentos se abre el **dashboard** (pantalla de inicio). Teclas
 `g` SAP GUI nativo · `R` ejecutar programa · `t`/`c` transportes · `b`/`r` buffers/recientes ·
 `L` conexión · `q` salir.
 
+- **`<leader>aS`** (`:SapSearchLive`) / dashboard `o` — **búsqueda global en vivo**: picker
+  Telescope que resuelve contra ADT a cada tecla. Dentro, **`<C-f>`** (Ctrl+F) abre el selector
+  de tipo de objeto (Database Table, Program, Class, CDS, Data Element…) y refiltra —igual que
+  el filtro de VSCode (`&objectType`)—. Para CDS, `<leader>cc` / dashboard `C` (ver §5).
+
 - **`␣␣`** (espacio-espacio) — saltar entre objetos SAP abiertos (estilo VSCode).
 - **`-`** (guion) — *volver*: recorre hacia atrás la navegación (gd/búsqueda/include) y, al
   agotarse, cae al **dashboard**. Dentro de un include creado, vuelve al programa de origen.
@@ -91,7 +96,11 @@ Al arrancar sin argumentos se abre el **dashboard** (pantalla de inicio). Teclas
 - **Completado**: campos tras `alias.`, fuentes tras `from`/`join`, anotaciones tras `@`, y
   valores (enums) tras `:` (vía `ddicrepositoryaccess`, como VSCode).
 - **`<leader>cp`** (`:SapCdsPreview`) — datos de la vista · **`<leader>cs`** SQL nativo ·
-  **`<leader>co`** generar OData · **`<leader>cg`** grafo RAP · **`<leader>cc`** abrir CDS.
+  **`<leader>co`** generar OData · **`<leader>cg`** grafo RAP.
+- **`<leader>cc`** (`:SapSearchCds`) — **buscar/abrir CDS en vivo**: picker Telescope que
+  resuelve contra ADT a cada tecla, ya filtrado a DDLS. Dentro, **`<C-f>`** (Ctrl+F) cambia el
+  grupo CDS/RAP (DDLS/DDLX/DCL/BDEF/SRVD/SRVB). Para abrir por nombre exacto sigue estando
+  `:SapCdsOpen [ddls|ddlx|bdef|dcl|srvd] <NOMBRE>`.
 - **`<leader>ct`/`cl`/`cL`/`cx`** — órdenes de transporte desde CDS.
 
 ---
@@ -206,6 +215,7 @@ depurar) para que **agentes de IA** programen en tu sistema. Setup completo en
 | Completar (manual) | `<C-Space>` · `:SapComplete` |
 | Hover / Ir a definición / Referencias | `K` · `gd` · `gr` |
 | Outline / Where-used | `<leader>ao` · `<leader>aw` |
+| Buscar objeto / CDS (en vivo, `<C-f>` filtra tipo) | `<leader>aS` · `<leader>cc` |
 | Formatear / Activar / Subir | `<leader>aF` · `<leader>aa` · `<leader>au` |
 | Nuevo objeto / Crear include | `<leader>an` · `<leader>aci` |
 | Ejecutar transacción / programa | `<leader>ax` · `<leader>aR` (pregunta navegador/terminal) |

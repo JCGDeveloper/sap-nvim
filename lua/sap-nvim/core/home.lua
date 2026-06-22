@@ -55,11 +55,8 @@ end
 -- ── Acciones del menú ───────────────────────────────────────────────────────
 
 function M.search()
-	vim.ui.input({ prompt = "Buscar objeto SAP: " }, function(q)
-		if q and q ~= "" then
-			require("sap-nvim.core.browser").search_objects(q)
-		end
-	end)
+	-- Picker en vivo (Telescope) con filtro por tipo (<C-t>), como VSCode.
+	require("sap-nvim.core.search").open_picker()
 end
 
 function M.transaction()
@@ -166,16 +163,8 @@ local MENU = {
 
 -- Abre una vista CDS / objeto RAP pidiendo tipo (por defecto ddls) y nombre.
 function M.open_cds()
-	vim.ui.input({ prompt = "Vista CDS / objeto RAP (NOMBRE o 'bdef NOMBRE'): " }, function(input)
-		if not input or vim.trim(input) == "" then
-			return
-		end
-		local kind, name = input:match("^(%S+)%s+(%S+)$")
-		if not kind then
-			kind, name = "ddls", vim.trim(input)
-		end
-		require("sap-nvim.core.cds").open_adt(kind:lower(), name)
-	end)
+	-- Picker en vivo filtrado a CDS/RAP (DDLS por defecto, <C-t> cambia el grupo).
+	require("sap-nvim.core.search").open_cds_picker()
 end
 
 local LOGO = {

@@ -6,6 +6,10 @@
 --   • debounce de 200 ms (no busca hasta que dejas de teclear un instante),
 --   • descarte de respuestas obsoletas (si sigues escribiendo, la respuesta vieja se ignora).
 -- Antes era síncrono (vim.fn.system por tecla) y daba microlag.
+--
+-- FILTRO POR TIPO (como VSCode): el endpoint de ADT acepta `&objectType=<GRUPO>`
+-- (DDLS, TABL, PROG, CLAS…). Dentro del picker, `<C-f>` abre el selector de tipo y
+-- refresca la lista en vivo. `open_cds_picker()` arranca ya filtrado a CDS (DDLS).
 
 local M = {}
 local adt_http = require("sap-nvim.core.adt_http")
@@ -18,7 +22,9 @@ local function notify(msg, level)
 	vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
--- Traductor de tipos ADT a nombres humanos y su "group" para abrir
+-- Traductor de tipos ADT (`adtcore:type`, p.ej. "CLAS/OC") a nombre humano + el
+-- "group" con el que source.open/cds sabe abrirlo. Los grupos RAP (ddls/ddlx/dcl/
+-- bdef/srvd) los enruta source.open hacia core/cds.
 local TYPE_MAP = {
 	["CLAS/OC"] = { label = "Class", group = "class" },
 	["INTF/OI"] = { label = "Interface", group = "interface" },
@@ -26,13 +32,63 @@ local TYPE_MAP = {
 	["PROG/I"] = { label = "Include", group = "include" },
 	["FUGR/F"] = { label = "Function Group", group = "functiongroup" },
 	["FUGR/FF"] = { label = "Function Module", group = "functionmodule" },
+	["FUNC/FF"] = { label = "Function Module", group = "functionmodule" },
 	["TABL/DT"] = { label = "Table", group = "table" },
+	["TABL/DS"] = { label = "Structure", group = "structure" },
+	["VIEW/DV"] = { label = "View (DDIC)", group = "table" },
 	["TTYP/TT"] = { label = "Table Type", group = "tabletype" },
 	["DTEL/DE"] = { label = "Data Element", group = "dataelement" },
 	["DOMA/DO"] = { label = "Domain", group = "domain" },
+	["ENQU/EL"] = { label = "Lock Object", group = nil },
 	["MSAG/N"] = { label = "Message Class", group = "messageclass" },
+	["TRAN/T"] = { label = "Transaction", group = nil },
+	["DEVC/K"] = { label = "Package", group = nil },
+	-- CDS / RAP (se abren por ADT directo vía core/cds)
+	["DDLS/DF"] = { label = "CDS View", group = "ddls" },
+	["DDLX/EX"] = { label = "Metadata Ext.", group = "ddlx" },
+	["DCLS/DL"] = { label = "Access Control", group = "dcl" },
+	["BDEF/BDO"] = { label = "Behavior Def.", group = "bdef" },
+	["SRVD/SRV"] = { label = "Service Def.", group = "srvd" },
+	["SRVB/SVB"] = { label = "Service Binding", group = nil },
 	["INFO"] = { label = "Info", group = nil },
 	["ERROR"] = { label = "Error", group = nil },
+}
+
+-- Tipos seleccionables en el filtro (`<C-f>`). `code` = valor de `objectType` en ADT
+-- (prefijo del adtcore:type). `nil` = sin filtro (todos). Tomado de la lista que usa
+-- la extensión de VSCode (abapSearchService.searchObjects).
+local OBJECT_TYPES = {
+	{ code = nil, label = "Todos los tipos" },
+	{ code = "DDLS", label = "CDS View (DDL Source)" },
+	{ code = "DDLX", label = "Metadata Extension" },
+	{ code = "DCLS", label = "Access Control (DCL)" },
+	{ code = "BDEF", label = "Behavior Definition" },
+	{ code = "SRVD", label = "Service Definition" },
+	{ code = "SRVB", label = "Service Binding" },
+	{ code = "CLAS", label = "Class" },
+	{ code = "INTF", label = "Interface" },
+	{ code = "PROG", label = "Program / Report" },
+	{ code = "FUGR", label = "Function Group" },
+	{ code = "FUNC", label = "Function Module" },
+	{ code = "TABL", label = "Database Table / Structure" },
+	{ code = "VIEW", label = "View (DDIC)" },
+	{ code = "TTYP", label = "Table Type" },
+	{ code = "DTEL", label = "Data Element" },
+	{ code = "DOMA", label = "Domain" },
+	{ code = "ENQU", label = "Lock Object" },
+	{ code = "MSAG", label = "Message Class" },
+	{ code = "TRAN", label = "Transaction" },
+	{ code = "DEVC", label = "Package" },
+}
+
+-- Conjunto de grupos que componen "CDS/RAP" para el picker dedicado.
+local CDS_TYPES = {
+	{ code = "DDLS", label = "CDS View (DDL Source)" },
+	{ code = "DDLX", label = "Metadata Extension" },
+	{ code = "DCLS", label = "Access Control (DCL)" },
+	{ code = "BDEF", label = "Behavior Definition" },
+	{ code = "SRVD", label = "Service Definition" },
+	{ code = "SRVB", label = "Service Binding" },
 }
 
 local function unxml(s)
@@ -83,7 +139,12 @@ local function parse_body(body, prompt)
 	return results
 end
 
-function M.open_picker()
+-- opts:
+--   object_type  string|nil  filtro inicial (código ADT: "DDLS", "TABL"…). nil = todos.
+--   title        string|nil  título base del picker.
+--   types        table|nil   subconjunto de tipos elegibles en <C-f> (default OBJECT_TYPES).
+function M.open_picker(opts)
+	opts = opts or {}
 	local ok, pickers = pcall(require, "telescope.pickers")
 	if not ok then
 		notify("Telescope no está disponible.", vim.log.levels.WARN)
@@ -92,6 +153,29 @@ function M.open_picker()
 	local conf = require("telescope.config").values
 	local actions = require("telescope.actions")
 	local action_state = require("telescope.actions.state")
+
+	-- Estado mutable que lee el finder en cada llamada (lo cambia <C-f>).
+	local state = {
+		object_type = opts.object_type, -- código ADT o nil
+		base_title = opts.title or "🔍 Buscar Objeto SAP (ADT)",
+		type_list = opts.types or OBJECT_TYPES,
+	}
+
+	local function type_label()
+		if not state.object_type then
+			return "Todos"
+		end
+		for _, t in ipairs(OBJECT_TYPES) do
+			if t.code == state.object_type then
+				return t.label
+			end
+		end
+		return state.object_type
+	end
+
+	local function current_title()
+		return string.format("%s  ·  Tipo: %s  ·  <C-f> filtrar", state.base_title, type_label())
+	end
 
 	local function entry_maker(entry)
 		local type_info = TYPE_MAP[entry.adt_type]
@@ -150,6 +234,9 @@ function M.open_picker()
 					.. url_encode(query)
 					.. "&maxResults=" .. MAX_RESULTS
 					.. "&operation=quickSearch"
+				if state.object_type then
+					req_path = req_path .. "&objectType=" .. url_encode(state.object_type)
+				end
 
 				adt_http.request_async({
 					method = "GET",
@@ -179,10 +266,42 @@ function M.open_picker()
 
 	pickers
 		.new({}, {
-			prompt_title = "🔍 Buscar Objeto SAP (ADT)",
+			prompt_title = current_title(),
+			default_text = opts.default_text,
 			finder = finder,
 			sorter = conf.generic_sorter({}),
-			attach_mappings = function(prompt_bufnr)
+			attach_mappings = function(prompt_bufnr, map)
+				-- Cambiar el filtro de tipo: CERRAMOS el picker, elegimos el tipo y lo
+				-- REABRIMOS con el mismo texto escrito. Abrir un vim.ui.select ENCIMA del
+				-- picker de Telescope hacía que este se cerrara al perder el foco (el bug
+				-- "se sale de la pantalla de buscar"); este flujo secuencial es estable.
+				local function pick_type()
+					local items = {}
+					for _, t in ipairs(state.type_list) do
+						items[#items + 1] = t
+					end
+					local typed = action_state.get_current_line() -- lo que llevas escrito
+					actions.close(prompt_bufnr)
+					vim.schedule(function()
+						vim.ui.select(items, {
+							prompt = "Filtrar por tipo de objeto:",
+							format_item = function(t)
+								return t.label
+							end,
+						}, function(choice)
+							M.open_picker({
+								object_type = choice and choice.code or state.object_type,
+								title = state.base_title,
+								types = state.type_list,
+								default_text = typed,
+							})
+						end)
+					end)
+				end
+
+				map("i", "<C-f>", pick_type)
+				map("n", "<C-f>", pick_type)
+
 				actions.select_default:replace(function()
 					local selection = action_state.get_selected_entry()
 					if not selection then
@@ -205,13 +324,27 @@ function M.open_picker()
 		:find()
 end
 
+-- Picker dedicado a CDS/RAP: arranca filtrado a DDLS y el <C-f> solo ofrece grupos CDS.
+function M.open_cds_picker()
+	M.open_picker({
+		object_type = "DDLS",
+		title = "🧩 Buscar CDS / RAP (ADT)",
+		types = CDS_TYPES,
+	})
+end
+
 function M.setup()
 	vim.api.nvim_create_user_command("SapSearchLive", function()
 		M.open_picker()
-	end, { desc = "sap-nvim: Búsqueda global" })
+	end, { desc = "sap-nvim: Búsqueda global (con filtro por tipo, <C-f>)" })
+
+	vim.api.nvim_create_user_command("SapSearchCds", function()
+		M.open_cds_picker()
+	end, { desc = "sap-nvim: Búsqueda en vivo de CDS / RAP" })
+
 	vim.keymap.set("n", "<leader>aS", function()
 		M.open_picker()
-	end, { desc = "ABAP: Buscar objeto" })
+	end, { desc = "ABAP: Buscar objeto (filtro <C-f>)" })
 end
 
 return M
