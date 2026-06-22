@@ -627,14 +627,23 @@ detect_shell_rc() {
 }
 
 add_sap_alias() {
-  local rc; rc="$(detect_shell_rc)"
-  touch "$rc"
-  if grep -qF "NVIM_APPNAME=nvim-sap" "$rc" 2>/dev/null; then
-    ok "Alias 'nvim-sap' ya presente en $(basename "$rc")"
-  else
-    printf "\n# sap-nvim — IDE SAP aislado\nalias nvim-sap='NVIM_APPNAME=nvim-sap nvim'\n" >> "$rc"
-    ok "Alias 'nvim-sap' añadido a $(basename "$rc") (reabre la shell o 'source $rc')"
-  fi
+  # Añade el alias a TODAS las shells presentes (bash Y zsh), no solo a la "por defecto":
+  # mucha gente lanza el bootstrap con bash pero usa zsh interactivo (o al revés), y el
+  # alias acababa en el rc equivocado → 'nvim-sap: command not found'.
+  local targets=()
+  [ -f "$HOME/.bashrc" ] && targets+=("$HOME/.bashrc")
+  [ -f "$HOME/.zshrc" ]  && targets+=("$HOME/.zshrc")
+  [ ${#targets[@]} -eq 0 ] && targets+=("$(detect_shell_rc)")  # si no hay ninguno, crea el del shell
+  local rc
+  for rc in "${targets[@]}"; do
+    touch "$rc"
+    if grep -qF "NVIM_APPNAME=nvim-sap" "$rc" 2>/dev/null; then
+      ok "Alias 'nvim-sap' ya presente en $(basename "$rc")"
+    else
+      printf "\n# sap-nvim — IDE SAP aislado\nalias nvim-sap='NVIM_APPNAME=nvim-sap nvim'\n" >> "$rc"
+      ok "Alias 'nvim-sap' añadido a $(basename "$rc")"
+    fi
+  done
 }
 
 install_sap_ide() {
@@ -794,7 +803,7 @@ if [ $ERRORS -eq 0 ]; then
   echo ""
   echo "  Los plugins del IDE ya se instalaron en headless. Solo te quedan 3 pasos:"
   echo ""
-  echo -e "  ${BOLD}1)${NC} source ~/.zshrc        ${CYAN}# (o reabre la terminal) → activa el alias 'nvim-sap'${NC}"
+  echo -e "  ${BOLD}1)${NC} reabre la terminal     ${CYAN}# (o 'source ~/.bashrc' / 'source ~/.zshrc') → activa el alias${NC}"
   echo -e "  ${BOLD}2)${NC} nvim-sap               ${CYAN}# abre el IDE SAP completo${NC}"
   echo -e "  ${BOLD}3)${NC} :SapSetup              ${CYAN}# dentro de nvim-sap: mete host/usuario/cliente de tu SAP${NC}"
   echo ""
