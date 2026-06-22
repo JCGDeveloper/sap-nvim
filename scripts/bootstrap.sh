@@ -433,50 +433,76 @@ ensure_pipx() {
   pipx ensurepath >/dev/null 2>&1 || true
 }
 
-# 6.1 sapcli — NO está en PyPI; se instala desde git. Lo metemos en un VENV DEDICADO
-# (determinista, sin depender de los caprichos de pipx, que en Ubuntu jammy fallaba en
-# silencio) y enlazamos el ejecutable a ~/.local/bin. Requiere python3-venv (paso [5/8]).
+# uv: gestor de Python ultrarrápido (astral). Lo usamos para traer un Python >= 3.12
+# STANDALONE cuando el del sistema es viejo, sin sudo ni PPAs y en cualquier distro.
+ensure_uv() {
+  if cmd_exists uv; then return 0; fi
+  ensure_downloader
+  info "Instalando uv (para traer Python 3.12 sin sudo)..."
+  if cmd_exists curl; then curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
+  elif cmd_exists wget; then wget -qO- https://astral.sh/uv/install.sh | sh >/dev/null 2>&1
+  else return 1; fi
+  export PATH="$HOME/.local/bin:$PATH"; hash -r 2>/dev/null || true
+  cmd_exists uv
+}
+
+# 6.1 sapcli — NO está en PyPI; se instala desde git en un VENV DEDICADO y se enlaza a
+# ~/.local/bin. PROBLEMA: sapcli (HEAD) exige Python >= 3.12, y Ubuntu 22.04 trae 3.10.
+# Por eso: si el Python del sistema vale (>=3.12) → venv normal; si no → uv trae un
+# Python 3.12 standalone y montamos el venv ahí. Así el compañero tiene la MISMA sapcli.
 install_sapcli() {
   if cmd_exists sapcli; then
     ok "sapcli $(sapcli --version 2>&1 | head -1)"
     return 0
   fi
   local venv="$HOME/.local/share/sapcli-venv"
-  info "Instalando sapcli en un venv dedicado ($venv)..."
-  if ! python3 -c "import ensurepip, venv" 2>/dev/null; then
-    warn "python3-venv/ensurepip no disponible; intento instalarlo..."
-    case "$PKG_MANAGER" in
-      apt) sudo apt-get install -y python3-venv python3-pip || true ;;
-      dnf) sudo dnf install -y python3-pip || true ;;
-    esac
-  fi
-  rm -rf "$venv"
-  if ! python3 -m venv "$venv"; then
-    err "No pude crear el venv de sapcli (revisa python3-venv)."
-    ERRORS=$((ERRORS + 1)); return 1
-  fi
-  "$venv/bin/python" -m pip install --upgrade pip >/dev/null 2>&1 || true
-  info "pip install git+sapcli (puede tardar; si falla, el error sale justo debajo)..."
-  if "$venv/bin/python" -m pip install "git+https://github.com/jfilak/sapcli.git"; then
-    mkdir -p "$HOME/.local/bin"
-    local exe="$venv/bin/sapcli"
-    [ -x "$exe" ] || exe="$(find "$venv/bin" -maxdepth 1 -iname 'sapcli*' -type f 2>/dev/null | head -1)"
-    if [ -n "$exe" ] && [ -x "$exe" ]; then
-      ln -sf "$exe" "$HOME/.local/bin/sapcli"
-      export PATH="$HOME/.local/bin:$PATH"; hash -r 2>/dev/null || true
-      if cmd_exists sapcli; then
-        ok "sapcli instalado ($(sapcli --version 2>&1 | head -1))"
-      else
-        warn "sapcli instalado en $venv pero ~/.local/bin no está en tu PATH. Reabre la shell."
-      fi
-    else
-      err "sapcli se instaló pero no encuentro su ejecutable en $venv/bin (mira: ls $venv/bin)."
-      ERRORS=$((ERRORS + 1))
+  local git_url="git+https://github.com/jfilak/sapcli.git"
+  rm -rf "$venv"; mkdir -p "$HOME/.local/bin"
+
+  if python3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3,12) else 1)" 2>/dev/null; then
+    info "Instalando sapcli en venv ($venv) con el Python del sistema..."
+    if ! python3 -c "import ensurepip, venv" 2>/dev/null; then
+      case "$PKG_MANAGER" in
+        apt) sudo apt-get install -y python3-venv python3-pip || true ;;
+        dnf) sudo dnf install -y python3-pip || true ;;
+      esac
+    fi
+    if ! python3 -m venv "$venv"; then
+      err "No pude crear el venv (falta python3-venv)."; ERRORS=$((ERRORS + 1)); return 1
+    fi
+    "$venv/bin/python" -m pip install --upgrade pip >/dev/null 2>&1 || true
+    info "pip install git+sapcli (si falla, el error sale debajo)..."
+    if ! "$venv/bin/python" -m pip install "$git_url"; then
+      err "Falló 'pip install sapcli' (error real arriba)."; ERRORS=$((ERRORS + 1)); return 1
     fi
   else
-    err "Falló 'pip install sapcli' (el error real está JUSTO ARRIBA — pégamelo)."
-    warn "Reintenta a mano: $venv/bin/python -m pip install git+https://github.com/jfilak/sapcli.git"
-    ERRORS=$((ERRORS + 1))
+    warn "Tu Python ($(python3 -V 2>&1 | awk '{print $2}')) es < 3.12 y sapcli lo exige."
+    info "Trayendo Python 3.12 con uv (standalone, sin sudo) e instalando sapcli ahí..."
+    if ! ensure_uv; then
+      err "No pude instalar uv para traer Python 3.12. Instala Python>=3.12 a mano y reejecuta."
+      ERRORS=$((ERRORS + 1)); return 1
+    fi
+    if ! uv venv --python 3.12 "$venv" >/dev/null 2>&1; then
+      err "uv no pudo crear el venv con Python 3.12."; ERRORS=$((ERRORS + 1)); return 1
+    fi
+    info "uv pip install git+sapcli (si falla, el error sale debajo)..."
+    if ! uv pip install --python "$venv/bin/python" "$git_url"; then
+      err "Falló la instalación de sapcli con uv (error real arriba)."; ERRORS=$((ERRORS + 1)); return 1
+    fi
+  fi
+
+  local exe="$venv/bin/sapcli"
+  [ -x "$exe" ] || exe="$(find "$venv/bin" -maxdepth 1 -iname 'sapcli*' -type f 2>/dev/null | head -1)"
+  if [ -n "$exe" ] && [ -x "$exe" ]; then
+    ln -sf "$exe" "$HOME/.local/bin/sapcli"
+    export PATH="$HOME/.local/bin:$PATH"; hash -r 2>/dev/null || true
+    if cmd_exists sapcli; then
+      ok "sapcli instalado ($(sapcli --version 2>&1 | head -1))"
+    else
+      warn "sapcli instalado en $venv pero ~/.local/bin no está en tu PATH. Reabre la shell."
+    fi
+  else
+    err "sapcli no dejó ejecutable en $venv/bin (mira: ls $venv/bin)."; ERRORS=$((ERRORS + 1))
   fi
 }
 install_sapcli
