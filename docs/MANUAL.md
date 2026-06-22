@@ -53,7 +53,7 @@ en memoria por sesión.
 Al arrancar sin argumentos se abre el **dashboard** (pantalla de inicio). Teclas:
 `n` nuevo objeto · `o` abrir/buscar · `C` abrir CDS/RAP · `x` ejecutar transacción (WebGUI) ·
 `g` SAP GUI nativo · `R` ejecutar programa · `t`/`c` transportes · `b`/`r` buffers/recientes ·
-`L` conexión · `q` salir.
+`S` configurar conexión (`:SapSetup`) · `L` cambiar de conexión · `q` salir.
 
 - **`<leader>aS`** (`:SapSearchLive`) / dashboard `o` — **búsqueda global en vivo**: picker
   Telescope que resuelve contra ADT a cada tecla. Dos filtros dentro del picker:

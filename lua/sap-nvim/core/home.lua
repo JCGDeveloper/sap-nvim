@@ -146,6 +146,13 @@ local MENU = {
 		end,
 	},
 	{
+		key = "S",
+		desc = "Configurar conexión SAP (:SapSetup) — primera vez / nueva máquina",
+		action = function()
+			vim.cmd("SapSetup")
+		end,
+	},
+	{
 		key = "L",
 		desc = "Conexión / login (cambiar de máquina)",
 		action = function()
