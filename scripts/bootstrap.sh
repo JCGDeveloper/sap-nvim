@@ -384,13 +384,22 @@ if cmd_exists python3; then
 else
   info "Instalando Python..."
   case "$PKG_MANAGER" in
-    brew) brew install python ;;
-    apt)  sudo apt-get install -y python3 python3-pip ;;
-    dnf)  sudo dnf install -y python3 python3-pip ;;
-    pacman) sudo pacman -S --noconfirm python python-pip ;;
+    brew) brew install python || true ;;
+    apt)  sudo apt-get install -y python3 || true ;;
+    dnf)  sudo dnf install -y python3 || true ;;
+    pacman) sudo pacman -S --noconfirm python || true ;;
   esac
-  ok "Python instalado"
 fi
+
+# CRÍTICO para sapcli: pipx crea un venv para sapcli, y en Ubuntu/Debian python3 viene
+# SIN venv. Sin esto, 'pipx install sapcli' falla y el plugin se queda sin su CLI. Por eso
+# lo instalamos SIEMPRE (aunque python3 ya estuviera), no solo cuando falta python.
+case "$PKG_MANAGER" in
+  apt)    sudo apt-get install -y python3-venv python3-pip || warn "No pude instalar python3-venv/pip — pipx/sapcli pueden fallar." ;;
+  dnf)    sudo dnf install -y python3-pip || true ;;
+  pacman) sudo pacman -S --noconfirm python-pip || true ;;
+esac
+ok "Python listo (con venv/pip para pipx)"
 
 # ─── 6. Herramientas ABAP ──────────────────────────────────────────────────
 
@@ -405,15 +414,23 @@ ensure_pipx() {
     ok "pipx ya instalado"
   else
     info "Instalando pipx..."
+    local rc=0
     case "$PKG_MANAGER" in
-      brew)   brew install pipx ;;
-      apt)    sudo apt-get install -y pipx ;;
-      dnf)    sudo dnf install -y pipx ;;
-      pacman) sudo pacman -S --noconfirm python-pipx ;;
+      brew)   brew install pipx || rc=$? ;;
+      apt)    sudo apt-get install -y pipx || rc=$? ;;
+      dnf)    sudo dnf install -y pipx || rc=$? ;;
+      pacman) sudo pacman -S --noconfirm python-pipx || rc=$? ;;
     esac
+    # Fallback universal si el gestor no trae pipx (distros viejas): por pip --user.
+    if [ "$rc" -ne 0 ] || ! cmd_exists pipx; then
+      warn "pipx no vino del gestor; instalándolo con pip (--user)..."
+      python3 -m pip install --user --break-system-packages pipx 2>/dev/null \
+        || python3 -m pip install --user pipx 2>/dev/null \
+        || warn "No pude instalar pipx por pip."
+    fi
   fi
-  pipx ensurepath >/dev/null 2>&1 || true
   export PATH="$HOME/.local/bin:$PATH"   # disponible en ESTA sesión, hasta reabrir shell
+  pipx ensurepath >/dev/null 2>&1 || true
 }
 
 # 6.1 sapcli — NO está en PyPI; se instala desde el repo git (vía pipx, PEP 668 safe)
@@ -648,7 +665,7 @@ validate_cmd() {
 }
 
 echo ""
-echo "  ${BOLD}Editor:${NC}"
+echo -e "  ${BOLD}Editor:${NC}"
 validate_cmd nvim "Neovim"
 
 validate_optional() {
@@ -661,8 +678,8 @@ validate_optional() {
 }
 
 echo ""
-echo "  ${BOLD}Dependencias:${NC}"
-validate_cmd git; validate_cmd lazygit; validate_cmd rg "ripgrep"
+echo -e "  ${BOLD}Dependencias:${NC}"
+validate_cmd git; validate_optional lazygit; validate_cmd rg "ripgrep"
 if cmd_exists cc || cmd_exists gcc || cmd_exists clang; then
   echo -e "    ${GREEN}✔${NC} compilador C"
 else
@@ -672,11 +689,11 @@ validate_optional efm-langserver "efm-langserver"
 validate_cmd node "Node.js"; validate_cmd npm; validate_cmd python3 "Python 3"
 
 echo ""
-echo "  ${BOLD}Herramientas ABAP:${NC}"
-validate_cmd sapcli; validate_cmd abaplint
+echo -e "  ${BOLD}Herramientas ABAP:${NC}"
+validate_cmd sapcli; validate_optional abaplint
 
 echo ""
-echo "  ${BOLD}Proyecto sap-nvim:${NC}"
+echo -e "  ${BOLD}Proyecto sap-nvim:${NC}"
 if [ -d "$SAP_NVIM_DIR" ]; then
   echo -e "    ${GREEN}✔${NC} sap-nvim: $SAP_NVIM_DIR"
   if [ -f "$SAP_NVIM_DIR/lua/sap-nvim/init.lua" ]; then
@@ -691,18 +708,22 @@ else
 fi
 
 echo ""
-echo "  ${BOLD}Config Neovim:${NC}"
+echo -e "  ${BOLD}Config Neovim:${NC}"
 [ -f "$NVIM_CONFIG_DIR/init.lua" ] && echo -e "    ${GREEN}✔${NC} init.lua" || { echo -e "    ${RED}✘${NC} init.lua FALTA"; ERRORS=$((ERRORS + 1)); }
 [ -f "$NVIM_CONFIG_DIR/lua/plugins/sap-nvim.lua" ] && echo -e "    ${GREEN}✔${NC} Plugin sap-nvim" || { echo -e "    ${RED}✘${NC} Plugin sap-nvim FALTA"; ERRORS=$((ERRORS + 1)); }
 
 echo ""
-echo "  ${BOLD}Tree-sitter parsers:${NC}"
-TS_BASE="${XDG_DATA_HOME:-$HOME/.local/share}/nvim/treesitter"
-[ -f "$TS_BASE/abap/parser.so" ] && echo -e "    ${GREEN}✔${NC} tree-sitter-abap" || echo -e "    ${YELLOW}⚠${NC} tree-sitter-abap: pendiente"
-[ -f "$TS_BASE/cds/parser.so" ] && echo -e "    ${GREEN}✔${NC} tree-sitter-cds" || echo -e "    ${YELLOW}⚠${NC} tree-sitter-cds: pendiente"
+echo -e "  ${BOLD}Tree-sitter parsers (OPCIONAL — el resaltado ABAP/CDS usa la sintaxis nativa):${NC}"
+# OJO: el plugin NO depende de tree-sitter para colorear ABAP/CDS (usa el syntax nativo
+# abap.vim de Neovim). Por eso esto es informativo, NO un fallo: sin parser todo va igual.
+# nvim-treesitter guarda el parser como `<nombre>.so` en algún `parser/` del data dir.
+DATA_BASE="${XDG_DATA_HOME:-$HOME/.local/share}"
+ts_installed() { find "$DATA_BASE/nvim-sap" "$DATA_BASE/nvim" -name "$1.so" 2>/dev/null | grep -q .; }
+ts_installed abap && echo -e "    ${GREEN}✔${NC} tree-sitter-abap" || echo -e "    ${CYAN}ℹ${NC} tree-sitter-abap no instalado — no pasa nada (resaltado nativo)"
+ts_installed cds  && echo -e "    ${GREEN}✔${NC} tree-sitter-cds"  || echo -e "    ${CYAN}ℹ${NC} tree-sitter-cds no instalado — no pasa nada (resaltado nativo)"
 
 echo ""
-echo "  ${BOLD}Conexión SAP:${NC}"
+echo -e "  ${BOLD}Conexión SAP:${NC}"
 [ -f "$SAPCLI_CONFIG_DIR/config.yml" ] && echo -e "    ${GREEN}✔${NC} ~/.sapcli/config.yml" || echo -e "    ${YELLOW}⚠${NC} No configurado (nvim +SapSetup)"
 
 # ─── Resultado ─────────────────────────────────────────────────────────────
