@@ -424,6 +424,53 @@ LUAEOF
   ok "Configuración mínima creada (no se sobrescribió nada: no existía)"
 fi
 
+# ─── IDE SAP aislado (config curado nvim-sap) ──────────────────────────────
+#
+# Instala el IDE COMPLETO como una config de Neovim APARTE (NVIM_APPNAME=nvim-sap):
+# completado ADT, pickers, debugger, dashboard, tema… sin tocar tu nvim normal. Se
+# lanza con el alias `nvim-sap`. Es lo que hace que "todo funcione" de una. Si ya
+# existe ~/.config/nvim-sap, NO se sobrescribe.
+
+NVIM_SAP_CONFIG="$HOME/.config/nvim-sap"
+SAP_IDE_SRC="$SAP_NVIM_DIR/extras/nvim-sap"
+
+detect_shell_rc() {
+  case "$(basename "${SHELL:-bash}")" in
+    zsh)  echo "$HOME/.zshrc" ;;
+    *)    echo "$HOME/.bashrc" ;;
+  esac
+}
+
+add_sap_alias() {
+  local rc; rc="$(detect_shell_rc)"
+  touch "$rc"
+  if grep -qF "NVIM_APPNAME=nvim-sap" "$rc" 2>/dev/null; then
+    ok "Alias 'nvim-sap' ya presente en $(basename "$rc")"
+  else
+    printf "\n# sap-nvim — IDE SAP aislado\nalias nvim-sap='NVIM_APPNAME=nvim-sap nvim'\n" >> "$rc"
+    ok "Alias 'nvim-sap' añadido a $(basename "$rc") (reabre la shell o 'source $rc')"
+  fi
+}
+
+install_sap_ide() {
+  if [ ! -d "$SAP_IDE_SRC" ]; then
+    warn "No encuentro el config curado en $SAP_IDE_SRC (¿falló el clon del proyecto?). Salto el IDE."
+    return 0
+  fi
+  if [ -d "$NVIM_SAP_CONFIG" ]; then
+    ok "IDE SAP ya instalado en $NVIM_SAP_CONFIG — no se sobrescribe"
+  else
+    info "Instalando el IDE SAP aislado en $NVIM_SAP_CONFIG (config separada, no toca tu nvim)..."
+    mkdir -p "$NVIM_SAP_CONFIG"
+    cp -r "$SAP_IDE_SRC/init.lua" "$SAP_IDE_SRC/lua" "$NVIM_SAP_CONFIG/"
+    ok "IDE SAP copiado. Primer arranque: 'nvim-sap' (lazy instala todo; espera y reinicia)."
+  fi
+  add_sap_alias
+}
+
+header "[Extra] IDE SAP aislado (nvim-sap)"
+install_sap_ide
+
 # ─── Tree-sitter parsers ──────────────────────────────────────────────────
 
 header "[Extra] Tree-sitter ABAP + CDS"
@@ -529,11 +576,13 @@ if [ $ERRORS -eq 0 ]; then
   echo -e "  ${GREEN}${BOLD}✅ Todo listo!${NC} ($OS/$ARCH)"
   echo ""
   echo "  Próximos pasos:"
-  echo "  1. nvim +SapSetup     → Configurar conexión SAP"
-  echo "  2. nvim               → Abrir Neovim y probar"
-  echo "  3. <leader>an         → Crear nuevo objeto ABAP"
-  echo "  4. <leader>asc        → Configurar conexiones"
+  echo "  1. source ~/.zshrc (o reabre la terminal)  → activa el alias 'nvim-sap'"
+  echo "  2. nvim-sap           → IDE SAP completo (1ª vez: lazy instala todo, espera y reinicia)"
+  echo "  3. :SapSetup          → Configurar conexión SAP (dentro de nvim-sap)"
+  echo "  4. <leader>an         → Crear nuevo objeto ABAP"
   echo "  5. <leader>ah         → Ayuda de comandos"
+  echo ""
+  echo "  (El IDE 'nvim-sap' es una config aislada y NO toca tu Neovim normal.)"
   echo ""
   echo "  En un archivo .abap:"
   echo "    gd  → ir a definición"

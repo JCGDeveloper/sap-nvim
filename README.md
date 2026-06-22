@@ -53,12 +53,23 @@ bash ~/sap-nvim/scripts/bootstrap.sh
      `~/.config/nvim/lua/plugins/sap-nvim.lua` (lazy.nvim lo carga solo). Si ese archivo
      ya existe, no cambia nada.
    - Si **no tenés** ninguna config → genera una mínima con lazy.nvim desde cero.
-8. Intenta instalar los parsers de tree-sitter (`abap`, `cds`) en modo headless
+8. **Instala el IDE SAP completo y aislado** (`~/.config/nvim-sap` + alias `nvim-sap`): la
+   experiencia full (completado ADT, pickers, debugger, dashboard, tema) en una config de
+   Neovim **separada** que NO toca tu `nvim` normal. Si ya existe, no lo sobrescribe. Es la vía
+   recomendada para que "todo funcione" de una. Lánzalo con **`nvim-sap`** (la 1ª vez lazy
+   instala todos los plugins: espera y reinicia).
+9. Intenta instalar los parsers de tree-sitter (`abap`, `cds`) en modo headless
    (best-effort, con timeout). Si no lo logra, abrí Neovim y corré `:TSInstall abap cds`.
-9. Corre una validación final y lista qué quedó OK y qué falta.
+10. Corre una validación final y lista qué quedó OK y qué falta.
 
 Es **idempotente**: podés correrlo las veces que quieras sin romper nada. Para deshacer,
-borrá `~/.config/nvim/lua/plugins/sap-nvim.lua` y desinstalá las herramientas.
+borrá `~/.config/nvim/lua/plugins/sap-nvim.lua`, `~/.config/nvim-sap`, el alias `nvim-sap` de
+tu shell rc, y desinstalá las herramientas.
+
+> **Dos formas de usarlo**, ambas las deja listas el bootstrap: (a) **`nvim-sap`** → IDE SAP
+> completo y aislado (recomendado para tu compañero); (b) tu **`nvim`** normal → el plugin
+> añadido a tu config sin `sap_mode` (solo `:SapHome`, sin tocar tus keymaps). El completado
+> ADT y los pickers requieren las dependencias del IDE; por eso la vía (a) es la que lo trae todo.
 
 > **Sobre WSL2 y "no tocar el ordenador de empresa":** WSL2 es una VM Linux aislada del
 > Windows host. `sudo apt` dentro de WSL **solo toca tu Ubuntu de WSL**, nunca Windows. El
