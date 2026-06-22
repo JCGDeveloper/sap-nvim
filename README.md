@@ -409,10 +409,15 @@ Crea el archivo local con el template de cabecera correcto y lo abre para editar
 | `<leader>afs` | `:SapSearch` | Buscar objetos en SAP por patrón de nombre |
 | `<leader>afb` | `:SapBrowse` | Explorar todos los objetos de un paquete |
 
-El picker en vivo resuelve contra ADT a cada tecla (debounce 200 ms). Dentro del picker,
-**`<C-f>`** (Ctrl+F) abre el selector de tipo de objeto (Database Table, Program, Class, CDS
-View, Data Element…) y refiltra la búsqueda —igual que el filtro de tipo de VSCode, usando
-`&objectType=<GRUPO>`—. El de CDS solo ofrece grupos CDS/RAP (DDLS/DDLX/DCL/BDEF/SRVD/SRVB).
+El picker en vivo resuelve contra ADT a cada tecla (debounce 200 ms). Dentro del picker:
+
+- **`<C-f>`** (Ctrl+F) — filtra por **tipo de objeto** (Database Table, Program, Class, CDS
+  View, Data Element…), igual que el filtro de tipo de VSCode (`&objectType=<GRUPO>`). El picker
+  de CDS solo ofrece grupos CDS/RAP (DDLS/DDLX/DCL/BDEF/SRVD/SRVB).
+- **`<C-d>`** (Ctrl+D) — filtra por **descripción** con comodín `*` (p. ej. `*factura*`). El
+  `quickSearch` de ADT solo busca por nombre técnico, así que el servidor trae los objetos por
+  nombre y el plugin refina por descripción en cliente (sin `*` = «contiene»; `*` = comodín).
+  Útil para combinar: nombre `JCG*` + descripción `*factura*`. Vacío quita el filtro.
 
 Al elegir un objeto de cualquiera de los pickers, intenta abrirlo localmente; si no lo
 encuentra, ofrece hacer checkout.

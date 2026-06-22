@@ -56,9 +56,14 @@ Al arrancar sin argumentos se abre el **dashboard** (pantalla de inicio). Teclas
 `L` conexión · `q` salir.
 
 - **`<leader>aS`** (`:SapSearchLive`) / dashboard `o` — **búsqueda global en vivo**: picker
-  Telescope que resuelve contra ADT a cada tecla. Dentro, **`<C-f>`** (Ctrl+F) abre el selector
-  de tipo de objeto (Database Table, Program, Class, CDS, Data Element…) y refiltra —igual que
-  el filtro de VSCode (`&objectType`)—. Para CDS, `<leader>cc` / dashboard `C` (ver §5).
+  Telescope que resuelve contra ADT a cada tecla. Dos filtros dentro del picker:
+  - **`<C-f>`** (Ctrl+F) — por **tipo** de objeto (Database Table, Program, Class, CDS, Data
+    Element…), igual que el filtro de VSCode (`&objectType`).
+  - **`<C-d>`** (Ctrl+D) — por **descripción**, con comodín `*` (p. ej. `*factura*`; sin `*` =
+    «contiene»). El servidor solo busca por nombre técnico, así que el plugin refina la
+    descripción en cliente. Combina bien con el nombre: `JCG*` + descripción `*factura*`.
+
+  Para CDS, `<leader>cc` / dashboard `C` (ver §5).
 
 - **`␣␣`** (espacio-espacio) — saltar entre objetos SAP abiertos (estilo VSCode).
 - **`-`** (guion) — *volver*: recorre hacia atrás la navegación (gd/búsqueda/include) y, al
@@ -215,7 +220,7 @@ depurar) para que **agentes de IA** programen en tu sistema. Setup completo en
 | Completar (manual) | `<C-Space>` · `:SapComplete` |
 | Hover / Ir a definición / Referencias | `K` · `gd` · `gr` |
 | Outline / Where-used | `<leader>ao` · `<leader>aw` |
-| Buscar objeto / CDS (en vivo, `<C-f>` filtra tipo) | `<leader>aS` · `<leader>cc` |
+| Buscar objeto / CDS en vivo (`<C-f>` tipo · `<C-d>` descripción) | `<leader>aS` · `<leader>cc` |
 | Formatear / Activar / Subir | `<leader>aF` · `<leader>aa` · `<leader>au` |
 | Nuevo objeto / Crear include | `<leader>an` · `<leader>aci` |
 | Ejecutar transacción / programa | `<leader>ax` · `<leader>aR` (pregunta navegador/terminal) |

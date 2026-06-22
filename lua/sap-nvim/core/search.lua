@@ -95,6 +95,19 @@ local function unxml(s)
 	return (s or ""):gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"'):gsub("&apos;", "'"):gsub("&amp;", "&")
 end
 
+-- Filtro de DESCRIPCIÓN (cliente): el quickSearch de ADT solo matchea por NOMBRE técnico,
+-- no por descripción (verificado contra el sistema). Así que el servidor busca por nombre y
+-- aquí refinamos por la descripción. Patrón tipo glob: `*` = comodín; sin `*` = «contiene».
+local function glob_to_pat(glob)
+	return (glob:lower():gsub("[%(%)%.%%%+%-%?%[%]%^%$]", "%%%1"):gsub("%*", ".*"))
+end
+local function desc_matches(desc, glob)
+	if not glob or glob == "" then
+		return true
+	end
+	return (desc or ""):lower():find(glob_to_pat(glob)) ~= nil
+end
+
 local function url_encode(str)
 	if not str then
 		return ""
@@ -143,6 +156,8 @@ end
 --   object_type  string|nil  filtro inicial (código ADT: "DDLS", "TABL"…). nil = todos.
 --   title        string|nil  título base del picker.
 --   types        table|nil   subconjunto de tipos elegibles en <C-f> (default OBJECT_TYPES).
+--   desc_filter  string|nil  patrón de descripción inicial (glob con `*`); filtra en cliente.
+--   default_text string|nil  texto inicial del prompt (para reabrir conservando lo escrito).
 function M.open_picker(opts)
 	opts = opts or {}
 	local ok, pickers = pcall(require, "telescope.pickers")
@@ -154,9 +169,10 @@ function M.open_picker(opts)
 	local actions = require("telescope.actions")
 	local action_state = require("telescope.actions.state")
 
-	-- Estado mutable que lee el finder en cada llamada (lo cambia <C-f>).
+	-- Estado mutable que lee el finder en cada llamada (lo cambian <C-f>/<C-d>).
 	local state = {
 		object_type = opts.object_type, -- código ADT o nil
+		desc_filter = opts.desc_filter, -- patrón glob de descripción o nil
 		base_title = opts.title or "🔍 Buscar Objeto SAP (ADT)",
 		type_list = opts.types or OBJECT_TYPES,
 	}
@@ -174,7 +190,11 @@ function M.open_picker(opts)
 	end
 
 	local function current_title()
-		return string.format("%s  ·  Tipo: %s  ·  <C-f> filtrar", state.base_title, type_label())
+		local t = string.format("%s  ·  Tipo: %s", state.base_title, type_label())
+		if state.desc_filter and state.desc_filter ~= "" then
+			t = t .. "  ·  Descr: " .. state.desc_filter
+		end
+		return t .. "  ·  <C-f> tipo · <C-d> descr"
 	end
 
 	local function entry_maker(entry)
@@ -205,7 +225,9 @@ function M.open_picker(opts)
 	local finder = setmetatable({ close = stop_timer }, {
 		__call = function(_, prompt, process_result, process_complete)
 			prompt = prompt or ""
-			if #prompt < 3 then
+			local has_desc = state.desc_filter ~= nil and state.desc_filter ~= ""
+			-- Con filtro de descripción se puede buscar aunque el nombre esté vacío (name=`*`).
+			if #prompt < 3 and not has_desc then
 				process_result(info("Escribe al menos 3 letras…", "INFO", prompt))
 				process_complete()
 				return
@@ -226,13 +248,21 @@ function M.open_picker(opts)
 					return -- seguiste escribiendo: esta búsqueda ya no interesa
 				end
 
-				local query = prompt:upper():gsub("%*+", "*")
-				if query:sub(-1) ~= "*" then
-					query = query .. "*"
+				local query
+				if #prompt >= 1 then
+					query = prompt:upper():gsub("%*+", "*")
+					if query:sub(-1) ~= "*" then
+						query = query .. "*"
+					end
+				else
+					query = "*" -- solo filtro de descripción: pedimos todo (acotado por tipo)
 				end
+				-- Con filtro de descripción el servidor devuelve por nombre y refinamos en
+				-- cliente, así que pedimos MÁS candidatos para tener de dónde filtrar.
+				local max = has_desc and 200 or MAX_RESULTS
 				local req_path = "/sap/bc/adt/repository/informationsystem/search?query="
 					.. url_encode(query)
-					.. "&maxResults=" .. MAX_RESULTS
+					.. "&maxResults=" .. max
 					.. "&operation=quickSearch"
 				if state.object_type then
 					req_path = req_path .. "&objectType=" .. url_encode(state.object_type)
@@ -248,8 +278,20 @@ function M.open_picker(opts)
 							return -- respuesta obsoleta: el prompt ya cambió
 						end
 						local results = parse_body(body, prompt)
+						-- Refinado por descripción en cliente (el servidor solo matchea nombre).
+						if has_desc then
+							local filtered = {}
+							for _, r in ipairs(results) do
+								if desc_matches(r.desc, state.desc_filter) then
+									filtered[#filtered + 1] = r
+								end
+							end
+							results = filtered
+						end
 						if #results == 0 then
-							process_result(info("SAP no encontró objetos.", "INFO", prompt))
+							local msg = has_desc and "Ningún objeto con esa descripción."
+								or "SAP no encontró objetos."
+							process_result(info(msg, "INFO", prompt))
 						else
 							for _, r in ipairs(results) do
 								if process_result(entry_maker(r)) then
@@ -289,10 +331,43 @@ function M.open_picker(opts)
 								return t.label
 							end,
 						}, function(choice)
+							-- choice nil = cancelado (deja el tipo igual); si eligió, choice.code
+							-- puede ser nil = "Todos los tipos" (quita el filtro).
+							local ot = state.object_type
+							if choice then
+								ot = choice.code
+							end
 							M.open_picker({
-								object_type = choice and choice.code or state.object_type,
+								object_type = ot,
 								title = state.base_title,
 								types = state.type_list,
+								desc_filter = state.desc_filter,
+								default_text = typed,
+							})
+						end)
+					end)
+				end
+
+				-- Filtrar por DESCRIPCIÓN: mismo patrón (cerrar→pedir→reabrir). Glob con `*`;
+				-- vacío = quita el filtro. El servidor busca por nombre y refinamos en cliente.
+				local function pick_desc()
+					local typed = action_state.get_current_line()
+					actions.close(prompt_bufnr)
+					vim.schedule(function()
+						vim.ui.input({
+							prompt = "Filtrar por descripción (usa * como comodín; vacío = sin filtro): ",
+							default = state.desc_filter or "",
+						}, function(input)
+							-- input nil = cancelado (conserva el filtro); "" = lo quita.
+							local df = state.desc_filter
+							if input ~= nil then
+								df = vim.trim(input) ~= "" and vim.trim(input) or nil
+							end
+							M.open_picker({
+								object_type = state.object_type,
+								title = state.base_title,
+								types = state.type_list,
+								desc_filter = df,
 								default_text = typed,
 							})
 						end)
@@ -301,6 +376,8 @@ function M.open_picker(opts)
 
 				map("i", "<C-f>", pick_type)
 				map("n", "<C-f>", pick_type)
+				map("i", "<C-d>", pick_desc)
+				map("n", "<C-d>", pick_desc)
 
 				actions.select_default:replace(function()
 					local selection = action_state.get_selected_entry()
@@ -336,7 +413,7 @@ end
 function M.setup()
 	vim.api.nvim_create_user_command("SapSearchLive", function()
 		M.open_picker()
-	end, { desc = "sap-nvim: Búsqueda global (con filtro por tipo, <C-f>)" })
+	end, { desc = "sap-nvim: Búsqueda global (filtro de tipo <C-f>, descripción <C-d>)" })
 
 	vim.api.nvim_create_user_command("SapSearchCds", function()
 		M.open_cds_picker()
@@ -344,7 +421,7 @@ function M.setup()
 
 	vim.keymap.set("n", "<leader>aS", function()
 		M.open_picker()
-	end, { desc = "ABAP: Buscar objeto (filtro <C-f>)" })
+	end, { desc = "ABAP: Buscar objeto (tipo <C-f>, descripción <C-d>)" })
 end
 
 return M
