@@ -1,5 +1,14 @@
 local source = {}
 
+local function url_encode(str)
+	if not str then
+		return ""
+	end
+	return (str:gsub("[^%w_~%.%-]", function(c)
+		return string.format("%%%02X", string.byte(c))
+	end))
+end
+
 function source.new(opts)
 	return setmetatable({ opts = opts or {} }, { __index = source })
 end
@@ -56,7 +65,7 @@ function source:get_completions(ctx, callback)
 		and not type_ctx
 		and #word < 2
 	then
-		callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = false })
+		callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = true })
 		return function() end
 	end
 
@@ -67,23 +76,27 @@ function source:get_completions(ctx, callback)
 	intel.proposals_async(bufnr, row, col, function(props)
 		local items = {}
 		local typed_len = #word
-		-- blink mete el GUION en su "keyword" (vl_vbak- → keyword="vl_vbak-"), así que para que
-		-- los campos MATCHEEN les damos filterText con ese prefijo (vl_vbak-VBELN). El textEdit
-		-- reemplaza solo lo tecleado tras el guion. Sin esto blink filtra y oculta todo.
 		local struct_prefix = struct_field and (before:match("([%w_]+%-)[%w_]*$") or "") or nil
 
-		for _, p in ipairs(props) do
+		for _, p in ipairs(props or {}) do
 			local plen = p.prefixlength or typed_len
 			local it = {
 				label = p.word,
 				kind = KIND_MAP[p.kind or ""] or Kind.Text,
 				labelDetails = { description = KIND_LABEL[p.kind or ""] or "SAP" },
 				insertText = p.word,
+				filterText = p.word,
+
+				-- Guardamos las coordenadas limpias para montar el Snippet a posteriori
+				sap_resolve = {
+					is_method = (p.kind == "3" and member),
+					bufnr = bufnr,
+					row = row,
+					start_col = ctx.cursor[2] - plen,
+				},
 			}
 
 			if struct_field then
-				-- Campo de estructura tras `wa-`: filterText con el prefijo del guion + textEdit
-				-- que solo reemplaza lo escrito DESPUÉS del guion (typed_len chars).
 				it.filterText = struct_prefix .. p.word
 				it.textEdit = {
 					newText = p.word,
@@ -93,7 +106,6 @@ function source:get_completions(ctx, callback)
 					},
 				}
 			elseif plen > 0 then
-				-- Otros contextos: textEdit normal según el prefijo del servidor.
 				it.textEdit = {
 					newText = p.word,
 					range = {
@@ -103,29 +115,170 @@ function source:get_completions(ctx, callback)
 				}
 			end
 
-			if p.kind == "3" and member then
-				local newText = p.word .. "( $0 )"
-				it.insertText = newText
-				it.insertTextFormat = vim.lsp.protocol.InsertTextFormat.Snippet
-				if it.textEdit then
-					it.textEdit.newText = newText
-				end
-			end
-
 			items[#items + 1] = it
 		end
 
 		vim.schedule(function()
-			-- 🔥 FIX 2: Confirmamos a Blink que la lista está 100% terminada,
-			-- obligándole a mostrarla en pantalla inmediatamente.
-			callback({
-				items = items,
-				is_incomplete_backward = false,
-				is_incomplete_forward = false,
-			})
+			callback({ items = items, is_incomplete_backward = true, is_incomplete_forward = true })
 		end)
 	end)
 	return function() end
+end
+
+-- Función centralizada que hace las llamadas a SAP para sacar la firma del método
+local function fetch_method_snippet(item, callback)
+	if item.sap_snippet then
+		return callback(item.sap_snippet)
+	end
+	if not item.sap_resolve or not item.sap_resolve.is_method then
+		return callback(nil)
+	end
+
+	local intel = require("sap-nvim.core.intel")
+	local adt_http = require("sap-nvim.core.adt_http")
+
+	local bufnr = item.sap_resolve.bufnr
+	local row = item.sap_resolve.row
+	local start_col = item.sap_resolve.start_col
+
+	local uri = intel.object_uri(bufnr)
+	if not uri then
+		return callback(nil)
+	end
+
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	local current_line = lines[row] or ""
+	local new_line = current_line:sub(1, start_col) .. item.label .. "( )."
+	lines[row] = new_line
+	local fake_src = table.concat(lines, "\r\n")
+	local fake_col = start_col + #item.label
+
+	local ctx = ""
+	local meta = vim.b[bufnr].sap_obj
+	if meta and meta.group == "include" then
+		local mps = intel.main_programs(meta.name)
+		if mps and mps[1] then
+			ctx = "?context=" .. url_encode(mps[1])
+		end
+	end
+
+	local logical = uri .. ctx .. "%23start=" .. row .. "," .. start_col .. ";end=" .. row .. "," .. fake_col
+
+	adt_http.request_async({
+		method = "POST",
+		path = "/sap/bc/adt/navigation/target",
+		query = { uri = logical, filter = "definition" },
+		content_type = "text/plain",
+		body = fake_src,
+	}, function(nav_body)
+		local target_uri = nav_body and nav_body:match('adtcore:uri="([^"]*)"')
+		if not target_uri or target_uri == "" then
+			return callback(nil)
+		end
+
+		target_uri = target_uri:gsub("#", "%%23")
+
+		adt_http.request_async({
+			method = "POST",
+			path = "/sap/bc/adt/abapsource/elementinfo",
+			query = { uri = target_uri },
+			content_type = "text/plain",
+			accept = "application/xml",
+			body = "",
+		}, function(info_body)
+			if not info_body or not info_body:find("elementInfo") then
+				return callback(nil)
+			end
+
+			local SECTIONS =
+				{ EXPORTING = true, IMPORTING = true, CHANGING = true, RETURNING = true, EXCEPTIONS = true }
+			local current_section = nil
+			local params_by_section = { EXPORTING = {}, IMPORTING = {}, CHANGING = {}, RETURNING = {}, EXCEPTIONS = {} }
+
+			for name in info_body:gmatch('adtcore:name="([^"]+)"') do
+				local up_name = name:upper()
+				if SECTIONS[up_name] then
+					current_section = up_name
+				elseif current_section and up_name ~= item.label:upper() then
+					table.insert(params_by_section[current_section], name:lower())
+				end
+			end
+
+			local snip = {}
+			local tabstop = 1
+
+			for _, sec in ipairs({ "EXPORTING", "IMPORTING", "CHANGING", "RETURNING", "EXCEPTIONS" }) do
+				local params = params_by_section[sec]
+				if #params > 0 then
+					table.insert(snip, "  " .. sec)
+					local has_others = false
+					for i, p in ipairs(params) do
+						if p == "others" then
+							has_others = true
+						end
+						if sec == "EXCEPTIONS" then
+							table.insert(snip, string.format("    %-20s = %d", p, i))
+						else
+							table.insert(snip, string.format("    %-20s = ${%d:}", p, tabstop))
+							tabstop = tabstop + 1
+						end
+					end
+					if sec == "EXCEPTIONS" and not has_others then
+						table.insert(snip, string.format("    %-20s = %d", "others", #params + 1))
+					end
+				end
+			end
+
+			if #snip > 0 then
+				item.sap_snippet = item.label .. "(\n" .. table.concat(snip, "\n") .. "\n)$0"
+				callback(item.sap_snippet)
+			else
+				callback(nil)
+			end
+		end)
+	end)
+end
+
+-- 🔥 RESOLVE: Pre-calcula el Snippet en caché mientras tienes el menú iluminado
+function source:resolve(item, callback)
+	if not item.sap_resolve or not item.sap_resolve.is_method then
+		return callback(item)
+	end
+	fetch_method_snippet(item, function()
+		callback(item)
+	end)
+end
+
+-- 🔥 EXECUTE: Se dispara mágicamente justo al pulsar Enter
+function source:execute(ctx, item)
+	if not item.sap_resolve or not item.sap_resolve.is_method then
+		return
+	end
+
+	-- Guardamos dónde ha dejado el cursor Blink tras insertar "GUI_UPLOAD"
+	local end_col = vim.api.nvim_win_get_cursor(0)[2]
+	local start_col = end_col - #item.label
+
+	-- Llamamos a la API. Si ya lo pre-calculó resolve(), esto tarda 0 milisegundos.
+	fetch_method_snippet(item, function(snip)
+		vim.schedule(function()
+			-- Si el usuario se movió de línea, abortamos por seguridad
+			if vim.api.nvim_win_get_cursor(0)[1] ~= item.sap_resolve.row then
+				return
+			end
+
+			-- Borramos el "GUI_UPLOAD" pelado que Blink acababa de escribir
+			local row = vim.api.nvim_win_get_cursor(0)[1]
+			vim.api.nvim_buf_set_text(0, row - 1, start_col, row - 1, end_col, {})
+			vim.api.nvim_win_set_cursor(0, { row, start_col })
+
+			-- Insertamos la obra de arte usando el motor de snippets nativo
+			snip = snip or (item.label .. "( $0 )")
+			if vim.snippet and vim.snippet.expand then
+				vim.snippet.expand(snip)
+			end
+		end)
+	end)
 end
 
 return source
