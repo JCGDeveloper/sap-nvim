@@ -147,6 +147,31 @@ sap-nvim atajos:
 		require("sap-nvim.core.connection").choose()
 	end, { desc = "ABAP: Conexión / login SAP (valida contraseña)" })
 
+	-- Quita el comentario ABAP `*` (col 1) de la línea / selección. Pensado para "activar"
+	-- rápidamente los parámetros opcionales del patrón de método (vienen comentados con `*`).
+	-- gc no sirve aquí porque usa `"` (comentario inline), no quita el `*`.
+	local function abap_uncomment_star(l1, l2)
+		for ln = l1, l2 do
+			local s = vim.fn.getline(ln)
+			local new = s:gsub("^(%s*)%*%s?", "%1") -- quita el 1er `*` (+ un espacio) tras la indentación
+			if new ~= s then
+				vim.fn.setline(ln, new)
+			end
+		end
+	end
+	vim.keymap.set("n", "<leader>a*", function()
+		local l = vim.fn.line(".")
+		abap_uncomment_star(l, l)
+	end, { desc = "ABAP: quitar comentario * (descomentar línea)" })
+	vim.keymap.set("x", "<leader>a*", function()
+		local a, b = vim.fn.line("v"), vim.fn.line(".")
+		if a > b then
+			a, b = b, a
+		end
+		abap_uncomment_star(a, b)
+		vim.cmd("normal! \27") -- salir de modo visual
+	end, { desc = "ABAP: quitar comentario * de la selección (descomentar)" })
+
 	vim.keymap.set("n", "<leader>aa", function()
 		require("sap-nvim.core.source").activate()
 	end, { desc = "ABAP: Activar objeto (sube antes si es remoto, jump-to-error)" })

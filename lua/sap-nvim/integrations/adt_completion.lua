@@ -222,16 +222,12 @@ function source:execute(ctx, item, callback, default_implementation)
 
 			local from_col = item.sap_resolve.start_col
 			local to_col = math.max(from_col, cur[2])
-			local line = vim.api.nvim_buf_get_lines(0, row0, row0 + 1, false)[1] or ""
-			local indent = (line:sub(1, from_col):match("^%s*")) or "" -- indentación de la llamada
 
+			-- Insertamos el patrón VERBATIM (como VSCode): los comentarios ABAP `*` de los
+			-- parámetros opcionales DEBEN quedar en la columna 1, así que NO re-indentamos.
 			local out = vim.split(text, "\n", { plain = true })
 			while #out > 1 and out[#out] == "" do
 				table.remove(out) -- quita líneas vacías finales que mete SAP
-			end
-			-- La 1ª línea reemplaza lo tecleado; las siguientes se alinean a la indentación base.
-			for i = 2, #out do
-				out[i] = indent .. out[i]
 			end
 
 			vim.api.nvim_buf_set_text(0, row0, from_col, row0, to_col, out)
