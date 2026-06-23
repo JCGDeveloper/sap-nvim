@@ -105,9 +105,13 @@ function M.bootstrap()
 		return
 	end
 	adt.validate(function(ok, code)
-		if ok then
+		if ok or not (code == 401 or code == 403) then
+			-- OK, o fallo TRANSITORIO (red/timeout/5xx, code 0): confiamos en la contraseña
+			-- recordada y habilitamos sin preguntar. Si más tarde hay un 401 real, salta el
+			-- freno (1 intento). NO borramos el almacén por un parpadeo de red al arrancar.
 			adt.mark_validated()
 		else
+			-- 401/403: la contraseña recordada es INVÁLIDA → olvidarla y pedir re-login.
 			adt.on_auth_failure()
 		end
 	end)
