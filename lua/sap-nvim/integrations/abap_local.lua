@@ -261,20 +261,24 @@ function source:get_completions(ctx, callback)
 		return function() end
 	end
 
-	-- En contextos donde SOLO tienen sentido las propuestas del servidor (sap_adt), callamos
-	-- los keywords ABAP para no taparlas: tras `wa-` (campo de estructura) y tras `TYPE `/`LIKE `
-	-- (tipos/tablas DDIC). Los miembros `->`/`=>`/`~` ya los silencia el `enabled` de la config.
+	-- En contextos donde SOLO tienen sentido las propuestas del servidor (sap_adt: miembros,
+	-- campos, tipos), CALLAMOS los keywords ABAP para que no tapen ni se ordenen por encima de
+	-- las variables/campos/métodos. Cubrimos TODOS los sitios (no solo `wa-`):
+	--   =>  ->  (miembro estático/instancia) · ~ (miembro de interfaz)
+	--   X-  donde X es palabra, `]` o `)`  → wa-campo / lt[ 1 ]-campo / get( )-campo
+	--   tras TYPE / LIKE (tipos y tablas DDIC)
 	do
 		local col = (ctx and ctx.cursor and ctx.cursor[2]) or vim.api.nvim_win_get_cursor(0)[2]
 		local before = (vim.api.nvim_get_current_line() or ""):sub(1, col)
 		local bl = before:lower()
 		if
-			before:match("[%w_]%-[%w_]*$") -- wa-campo (estructura, no `->`)
+			before:match("[=%-]>[%w_]*$") -- =>  /  ->
+			or before:match("~[%w_]*$") -- ~ (interfaz)
+			or before:match("[%w_%]%)]%-[%w_]*$") -- wa-campo / lt[ 1 ]-campo / get( )-campo
 			or bl:match("%s+type%s+[%w_/]*$")
 			or bl:match("%s+like%s+[%w_/]*$")
 		then
-			-- 🔥 FIX: Mandamos true en incomplete para que Blink no asuma
-			-- que la búsqueda ha terminado y permita a sap_adt brillar.
+			-- is_incomplete=true para que Blink no dé por cerrada la búsqueda y deje brillar a sap_adt.
 			callback({ items = {}, is_incomplete_backward = true, is_incomplete_forward = true })
 			return function() end
 		end
