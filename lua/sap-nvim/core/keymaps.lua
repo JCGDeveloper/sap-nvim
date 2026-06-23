@@ -95,6 +95,7 @@ sap-nvim atajos:
   <leader>atr  Liberar orden (:SapTransportRelease)
 
   CONEXION:
+  <leader>asl  Conexion / login SAP (valida la contrasena) (:SapLogin)
   <leader>asg  Abrir SAP GUI
   <leader>aso  Objeto en SAP GUI
   <leader>asc  Configurar conexiones (:SapSetup, formato kubeconfig)
@@ -141,6 +142,10 @@ sap-nvim atajos:
 			vim.notify("sap-nvim: SAP GUI no encontrado", vim.log.levels.ERROR)
 		end
 	end, { desc = "ABAP: Abrir objeto en SAP GUI" })
+
+	vim.keymap.set("n", "<leader>asl", function()
+		require("sap-nvim.core.connection").choose()
+	end, { desc = "ABAP: Conexión / login SAP (valida contraseña)" })
 
 	vim.keymap.set("n", "<leader>aa", function()
 		require("sap-nvim.core.source").activate()
