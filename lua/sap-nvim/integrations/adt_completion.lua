@@ -24,10 +24,22 @@ end
 
 local Kind = vim.lsp.protocol.CompletionItemKind
 -- AÑADIDO: Soporte explícito para "Funciones" y "Palabras clave"
-local KIND_MAP =
-	{ ["1"] = Kind.Variable, ["2"] = Kind.Class, ["3"] = Kind.Method, ["4"] = Kind.Function, ["52"] = Kind.Keyword }
-local KIND_LABEL =
-	{ ["1"] = "variable", ["2"] = "clase/tipo", ["3"] = "método", ["4"] = "función", ["52"] = "keyword" }
+local KIND_MAP = {
+	["1"] = Kind.Variable,
+	["2"] = Kind.Class,
+	["3"] = Kind.Method,
+	["4"] = Kind.Function,
+	["6"] = Kind.Function, -- módulo de función (CALL FUNCTION)
+	["52"] = Kind.Keyword,
+}
+local KIND_LABEL = {
+	["1"] = "variable",
+	["2"] = "clase/tipo",
+	["3"] = "método",
+	["4"] = "función",
+	["6"] = "módulo func.",
+	["52"] = "keyword",
+}
 
 function source:get_completions(ctx, callback)
 	local col = ctx.cursor[2]
@@ -94,8 +106,9 @@ function source:get_completions(ctx, callback)
 
 				sap_resolve = {
 					is_method = (p.kind == "3" and member),
-					-- 🔥 MAGIA PURA: Permitimos que funciones (4) y keywords (52) intenten buscar snippet
-					needs_pattern = (p.kind == "3" or p.kind == "4" or p.kind == "52"),
+					-- Métodos (3), funciones (4), MÓDULOS DE FUNCIÓN (6) y keywords (52) intentan
+					-- expandir su patrón (EXPORTING/IMPORTING/...). Si no hay patrón, cae al nombre.
+					needs_pattern = (p.kind == "3" or p.kind == "4" or p.kind == "6" or p.kind == "52"),
 					bufnr = bufnr,
 					row = row,
 					start_col = ctx.cursor[2] - plen,
@@ -154,9 +167,14 @@ local function fetch_method_insertion(item, callback)
 		return callback(nil)
 	end
 
+	-- Ponemos el NOMBRE COMPLETO en el ancla y pedimos el patrón con el cursor al final del
+	-- nombre. Los módulos de función (CALL FUNCTION 'X') NECESITAN el nombre en la fuente para
+	-- resolver (truncar daba HTTP 400); a los métodos también les vale. Posición = ancla + nombre.
+	local name = item.label
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	lines[row] = (lines[row] or ""):sub(1, start_col)
+	lines[row] = (lines[row] or ""):sub(1, start_col) .. name
 	local src = table.concat(lines, "\n")
+	local pos_col = start_col + #name
 
 	local ctx = ""
 	local meta = vim.b[bufnr].sap_obj
@@ -167,7 +185,7 @@ local function fetch_method_insertion(item, callback)
 		end
 	end
 
-	local logical = uri .. ctx .. "%23start=" .. row .. "," .. start_col
+	local logical = uri .. ctx .. "%23start=" .. row .. "," .. pos_col
 
 	adt_http.request_async({
 		method = "POST",
@@ -221,6 +239,13 @@ function source:execute(ctx, item, callback, default_implementation)
 			local out = vim.split(text, "\n", { plain = true })
 			while #out > 1 and out[#out] == "" do
 				table.remove(out)
+			end
+
+			-- Módulo de función: el patrón cierra con comilla (NAME'). Si justo tras el cursor ya
+			-- hay una comilla (la de cierre del literal), la consumimos para no duplicarla.
+			local cur_line = vim.api.nvim_buf_get_lines(0, row0, row0 + 1, false)[1] or ""
+			if out[1] and out[1]:sub(-1) == "'" and cur_line:sub(to_col + 1, to_col + 1) == "'" then
+				to_col = to_col + 1
 			end
 
 			vim.api.nvim_buf_set_text(0, row0, from_col, row0, to_col, out)
