@@ -182,8 +182,9 @@ local function fetch_method_insertion(item, callback)
 			item.sap_snippet = false
 			return callback(nil)
 		end
-		item.sap_snippet = body
-		callback(body)
+		-- SAP devuelve el texto con CRLF: quitamos los \r o quedarían como ^M en cada línea.
+		item.sap_snippet = (body:gsub("\r", ""))
+		callback(item.sap_snippet)
 	end)
 end
 
@@ -197,46 +198,46 @@ function source:resolve(item, callback)
 	end)
 end
 
--- 🔥 EXECUTE: justo al aceptar, sustituye el nombre pelado por el patrón completo del método.
-function source:execute(ctx, item)
+-- 🔥 EXECUTE: al aceptar, sustituye el nombre del método por su patrón completo.
+-- Como el source `luasnip` de Blink: NO llamamos a default_implementation (así Blink no inserta
+-- también el nombre y no se duplica), y limpiamos la región [ancla, cursor] anclada en
+-- sap_resolve.start_col (el MISMO ancla con el que SAP generó el patrón), no en cursor-#label.
+function source:execute(ctx, item, callback, default_implementation)
+	callback = callback or function() end
 	if not item.sap_resolve or not item.sap_resolve.is_method then
-		return
+		if default_implementation then default_implementation() end
+		return callback()
 	end
-
-	-- Dónde dejó el cursor Blink tras insertar el nombre (p.ej. "GUI_UPLOAD").
-	local end_col = vim.api.nvim_win_get_cursor(0)[2]
-	local start_col = end_col - #item.label
 
 	-- Si resolve() ya lo cacheó, esto es instantáneo.
 	fetch_method_insertion(item, function(text)
 		vim.schedule(function()
-			-- Si el usuario cambió de línea, abortamos por seguridad.
-			if vim.api.nvim_win_get_cursor(0)[1] ~= item.sap_resolve.row then
-				return
-			end
-			-- Sin patrón (método sin params o SAP no lo dio): dejamos el nombre tal cual.
-			if not text then
-				return
+			local cur = vim.api.nvim_win_get_cursor(0)
+			local row0 = item.sap_resolve.row - 1
+			-- Sin patrón, o el usuario cambió de línea: inserción normal (deja que Blink ponga el nombre).
+			if not text or (cur[1] - 1) ~= row0 then
+				if default_implementation then default_implementation() end
+				return callback()
 			end
 
-			local row = vim.api.nvim_win_get_cursor(0)[1]
-			local cur = vim.api.nvim_buf_get_lines(0, row - 1, row, false)[1] or ""
-			local indent = cur:match("^%s*") or "" -- alinear el patrón con la indentación de la llamada
+			local from_col = item.sap_resolve.start_col
+			local to_col = math.max(from_col, cur[2])
+			local line = vim.api.nvim_buf_get_lines(0, row0, row0 + 1, false)[1] or ""
+			local indent = (line:sub(1, from_col):match("^%s*")) or "" -- indentación de la llamada
 
 			local out = vim.split(text, "\n", { plain = true })
 			while #out > 1 and out[#out] == "" do
 				table.remove(out) -- quita líneas vacías finales que mete SAP
 			end
-			-- La 1ª línea reemplaza el nombre tecleado; las siguientes van indentadas a la base.
+			-- La 1ª línea reemplaza lo tecleado; las siguientes se alinean a la indentación base.
 			for i = 2, #out do
 				out[i] = indent .. out[i]
 			end
 
-			-- Sustituye el nombre pelado por el patrón completo.
-			vim.api.nvim_buf_set_text(0, row - 1, start_col, row - 1, end_col, out)
-			-- Cursor al final del bloque insertado.
-			local last_row = row - 1 + (#out - 1)
+			vim.api.nvim_buf_set_text(0, row0, from_col, row0, to_col, out)
+			local last_row = row0 + (#out - 1)
 			pcall(vim.api.nvim_win_set_cursor, 0, { last_row + 1, #(out[#out] or "") })
+			callback()
 		end)
 	end)
 end
