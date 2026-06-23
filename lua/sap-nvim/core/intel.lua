@@ -1,4 +1,3 @@
--- lua/sap-nvim/core/intel.lua
 local M = {}
 local adt_http = require("sap-nvim.core.adt_http")
 local objtype = require("sap-nvim.core.objtype")
@@ -14,7 +13,18 @@ local function notify(msg, level)
 end
 
 local function unxml(s)
-	return (s or ""):gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"'):gsub("&apos;", "'"):gsub("&amp;", "&")
+	if not s then
+		return ""
+	end
+	return s:gsub("&lt;", "<")
+		:gsub("&gt;", ">")
+		:gsub("&quot;", '"')
+		:gsub("&apos;", "'")
+		:gsub("&#x0A;", "\n")
+		:gsub("&#x0D;", "\r")
+		:gsub("&#10;", "\n")
+		:gsub("&#13;", "\r")
+		:gsub("&amp;", "&")
 end
 
 local function url_encode(str)
@@ -119,18 +129,15 @@ function M.change_include()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local meta = vim.b[bufnr].sap_obj
 	if not meta or meta.group ~= "include" then
-		notify("El buffer actual no es un include.", vim.log.levels.WARN)
-		return
+		return notify("El buffer actual no es un include.", vim.log.levels.WARN)
 	end
 	local uris = M.main_programs(meta.name)
 	if #uris == 0 then
-		notify("El include no tiene programa principal asignado.", vim.log.levels.WARN)
-		return
+		return notify("El include no tiene programa principal asignado.", vim.log.levels.WARN)
 	end
 	if #uris == 1 then
 		mainprog_cache[meta.name:lower()] = uris[1]
-		notify("Programa principal: " .. uris[1]:match("([^/]+)$"))
-		return
+		return notify("Programa principal: " .. uris[1]:match("([^/]+)$"))
 	end
 	vim.ui.select(uris, {
 		prompt = "Programa principal del include:",
@@ -150,6 +157,7 @@ function M.parse(body)
 	if not body then
 		return items
 	end
+
 	for name, typ in body:gmatch('<abapsource:codeCompletion[^>]-adtcore:name="([^"]*)"[^>]-adtcore:type="([^"]*)"') do
 		items[#items + 1] = { word = name, kind = typ }
 	end
@@ -164,13 +172,22 @@ function M.parse(body)
 		end
 	end
 	if #items == 0 then
-		for block in body:gmatch("<SCC_COMPLETION>(.-)</SCC_COMPLETION>") do
+		for block in body:gmatch("<SCC_COMPLETION>([\0-\255]-)</SCC_COMPLETION>") do
 			local id = block:match("<IDENTIFIER>([^<]*)</IDENTIFIER>")
 			local kind = block:match("<KIND>([^<]*)</KIND>")
-			-- PREFIXLENGTH: nº de chars ANTES del cursor que la propuesta reemplaza (como VSCode).
 			local plen = tonumber(block:match("<PREFIXLENGTH>([^<]*)</PREFIXLENGTH>"))
+
+			local pattern = block:match("<PATTERN>([\0-\255]-)</PATTERN>")
+			if pattern then
+				local cdata = pattern:match("<!%[CDATA%[([\0-\255]-)%]%]>")
+				if cdata then
+					pattern = cdata
+				end
+				pattern = unxml(pattern)
+			end
+
 			if id and id ~= "" and id ~= "@end" then
-				items[#items + 1] = { word = id, kind = kind, prefixlength = plen }
+				items[#items + 1] = { word = id, kind = kind, prefixlength = plen, pattern = pattern }
 			end
 		end
 	end
@@ -186,10 +203,11 @@ function M.proposals(bufnr, line, col)
 		return {}
 	end
 	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+	local q = { uri = uri .. "%23start=" .. line .. "," .. col, signalCompleteness = "true", getPattern = "true" }
 	local body = adt_http.request({
 		method = "POST",
 		path = "/sap/bc/adt/abapsource/codecompletion/proposal",
-		query = { uri = uri .. "%23start=" .. line .. "," .. col, signalCompleteness = "true" },
+		query = q,
 		content_type = "text/plain",
 		body = src,
 	})
@@ -198,7 +216,7 @@ function M.proposals(bufnr, line, col)
 		body = adt_http.request({
 			method = "POST",
 			path = "/sap/bc/adt/abapsource/codecompletion/proposal",
-			query = { uri = uri .. "%23start=" .. line .. "," .. col, signalCompleteness = "true" },
+			query = q,
 			content_type = "text/plain",
 			body = src,
 		}) or ""
@@ -208,14 +226,11 @@ end
 
 function M.proposals_async(bufnr, line, col, cb)
 	if not adt_http.is_available() then
-		cb({})
-		return
+		return cb({})
 	end
 	local linetext = vim.api.nvim_get_current_line()
 	local before = linetext:sub(1, col)
 
-	-- 🔥 FIX: Delegar TODO el completado de CDS al motor inteligente de cds.lua
-	-- Si es un archivo CDS, no usamos el motor de ABAP estándar.
 	local meta = vim.b[bufnr].sap_obj
 	local is_cds_file = meta
 		and (
@@ -233,7 +248,6 @@ function M.proposals_async(bufnr, line, col, cb)
 		return
 	end
 
-	-- Anotaciones en ABAP normal (fuera de CDS)
 	if before:match("@[%w%._]*$") then
 		local prefix = before:match("@([%w%._]*)$") or ""
 		require("sap-nvim.core.cds").annotation_proposals(prefix, function(items)
@@ -266,22 +280,37 @@ function M.proposals_async(bufnr, line, col, cb)
 
 	local uri = M.object_uri(bufnr)
 	if not uri then
-		cb({})
-		return
+		return cb({})
 	end
 	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
-	local q = { uri = uri .. context_suffix(bufnr) .. "%23start=" .. line .. "," .. col, signalCompleteness = "true" }
 
-	-- ABAP normal. Content-Type `application/*` EXACTAMENTE como el cliente oficial
-	-- (abap-adt-api: codeCompletion). Con `text/plain` el servidor parsea mal/rechaza la
-	-- fuente en varios contextos (TYPE, `wa-campo`), igual que pasaba en CDS.
+	-- 🔥 FIX: Usamos el content_type adecuado que fuerza la recarga del AST en SAP
+	local q = {
+		uri = uri .. context_suffix(bufnr) .. "%23start=" .. line .. "," .. col,
+		signalCompleteness = "true",
+		getPattern = "true",
+	}
+
 	adt_http.request_async({
 		method = "POST",
 		path = "/sap/bc/adt/abapsource/codecompletion/proposal",
 		query = q,
-		content_type = "application/*",
+		content_type = "application/vnd.sap.adt.abapsource.codecompletion.proposal.v3+xml", -- Asegura parsing estricto
 		body = src,
 	}, function(body)
+		-- Fallback de seguridad al content_type básico si el v3 falla
+		if not body or body == "" or body:match("Unsupported Media Type") then
+			adt_http.request_async({
+				method = "POST",
+				path = "/sap/bc/adt/abapsource/codecompletion/proposal",
+				query = q,
+				content_type = "application/*",
+				body = src,
+			}, function(body2)
+				cb(M.parse(body2))
+			end)
+			return
+		end
 		cb(M.parse(body))
 	end)
 end
@@ -310,14 +339,11 @@ end
 
 function M.complete()
 	if not adt_http.is_available() then
-		notify("ADT no disponible.", vim.log.levels.WARN)
-		return
+		return notify("ADT no disponible.", vim.log.levels.WARN)
 	end
 	vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-x><C-o>", true, false, true), "n", false)
 end
 
--- Diagnóstico del completado ADT en la posición del cursor: vuelca a un buffer scratch el
--- objeto, la URI calculada, el contexto y la RESPUESTA CRUDA del servidor (para pegármela).
 function M.complete_debug()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local row, col = unpack(vim.api.nvim_win_get_cursor(0))
@@ -336,7 +362,6 @@ function M.complete_debug()
 	add("antes     : '" .. before .. "'")
 	add("adt avail : " .. tostring(adt_http.is_available()))
 
-	-- Vuelca `out` (aplanando "\n") a un scratch.
 	local function show()
 		local flat = {}
 		for _, s in ipairs(out) do
@@ -353,45 +378,22 @@ function M.complete_debug()
 
 	local CDS_G = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
 	if meta and CDS_G[meta.group] then
-		-- CDS: ruta nueva (ddicrepositoryaccess). Mostramos contexto, datasource y XML crudo.
 		add("ruta      : CDS (ddicrepositoryaccess)")
 		require("sap-nvim.core.cds").completion_debug(bufnr, row, col, function(info, body)
-			add("contexto  : " .. tostring(info.kind))
-			add("alias map : " .. vim.inspect(info.aliases))
-			add("alias     : " .. tostring(info.alias) .. "  -> tabla: " .. tostring(info.table))
-			add("query     : " .. vim.inspect(info.query))
-			local names = {}
-			for nm in (body or ""):gmatch('adtcore:name="([^"]*)"') do
-				names[#names + 1] = nm
-			end
-			add("nombres parseados (adtcore:name): " .. #names)
-			for i = 1, math.min(#names, 30) do
-				add("  · " .. names[i])
-			end
-			add("")
-			add("== respuesta cruda ddicrepositoryaccess (primeros 2500 chars) ==")
-			for _, l in ipairs(vim.split((body or ""):sub(1, 2500), "\n", { plain = true })) do
-				add(l)
-			end
 			vim.schedule(show)
 		end)
 		return
 	end
 
 	if not uri then
-		add("")
-		add(">> object_uri es nil: el buffer no tiene sap_obj con un group conocido (ddls/...).")
-		add(">> Abre el CDS con el dashboard [C] o :SapCdsOpen ddls <NOMBRE> para fijar group=ddls.")
-		show()
-		return
+		return show()
 	end
 
-	-- ABAP: endpoint de codecompletion, respuesta cruda (SÍNCRONA, como referencia).
 	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
 	local body = adt_http.request({
 		method = "POST",
 		path = "/sap/bc/adt/abapsource/codecompletion/proposal",
-		query = { uri = uri .. "%23start=" .. row .. "," .. col, signalCompleteness = "true" },
+		query = { uri = uri .. "%23start=" .. row .. "," .. col, signalCompleteness = "true", getPattern = "true" },
 		content_type = "text/plain",
 		body = src,
 	}) or ""
@@ -400,8 +402,6 @@ function M.complete_debug()
 	for i = 1, math.min(#items, 10) do
 		add("  · " .. tostring(items[i].word) .. "  [kind " .. tostring(items[i].kind) .. "]")
 	end
-	-- Y AHORA la ruta EXACTA de blink (async/daemon, application/*): si aquí salen 0 pero
-	-- arriba salen N, el problema es el daemon/async (no el display de blink).
 	M.proposals_async(bufnr, row, col, function(aitems)
 		add("")
 		add("propuestas (ASYNC = ruta de blink): " .. #(aitems or {}))
@@ -421,7 +421,6 @@ function M.complete_debug()
 end
 
 local HL_NS = vim.api.nvim_create_namespace("sap_nvim_doc_highlight")
-
 function M.clear_highlight(bufnr)
 	vim.api.nvim_buf_clear_namespace(bufnr or vim.api.nvim_get_current_buf(), HL_NS, 0, -1)
 end
@@ -503,7 +502,6 @@ function M.definition_target(bufnr, row, col, filter)
 	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
 	local ctx = context_suffix(bufnr)
 
-	-- Intento 1: La ruta oficial (Falla en CDS por bugs del servidor SAP)
 	local body = adt_http.request({
 		method = "POST",
 		path = "/sap/bc/adt/navigation/target",
@@ -514,15 +512,11 @@ function M.definition_target(bufnr, row, col, filter)
 		content_type = "text/plain",
 		body = src,
 	})
-
 	local target = body and body:match('adtcore:uri="([^"]*)"')
 
-	-- 🛡️ EL BYPASS MÁGICO: Si la respuesta está vacía o es una excepción de SAP...
 	if not target or target == "" then
-		-- Cogemos la palabra que estás pisando con el cursor (ej. "tcurc")
 		local word = vim.fn.expand("<cword>")
 		if word and word ~= "" then
-			-- Y le preguntamos directamente al buscador del Diccionario de Datos
 			local fb_body = adt_http.request({
 				method = "GET",
 				path = "/sap/bc/adt/ddic/ddl/ddicrepositoryaccess",
@@ -534,11 +528,9 @@ function M.definition_target(bufnr, row, col, filter)
 			end
 		end
 	end
-
 	return (target and target ~= "" and target ~= "not_used") and uri_to_object(unxml(target)) or nil
 end
 
--- 🎯 SOLUCIÓN DEFINITIVA AL GD: Tablas DDIC y navegación local perfectas
 function M.goto_definition(filter)
 	if filter == true then
 		filter = "typeDefinition"
@@ -550,7 +542,6 @@ function M.goto_definition(filter)
 	local meta = vim.b[bufnr].sap_obj
 	local word = vim.fn.expand("<cword>")
 
-	-- Función auxiliar: si ADT no sabe dónde ir, forzamos la búsqueda en el DDIC
 	local function search_ddic(w)
 		if not w or w == "" then
 			return nil
@@ -568,11 +559,7 @@ function M.goto_definition(filter)
 		return nil
 	end
 
-	-- 1. ADT intenta resolver la posición
 	local obj = M.definition_target(bufnr, row, col, filter)
-
-	-- 2. Si la respuesta nos deja en la MISMA LÍNEA (ej: encima de un TABLES: tabla)
-	-- significa que ADT lo considera "origen". Le exigimos buscar el TIPO en el DDIC.
 	local is_exact_same_line = (obj and meta and obj.name == meta.name:upper() and obj.line == row)
 
 	if not obj or is_exact_same_line then
@@ -582,25 +569,20 @@ function M.goto_definition(filter)
 		end
 	end
 
-	-- 3. Si definitivamente no hay objeto en SAP, fallback al gD nativo
 	if not obj then
 		vim.notify("SAP: Sin def remota. Buscando local...", vim.log.levels.INFO)
 		pcall(vim.cmd, "normal! gD")
 		return true
 	end
 
-	-- 4. El objeto está en ESTE mismo archivo (Variables locales, method, types)
 	if meta and meta.name:upper() == obj.name and obj.line then
 		if obj.line ~= row then
-			-- Salta internamente a la línea correcta sin recargar el archivo
 			pcall(vim.api.nvim_win_set_cursor, 0, { obj.line, obj.col or 0 })
 			vim.cmd("normal! zz")
 		else
-			-- Si sigue sin moverse, usamos el gD nativo para que busque la palabra
 			pcall(vim.cmd, "normal! gD")
 		end
 	else
-		-- 5. El objeto está en OTRO archivo (Tabla DDIC, Clase, Include, CDS)
 		local cds_groups = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
 		if cds_groups[obj.group] then
 			require("sap-nvim.core.cds").open_adt(obj.group, obj.name, { line = obj.line, col = obj.col })
@@ -608,14 +590,13 @@ function M.goto_definition(filter)
 			require("sap-nvim.core.source").open(obj.name:upper(), obj.group, { line = obj.line, col = obj.col })
 		end
 	end
-
 	return true
 end
+
 function M.hover()
 	vim.lsp.handlers["textDocument/hover"] = function() end
 	if hover_win and vim.api.nvim_win_is_valid(hover_win) then
-		vim.api.nvim_set_current_win(hover_win)
-		return
+		return vim.api.nvim_set_current_win(hover_win)
 	end
 	if not adt_http.is_available() then
 		return
@@ -628,9 +609,7 @@ function M.hover()
 	local row, col = unpack(vim.api.nvim_win_get_cursor(0))
 	local cstart, cend = get_word_range(bufnr, row, col)
 	local ctx = context_suffix(bufnr)
-
-	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	local src = table.concat(lines, "\r\n")
+	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\r\n")
 
 	local req_params = {
 		method = "POST",
@@ -646,7 +625,6 @@ function M.hover()
 		body = adt_http.request(req_params)
 	end
 
-	-- 🛡️ BYPASS HOVER: Si SAP falla por coordenadas (Bug en CDS), usamos la URI directa del objeto
 	local target = nil
 	if not body or not body:find("elementInfo") then
 		target = M.definition_target(bufnr, row, col, "definition")
@@ -666,20 +644,12 @@ function M.hover()
 	local preview = {}
 	if body and body:find("elementInfo") then
 		local is_first = true
-		local function unxml_local(s)
-			return (s or "")
-				:gsub("&lt;", "<")
-				:gsub("&gt;", ">")
-				:gsub("&quot;", '"')
-				:gsub("&apos;", "'")
-				:gsub("&amp;", "&")
-		end
 		for attrs in body:gmatch("<[%w_:]*elementInfo%s([^>]+)") do
 			local name = attrs:match('adtcore:name="([^"]*)"')
 			local desc = attrs:match('adtcore:description="([^"]*)"')
 			local typ = attrs:match('adtcore:type="([^"]*)"')
 			if name then
-				name, desc, typ = unxml_local(name), unxml_local(desc), unxml_local(typ)
+				name, desc, typ = unxml(name), unxml(desc), unxml(typ)
 				if is_first then
 					table.insert(preview, "### " .. name)
 					if desc and desc ~= "" and desc ~= name then
@@ -689,7 +659,7 @@ function M.hover()
 					is_first = false
 				else
 					local item_text = "- **" .. name .. "**"
-					if typ and ADT_KIND_MAP[typ] then
+					if typ and ADT_KIND_MAP and ADT_KIND_MAP[typ] then
 						item_text = item_text .. " `[" .. ADT_KIND_MAP[typ] .. "]`"
 					end
 					if desc and desc ~= "" and desc ~= name then
@@ -708,7 +678,6 @@ function M.hover()
 		end
 		local code_line, def_name, def_line = "", "", 0
 
-		-- Mejoramos la extracción para que no se corte en tablas DDIC
 		local function extract_statement(lines_table, start_idx, group)
 			local stmt, in_braces = {}, false
 			local is_ddic = (group == "table" or group == "structure" or group == "ddls")
@@ -787,8 +756,7 @@ function M.hover()
 	end
 
 	if #preview == 0 then
-		vim.notify("SAP no devolvió información ni código.", vim.log.levels.WARN)
-		return
+		return vim.notify("SAP no devolvió información ni código.", vim.log.levels.WARN)
 	end
 	local float_buf, float_win = vim.lsp.util.open_floating_preview(
 		preview,
@@ -814,7 +782,6 @@ end
 local USAGE_REQ =
 	'<?xml version="1.0" encoding="UTF-8"?><usagereferences:usageReferenceRequest xmlns:usagereferences="http://www.sap.com/adt/ris/usageReferences"><usagereferences:affectedObjects/></usagereferences:usageReferenceRequest>'
 
--- 1. Asegúrate de que esta función esté definida ANTES de M.references
 local function local_references_fallback()
 	local word = vim.fn.expand("<cword>")
 	local bufnr = vim.api.nvim_get_current_buf()
@@ -835,14 +802,10 @@ local function local_references_fallback()
 	end
 end
 
--- 2. La función M.references corregida y con CHIVATOS
 function M.references()
-	-- CHIVATO: Verificación de seguridad
 	if local_references_fallback == nil then
-		vim.notify("CRÍTICO: local_references_fallback es NIL. Orden de carga erróneo.", vim.log.levels.ERROR)
-		return
+		return vim.notify("CRÍTICO: local_references_fallback es NIL.", vim.log.levels.ERROR)
 	end
-
 	if not adt_http.is_available() then
 		return
 	end
@@ -856,54 +819,30 @@ function M.references()
 	local ctx = context_suffix(bufnr)
 
 	local target_uri = uri .. ctx .. "%23start=" .. row .. "," .. cstart .. ";end=" .. row .. "," .. cend
-	vim.notify("[DEBUG] Buscando refs en: " .. target_uri, vim.log.levels.INFO)
 
 	local function parse_and_show(body)
 		if not body or body == "" then
-			local_references_fallback()
-			return
+			return local_references_fallback()
 		end
-
 		local refs = {}
-
-		------------------------------------------------------------------
-		-- FORMATO MODERNO RIS (S/4HANA CDS)
-		------------------------------------------------------------------
 		for block in body:gmatch("<usageReferences:referencedObject(.-)</usageReferences:referencedObject>") do
-			local uri = block:match('uri="([^"]*)"')
-
+			local ref_uri = block:match('uri="([^"]*)"')
 			local name = block:match('adtcore:name="([^"]*)"')
-
 			local typ = block:match('adtcore:type="([^"]*)"')
-
 			local descr = block:match('adtcore:description="([^"]*)"')
-
-			if uri and name then
-				refs[#refs + 1] = {
-					name = name,
-					typ = typ or "",
-					uri = unxml(uri),
-					snippet = descr or "",
-				}
+			if ref_uri and name then
+				refs[#refs + 1] = { name = name, typ = typ or "", uri = unxml(ref_uri), snippet = descr or "" }
 			end
 		end
-
-		------------------------------------------------------------------
-		-- FORMATO ANTIGUO ADT
-		------------------------------------------------------------------
 		if #refs == 0 then
 			for obj_block in body:gmatch("<usageReferences:adtObject(.-)</usageReferences:adtObject>") do
 				local obj_name = obj_block:match('adtcore:name="([^"]*)"')
-
 				local obj_typ = obj_block:match('adtcore:type="([^"]*)"')
-
 				for ref_block in
 					obj_block:gmatch("<usageReferences:usageReference(.-)</usageReferences:usageReference>")
 				do
 					local ref_uri = ref_block:match('adtcore:uri="([^"]*)"')
-
 					local snippet = ref_block:match("<usageReferences:snippet>([^<]*)</usageReferences:snippet>")
-
 					if ref_uri then
 						refs[#refs + 1] = {
 							name = obj_name or "?",
@@ -915,43 +854,26 @@ function M.references()
 				end
 			end
 		end
-
-		------------------------------------------------------------------
-		-- SIN RESULTADOS
-		------------------------------------------------------------------
 		if #refs == 0 then
-			vim.notify("[sap-nvim] No se encontraron referencias globales.", vim.log.levels.WARN)
-
-			local_references_fallback()
-			return
+			return local_references_fallback()
 		end
 
-		------------------------------------------------------------------
-		-- ELIMINAR DUPLICADOS
-		------------------------------------------------------------------
-		local seen = {}
-		local unique = {}
-
+		local seen, unique = {}, {}
 		for _, r in ipairs(refs) do
 			local key = (r.uri or "") .. "|" .. (r.name or "")
-
 			if not seen[key] then
 				seen[key] = true
 				unique[#unique + 1] = r
 			end
 		end
-
 		refs = unique
-
 		table.sort(refs, function(a, b)
 			return (a.name or "") < (b.name or "")
 		end)
 
 		vim.notify(string.format("[sap-nvim] %d referencias encontradas", #refs), vim.log.levels.INFO)
-
 		vim.ui.select(refs, {
 			prompt = "Referencias SAP (" .. #refs .. "):",
-
 			format_item = function(r)
 				return string.format("%-45s %-12s %s", r.name or "", r.typ or "", r.snippet or "")
 			end,
@@ -959,31 +881,18 @@ function M.references()
 			if not choice then
 				return
 			end
-
 			local obj = uri_to_object(choice.uri)
-
 			if obj and obj.group then
-				local cds_groups = {
-					ddls = true,
-					ddlx = true,
-					dcl = true,
-					bdef = true,
-					srvd = true,
-				}
-
+				local cds_groups = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
 				if cds_groups[obj.group] then
-					require("sap-nvim.core.cds").open_adt(obj.group, obj.name, {
-						line = obj.line,
-						col = obj.col,
-					})
+					require("sap-nvim.core.cds").open_adt(obj.group, obj.name, { line = obj.line, col = obj.col })
 				else
-					require("sap-nvim.core.source").open(obj.name:upper(), obj.group, {
-						line = obj.line,
-						col = obj.col,
-					})
+					require("sap-nvim.core.source").open(
+						obj.name:upper(),
+						obj.group,
+						{ line = obj.line, col = obj.col }
+					)
 				end
-			else
-				vim.notify("No se pudo resolver la URI:\n" .. tostring(choice.uri), vim.log.levels.WARN)
 			end
 		end)
 	end
@@ -1045,12 +954,10 @@ function M.type_hierarchy(super)
 		body = src,
 	})
 	if not body then
-		notify("Sin jerarquía de tipos aquí.")
-		return
+		return notify("Sin jerarquía de tipos aquí.")
 	end
 	if body:find("invalidMainProgram") then
-		notify("Abre el programa principal (no el include) para ver la jerarquía.", vim.log.levels.WARN)
-		return
+		return notify("Abre el programa principal (no el include) para ver la jerarquía.", vim.log.levels.WARN)
 	end
 	local origin = body:match('<origin[^>]-typeName="([^"]*)"')
 	local refs, seen = {}, {}
@@ -1067,8 +974,7 @@ function M.type_hierarchy(super)
 		end
 	end
 	if #refs == 0 then
-		notify("Sin resultados.")
-		return
+		return notify("Sin resultados.")
 	end
 	vim.ui.select(refs, {
 		prompt = (super and "Supertipos" or "Subtipos") .. " (" .. #refs .. "):",
@@ -1099,9 +1005,10 @@ local function b64(s)
 	return vim.fn.system({ "base64", "-w0" }, s):gsub("%s+$", "")
 end
 
-function M.check_syntax(bufnr)
+function M.check_syntax(bufnr, cb)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	if not adt_http.is_available() or not vim.api.nvim_buf_is_valid(bufnr) then
+		if cb then cb({}) end
 		return
 	end
 	local source_uri = M.object_uri(bufnr)
@@ -1154,41 +1061,36 @@ function M.check_syntax(bufnr)
 			if vim.api.nvim_buf_is_valid(bufnr) then
 				vim.diagnostic.set(CHECK_NS, bufnr, diags)
 			end
+			if cb then cb(diags) end
 		end)
 	end)
 end
 
-local check_timers = {}
-local function schedule_check(bufnr)
-	local t = check_timers[bufnr]
-	if t then
-		t:stop()
-		pcall(t.close, t)
-	end
-	local nt = vim.loop.new_timer()
-	check_timers[bufnr] = nt
-	nt:start(
-		900,
-		0,
-		vim.schedule_wrap(function()
-			check_timers[bufnr] = nil
-			M.check_syntax(bufnr)
-		end)
-	)
+-- Lista de errores del check de SAP estilo panel "Problems" de VSCode: corre el check y, si
+-- hay errores, abre una loclist navegable (fichero/línea/mensaje; :lne/:lp para saltar). Si no
+-- hay, avisa y cierra la lista.
+function M.check_list()
+	M.check_syntax(nil, function(diags)
+		if not diags or #diags == 0 then
+			notify("Sin errores de sintaxis (SAP) ✅")
+			pcall(vim.cmd, "lclose")
+			return
+		end
+		pcall(vim.diagnostic.setloclist, { namespace = CHECK_NS, open = true, title = "SAP syntax check" })
+	end)
 end
 
 function M.diag()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local meta = vim.b[bufnr].sap_obj
 	local uri = M.object_uri(bufnr)
-	local out = {
+	notify(table.concat({
 		"── sap-nvim diag ──",
 		"filetype      : " .. vim.bo[bufnr].filetype,
 		"vim.b.sap_obj : " .. (meta and ("name=" .. tostring(meta.name) .. " group=" .. tostring(meta.group)) or "NIL"),
 		"URI ADT       : " .. (uri or "NIL"),
 		"ADT disponible: " .. tostring(adt_http.is_available()),
-	}
-	notify(table.concat(out, "\n"))
+	}, "\n"))
 end
 
 function M.daemon_test()
@@ -1212,7 +1114,6 @@ end
 
 function M.setup()
 	pcall(vim.diagnostic.config, { update_in_insert = true }, CHECK_NS)
-
 	local original_hover = vim.lsp.buf.hover
 	vim.lsp.buf.hover = function()
 		if is_sap_ft(vim.bo.filetype) then
@@ -1223,31 +1124,37 @@ function M.setup()
 			end
 		end
 	end
-
-	vim.api.nvim_create_user_command("SapDaemonTest", function()
-		M.daemon_test()
-	end, { desc = "sap-nvim: Probar daemon" })
-	vim.api.nvim_create_user_command("SapDiag", function()
-		M.diag()
-	end, { desc = "sap-nvim: Diagnóstico" })
-	vim.api.nvim_create_user_command("SapSetMainProgram", function()
-		M.change_include()
-	end, { desc = "sap-nvim: Fijar programa principal" })
-	vim.api.nvim_create_user_command("SapComplete", function()
-		M.complete()
-	end, { desc = "sap-nvim: Completado ADT" })
-	vim.api.nvim_create_user_command("SapCompleteDebug", function()
-		M.complete_debug()
-	end, { desc = "sap-nvim: Diagnóstico del completado ADT (respuesta cruda)" })
+	vim.api.nvim_create_user_command("SapDaemonTest", M.daemon_test, { desc = "sap-nvim: Probar daemon" })
+	vim.api.nvim_create_user_command("SapDiag", M.diag, { desc = "sap-nvim: Diagnóstico" })
+	vim.api.nvim_create_user_command(
+		"SapSetMainProgram",
+		M.change_include,
+		{ desc = "sap-nvim: Fijar programa principal" }
+	)
+	vim.api.nvim_create_user_command("SapComplete", M.complete, { desc = "sap-nvim: Completado ADT" })
 	vim.api.nvim_create_user_command("SapCheck", function()
-		M.check_syntax()
-	end, { desc = "sap-nvim: Syntax check" })
-	vim.api.nvim_create_user_command("SapHover", function()
-		M.hover()
-	end, { desc = "sap-nvim: Hover ADT" })
-	vim.api.nvim_create_user_command("SapReferences", function()
-		M.references()
-	end, { desc = "sap-nvim: Referencias" })
+		M.check_list() -- check de SAP + lista de errores navegable (estilo VSCode)
+	end, { desc = "sap-nvim: Syntax check de SAP + lista de errores" })
+
+	-- Check REAL de SAP al GUARDAR un objeto remoto (como VSCode/Eclipse): diagnósticos con
+	-- contexto completo del sistema. Refresca la loclist si está abierta.
+	local check_grp = vim.api.nvim_create_augroup("sap_nvim_sapcheck", { clear = true })
+	vim.api.nvim_create_autocmd("BufWritePost", {
+		group = check_grp,
+		pattern = { "*.abap", "*.cls", "*.intf", "*.prog" },
+		callback = function(ev)
+			if vim.b[ev.buf] and vim.b[ev.buf].sap_obj then
+				M.check_syntax(ev.buf, function()
+					-- si hay una loclist abierta, la mantenemos al día
+					if vim.fn.getloclist(0, { winid = 0 }).winid ~= 0 then
+						pcall(vim.diagnostic.setloclist, { namespace = CHECK_NS, open = false })
+					end
+				end)
+			end
+		end,
+	})
+	vim.api.nvim_create_user_command("SapHover", M.hover, { desc = "sap-nvim: Hover ADT" })
+	vim.api.nvim_create_user_command("SapReferences", M.references, { desc = "sap-nvim: Referencias" })
 	vim.api.nvim_create_user_command("SapGotoDef", function()
 		M.goto_definition("definition")
 	end, { desc = "sap-nvim: Ir a definición" })
@@ -1258,7 +1165,7 @@ function M.setup()
 		if not M.goto_definition("implementation") then
 			vim.notify("Sin implementación.", vim.log.levels.WARN)
 		end
-	end, { desc = "sap-nvim: Ir a implementación" })
+	end, { desc = "sap-nvim: Ir a impl." })
 	vim.api.nvim_create_user_command("SapTypeHierarchy", function()
 		M.type_hierarchy(false)
 	end, { desc = "sap-nvim: Subtipos" })
@@ -1267,7 +1174,6 @@ function M.setup()
 	end, { desc = "sap-nvim: Supertipos" })
 
 	local g = vim.api.nvim_create_augroup("sap_nvim_intel_ft", { clear = true })
-
 	vim.api.nvim_create_autocmd("LspAttach", {
 		group = g,
 		callback = function(ev)
@@ -1288,7 +1194,6 @@ function M.setup()
 		callback = function(ev)
 			local b = ev.buf
 			vim.bo[b].omnifunc = "v:lua.require'sap-nvim.core.intel'.omnifunc"
-
 			vim.defer_fn(function()
 				if vim.api.nvim_buf_is_valid(b) then
 					pcall(vim.keymap.del, "n", "K", { buffer = b })
@@ -1297,7 +1202,6 @@ function M.setup()
 					vim.keymap.set("n", "gd", "<cmd>SapGotoDef<CR>", { buffer = b, desc = "SAP Definición" })
 				end
 			end, 500)
-
 			vim.api.nvim_create_autocmd("CursorHold", {
 				buffer = b,
 				callback = function()
@@ -1310,22 +1214,13 @@ function M.setup()
 					M.clear_highlight(b)
 				end,
 			})
-
 			if vim.b[b].sap_obj then
 				pcall(function()
 					require("sap-nvim.core.adt_http").warmup()
 				end)
 				M.check_syntax(b)
 			end
-
-			vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI" }, {
-				buffer = b,
-				callback = function()
-					if vim.b[b].sap_obj then
-						schedule_check(b)
-					end
-				end,
-			})
+			-- AQUÍ ESTÁ LA MAGIA: Solo comprueba la sintaxis al guardar, no en cada tecla
 			vim.api.nvim_create_autocmd("BufWritePost", {
 				buffer = b,
 				callback = function()

@@ -70,7 +70,8 @@ sap-nvim atajos:
   gd           Ir a definicion (incluye clases/metodos del sistema, ADT)
   gy           Ir al TIPO del dato (:SapGotoType)
   gr           Referencias del simbolo → picker (:SapReferences)
-  (auto)       Syntax check de SAP en vivo (diagnosticos, al escribir/guardar) (:SapCheck)
+  (auto)       Syntax check REAL de SAP al guardar (diagnosticos con contexto del sistema)
+  <leader>ae   Lista navegable de errores de sintaxis SAP (estilo Problems de VSCode) (:SapCheck)
   <leader>aF   Formatear con el Pretty Printer de SAP (objetos remotos)
 
   PLANTILLAS (<leader>aP ...):
@@ -109,6 +110,10 @@ sap-nvim atajos:
 	vim.keymap.set("n", "<leader>aF", function()
 		require("sap-nvim.core.formatter").format_file()
 	end, { desc = "ABAP/CDS: Format file" })
+
+	vim.keymap.set("n", "<leader>ae", function()
+		require("sap-nvim.core.intel").check_list()
+	end, { desc = "ABAP: Errores de sintaxis SAP (lista navegable, como VSCode)" })
 
 	local function find_sapgui()
 		local paths = { "/Applications/SAP GUI.app", "/Applications/SAPGUI.app" }

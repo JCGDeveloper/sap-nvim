@@ -128,6 +128,12 @@ end
 -- ─── Lint strategies ─────────────────────────────────────────────────────────
 
 local function lint_on_disk(bufnr)
+  -- Objetos SAP remotos: usan el CHECK REAL de SAP (intel.check_syntax, contexto completo del
+  -- sistema), no abaplint en aislado (que da falsos positivos "rojo por todos lados").
+  if vim.b[bufnr] and vim.b[bufnr].sap_obj then
+    vim.diagnostic.reset(NS, bufnr)
+    return
+  end
   local path = vim.api.nvim_buf_get_name(bufnr)
   if path == "" then return end
   local root = find_project_root(vim.fn.fnamemodify(path, ":h"))
@@ -168,6 +174,10 @@ end
 -- ─── Debounce ────────────────────────────────────────────────────────────────
 
 local function schedule_lint(bufnr)
+  -- Objetos SAP remotos: no abaplint en aislado (ver lint_on_disk); el check de SAP es el bueno.
+  if vim.b[bufnr] and vim.b[bufnr].sap_obj then
+    return
+  end
   local t = timers[bufnr]
   if t then t:stop(); t:close(); timers[bufnr] = nil end
   local new_t = vim.loop.new_timer()
