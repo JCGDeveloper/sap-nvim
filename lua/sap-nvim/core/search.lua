@@ -160,6 +160,17 @@ end
 --   default_text string|nil  texto inicial del prompt (para reabrir conservando lo escrito).
 function M.open_picker(opts)
 	opts = opts or {}
+	-- Login PEREZOSO (estilo VSCode): si no hay sesión validada, pedimos conexión + contraseña
+	-- (selector de máquina) y reintentamos. Si ya estás logueado, esto no se ejecuta y la
+	-- búsqueda va directa.
+	if not require("sap-nvim.core.adt_http").ready() then
+		require("sap-nvim.core.connection").ensure(function(success)
+			if success then
+				M.open_picker(opts)
+			end
+		end)
+		return
+	end
 	local ok, pickers = pcall(require, "telescope.pickers")
 	if not ok then
 		notify("Telescope no está disponible.", vim.log.levels.WARN)

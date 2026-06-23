@@ -350,33 +350,19 @@ function M.restore_session()
 	return n
 end
 
--- Arranque del modo SAP: pide conexión+contraseña (si falta), restaura objetos SAP y
--- abre el dashboard. El login se puede desactivar con vim.g.sap_login_on_start = false.
+-- Arranque del modo SAP: restaura objetos SAP y abre el dashboard. SIN login al arrancar
+-- (estilo VSCode): connection.setup() ya valida en SILENCIO la conexión recordada
+-- (keyring/DPAPI) con bootstrap(), y el login es PEREZOSO al abrir/buscar un objeto. Así no
+-- te pide la contraseña en cada arranque si ya está guardada, y si no lo está, te la pide solo
+-- cuando vas a buscar/abrir algo (mostrando el selector de máquina).
 function M.start()
-	-- Guard: VimEnter y el guard de carga-tardía pueden invocar start() ambos; evitamos
-	-- el doble login. Solo una vez por sesión.
+	-- Guard: VimEnter y el guard de carga-tardía pueden invocar start() ambos; solo una vez.
 	if M._started then
 		return
 	end
 	M._started = true
-	local function go()
-		M.restore_session()
-		M.open_dashboard()
-	end
-	if vim.g.sap_login_on_start == false then
-		go()
-		return
-	end
-	local ok, conn = pcall(require, "sap-nvim.core.connection")
-	if ok then
-		-- Siempre preguntamos máquina + contraseña al arrancar (más seguro). Si dejas la
-		-- contraseña vacía y config.yml ya trae una, se usa esa (compatibilidad).
-		conn.choose(function()
-			vim.schedule(go)
-		end)
-	else
-		go()
-	end
+	M.restore_session()
+	M.open_dashboard()
 end
 
 -- ── Setup (GATED) ───────────────────────────────────────────────────────────
