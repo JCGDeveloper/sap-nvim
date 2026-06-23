@@ -76,6 +76,12 @@ local function on_stdout(_, data)
 					local status = tonumber(resp.status) or 0
 					if status > 0 and status < 400 then
 						body = resp.body
+					elseif status == 401 then
+						-- SAP rechazo la auth por el camino del daemon: activa el freno
+						-- anti-bloqueo (deja de mandar la contrasena erronea).
+						pcall(function()
+							require("sap-nvim.core.adt_http").on_auth_failure()
+						end)
 					end
 					pcall(cb, body)
 				end

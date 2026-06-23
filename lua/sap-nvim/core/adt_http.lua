@@ -12,9 +12,26 @@
 
 local M = {}
 
+local secret = require("sap-nvim.core.secret")
+
 -- active_ctx: contexto elegido en runtime (login). passwords: contraseñas EN MEMORIA
--- (nunca se escriben a disco), por contexto. Permite NO guardar la password en config.yml.
-local state = { creds = nil, token = nil, cookies = nil, active_ctx = nil, passwords = {} }
+-- (nunca se escriben a disco), por contexto. La persistencia "estilo VSCode" (recordar entre
+-- sesiones) la da el keyring del kernel (core.secret), no el disco.
+-- auth_locked: FRENO ANTI-BLOQUEO. Cuando SAP rechaza la auth (401), lo activamos para DEJAR
+-- DE MANDAR la contraseña errónea: es justo el martilleo de logins fallidos (uno por tecla en
+-- el completado + daemon) lo que bloquea el usuario en SAP. Mientras esté activo, creds()
+-- devuelve nil → nada de red. Se baja con un re-login explícito (use_connection).
+local state = { creds = nil, token = nil, cookies = nil, active_ctx = nil, passwords = {}, auth_locked = false }
+
+-- Resuelve la contraseña de `ctx`: 1º la de ESTA sesión (memoria), 2º la del keyring
+-- (recordada estilo VSCode), 3º la de config.yml (texto plano, último recurso).
+local function resolve_pass(ctx, cfg_pass)
+  local p = state.passwords[ctx]
+  if p and p ~= "" then return p end
+  p = secret.get(ctx)
+  if p and p ~= "" then return p end
+  return cfg_pass
+end
 
 -- ── Parseo del config.yml de sapcli (YAML simple, sin librería) ──────────────
 local function read_config()
@@ -110,12 +127,19 @@ function M.list_connections()
   return out
 end
 
--- Selecciona la conexión activa + (opcional) password EN MEMORIA (no se escribe a disco).
+-- Selecciona la conexión activa + (opcional) password. La password se guarda en memoria Y,
+-- salvo opts.persist == false, en el keyring del kernel (recordar estilo VSCode: la tecleas una
+-- vez y se reusa entre sesiones de nvim). Un re-login SIEMPRE baja el freno anti-bloqueo.
 -- Invalida credenciales/token/cookies para forzar sesión limpia con la nueva conexión.
-function M.use_connection(ctx, password)
+function M.use_connection(ctx, password, opts)
+  opts = opts or {}
   state.active_ctx = ctx
+  state.auth_locked = false -- re-login intencionado → reanudamos la actividad de red
   if password and password ~= "" then
     state.passwords[ctx] = password
+    if opts.persist ~= false then
+      pcall(secret.set, ctx, password)
+    end
   end
   state.creds = nil
   state.token = nil
@@ -142,6 +166,9 @@ function M.is_auth_error(body)
 end
 
 function M.creds()
+  if state.auth_locked then
+    return nil -- freno anti-bloqueo activo: NO mandamos credenciales hasta un re-login
+  end
   if state.creds then
     return state.creds
   end
@@ -157,7 +184,7 @@ function M.creds()
   if not c then
     return nil
   end
-  local pass = state.passwords[ctx] or c.pass
+  local pass = resolve_pass(ctx, c.pass)
   if not pass or pass == "" then
     return nil -- falta password → login pendiente (M.needs_login() == true)
   end
@@ -168,6 +195,9 @@ end
 
 -- ¿Hay conexión configurada (host/user) pero falta la contraseña? (para disparar el login)
 function M.needs_login()
+  if state.auth_locked then
+    return true -- SAP rechazó la auth → hay que volver a teclear la contraseña
+  end
   local txt = read_config()
   if not txt then
     return false
@@ -177,8 +207,48 @@ function M.needs_login()
   if not c then
     return false
   end
-  local pass = state.passwords[ctx] or c.pass
+  local pass = resolve_pass(ctx, c.pass)
   return pass == nil or pass == ""
+end
+
+-- ── Freno anti-bloqueo ───────────────────────────────────────────────────────
+-- SAP bloquea el usuario tras N logins fallidos (login/fails_to_user_lock, por defecto 5). El
+-- completado dispara una petición ADT por tecla (+ daemon + warmup): con una contraseña errónea
+-- eso son N fallos en segundos → usuario bloqueado. En cuanto detectamos el 401/página de login
+-- de SAP, ACTIVAMOS el freno: paramos el daemon, olvidamos la contraseña errónea (memoria +
+-- keyring) y avisamos UNA vez. A partir de ahí creds() devuelve nil → cero red — hasta :SapRelogin.
+function M.on_auth_failure()
+  if state.auth_locked then
+    return
+  end
+  state.auth_locked = true
+  state.creds = nil
+  state.token = nil
+  local txt = read_config()
+  local ctx = state.active_ctx or (txt and active_context(txt))
+  if ctx then
+    state.passwords[ctx] = nil
+    pcall(secret.clear, ctx)
+  end
+  pcall(function()
+    require("sap-nvim.core.adt_daemon").stop()
+  end)
+  vim.schedule(function()
+    vim.notify(
+      "[sap-nvim] SAP rechazó la autenticación (401). Conexión PAUSADA para NO bloquear tu "
+        .. "usuario. Verifica la contraseña y reconecta con :SapRelogin.",
+      vim.log.levels.ERROR
+    )
+  end)
+end
+
+-- Inspecciona un body de respuesta; si es la página de error/login de SAP, dispara el freno.
+-- Devuelve el body intacto para no alterar a los llamantes.
+local function check_auth(body)
+  if body and M.is_auth_error(body) then
+    M.on_auth_failure()
+  end
+  return body
 end
 
 function M.is_available()
@@ -245,10 +315,10 @@ function M.request(opts)
     vim.list_extend(args, { url })
     local out = vim.fn.system(args, curl_cfg(c))
     pcall(os.remove, bodyfile)
-    return out
+    return check_auth(out)
   else
     vim.list_extend(args, { url })
-    return vim.fn.system(args, curl_cfg(c))
+    return check_auth(vim.fn.system(args, curl_cfg(c)))
   end
 end
 
@@ -287,7 +357,7 @@ local function curl_request_async(opts, cb)
     on_stdout = function(_, data) for _, l in ipairs(data) do out[#out + 1] = l end end,
     on_exit = function()
       if bodyfile then pcall(os.remove, bodyfile) end
-      cb(table.concat(out, "\n"))
+      cb(check_auth(table.concat(out, "\n")))
     end,
   })
   -- Las credenciales van por STDIN (`-K -`), no por argv. Cerramos stdin para que curl
@@ -391,6 +461,9 @@ function M.raw(opts)
   end)
   if bodyfile then pcall(os.remove, bodyfile) end
   pcall(os.remove, hdrfile)
+  if code == 401 or M.is_auth_error(body) then
+    M.on_auth_failure()
+  end
   return body, headers, code
 end
 
