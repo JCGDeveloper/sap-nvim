@@ -117,6 +117,57 @@ function M.bootstrap()
 	end)
 end
 
+-- Arranque: SIEMPRE pregunta con qué MÁQUINA entrar (selector). Tras elegirla:
+--  - si esa máquina ya tiene la contraseña recordada (keyring/DPAPI/config) → la valida en
+--    SILENCIO y entra directo al dashboard (sin pedir nada);
+--  - si no la tiene → pide la contraseña.
+-- Un solo intento de login (validación o login tecleado) → sin riesgo de bloqueo por ráfaga.
+function M.start_login(cb)
+	cb = cb or function() end
+	local conns = adt.list_connections()
+	if #conns == 0 then
+		notify("No hay conexiones en ~/.sapcli/config.yml. Usa :SapSetup.", vim.log.levels.WARN)
+		return cb(false)
+	end
+
+	local function on_machine(conn)
+		-- Fija el contexto elegido (sin contraseña aún) y mira si ya hay una recordada.
+		adt.use_connection(conn.context, nil, { persist = false })
+		if adt.creds() then
+			-- Hay contraseña recordada → validar en silencio (1 intento) y entrar.
+			adt.validate(function(ok, code)
+				if ok or not (code == 401 or code == 403) then
+					adt.mark_validated() -- OK o fallo transitorio: entra (el freno cubre un 401 real luego)
+					notify("Conectado a " .. conn.description .. " como " .. conn.user .. ".")
+					cb(true)
+				else
+					-- Recordada inválida (401/403): olvidarla y pedir contraseña nueva.
+					adt.on_auth_failure()
+					M.ask_password(conn, cb)
+				end
+			end)
+		else
+			-- No hay contraseña guardada para esta máquina → pedirla.
+			M.ask_password(conn, cb)
+		end
+	end
+
+	if #conns == 1 then
+		return on_machine(conns[1]) -- una sola máquina: sin selector
+	end
+	vim.ui.select(conns, {
+		prompt = "¿Con qué máquina SAP quieres entrar?",
+		format_item = function(c)
+			return string.format("%s   ·   %s   ·   %s   ·   client %s", c.description, c.host, c.user, c.client)
+		end,
+	}, function(choice)
+		if not choice then
+			return cb(false)
+		end
+		on_machine(choice)
+	end)
+end
+
 function M.setup()
 	vim.api.nvim_create_user_command("SapLogin", function()
 		M.choose()
@@ -124,11 +175,8 @@ function M.setup()
 	vim.api.nvim_create_user_command("SapRelogin", function()
 		M.choose() -- vuelve a elegir conexión + contraseña (sobrescribe la recordada)
 	end, { desc = "SAP: cambiar de conexión / re-login" })
-	-- Validación de arranque (no bloqueante, no pregunta): habilita la conexión si la
-	-- contraseña recordada sigue siendo válida.
-	vim.defer_fn(function()
-		pcall(M.bootstrap)
-	end, 200)
+	-- OJO: no validamos aquí en arranque; lo hace home.start() vía start_login (selector de
+	-- máquina + login solo si falta), para no duplicar intentos de login.
 end
 
 return M
