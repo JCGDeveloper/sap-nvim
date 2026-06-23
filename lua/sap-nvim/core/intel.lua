@@ -406,7 +406,15 @@ function M.complete_debug()
 		add("")
 		add("propuestas (ASYNC = ruta de blink): " .. #(aitems or {}))
 		for i = 1, math.min(#(aitems or {}), 10) do
-			add("  · " .. tostring(aitems[i].word) .. "  [kind " .. tostring(aitems[i].kind) .. " · plen " .. tostring(aitems[i].prefixlength) .. "]")
+			add(
+				"  · "
+					.. tostring(aitems[i].word)
+					.. "  [kind "
+					.. tostring(aitems[i].kind)
+					.. " · plen "
+					.. tostring(aitems[i].prefixlength)
+					.. "]"
+			)
 		end
 		vim.schedule(show)
 	end)
