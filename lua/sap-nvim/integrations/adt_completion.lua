@@ -125,12 +125,17 @@ function source:get_completions(ctx, callback)
 	return function() end
 end
 
--- Función centralizada que hace las llamadas a SAP para sacar la firma del método
-local function fetch_method_snippet(item, callback)
-	if item.sap_snippet then
-		return callback(item.sap_snippet)
+-- Pide a SAP el TEXTO COMPLETO de inserción del método: el patrón con EXPORTING / IMPORTING /
+-- CHANGING / EXCEPTIONS y el bloque IF SY-SUBRC, EXACTAMENTE como hace VSCode (abap-adt-api).
+-- Usa el endpoint `codecompletion/insertion` con patternKey = identificador del método (en
+-- MAYÚSCULAS). El `elementinfo` que se usaba antes devuelve 404 en estos sistemas. El resultado
+-- se cachea en item.sap_snippet (string = patrón; false = no aplicable / SAP no devolvió patrón).
+local function fetch_method_insertion(item, callback)
+	if item.sap_snippet ~= nil then
+		return callback(item.sap_snippet or nil)
 	end
 	if not item.sap_resolve or not item.sap_resolve.is_method then
+		item.sap_snippet = false
 		return callback(nil)
 	end
 
@@ -143,16 +148,17 @@ local function fetch_method_snippet(item, callback)
 
 	local uri = intel.object_uri(bufnr)
 	if not uri then
+		item.sap_snippet = false
 		return callback(nil)
 	end
 
+	-- Fuente con la línea TRUNCADA en el ancla (justo tras `=>` / `->`), sin el nombre ya tecleado:
+	-- la posición de inserción es ese ancla y el patternKey identifica qué método expandir.
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-	local current_line = lines[row] or ""
-	local new_line = current_line:sub(1, start_col) .. item.label .. "( )."
-	lines[row] = new_line
-	local fake_src = table.concat(lines, "\r\n")
-	local fake_col = start_col + #item.label
+	lines[row] = (lines[row] or ""):sub(1, start_col)
+	local src = table.concat(lines, "\n")
 
+	-- Contexto para includes (necesitan su programa principal), igual que el resto del módulo.
 	local ctx = ""
 	local meta = vim.b[bufnr].sap_obj
 	if meta and meta.group == "include" then
@@ -162,121 +168,75 @@ local function fetch_method_snippet(item, callback)
 		end
 	end
 
-	local logical = uri .. ctx .. "%23start=" .. row .. "," .. start_col .. ";end=" .. row .. "," .. fake_col
+	local logical = uri .. ctx .. "%23start=" .. row .. "," .. start_col
 
 	adt_http.request_async({
 		method = "POST",
-		path = "/sap/bc/adt/navigation/target",
-		query = { uri = logical, filter = "definition" },
-		content_type = "text/plain",
-		body = fake_src,
-	}, function(nav_body)
-		local target_uri = nav_body and nav_body:match('adtcore:uri="([^"]*)"')
-		if not target_uri or target_uri == "" then
+		path = "/sap/bc/adt/abapsource/codecompletion/insertion",
+		query = { uri = logical, patternKey = item.label:upper() },
+		content_type = "application/*",
+		body = src,
+	}, function(body)
+		-- Éxito = texto plano que empieza por el nombre del método. Un error de SAP llega como XML.
+		if not body or body == "" or body:match("^%s*<") then
+			item.sap_snippet = false
 			return callback(nil)
 		end
-
-		target_uri = target_uri:gsub("#", "%%23")
-
-		adt_http.request_async({
-			method = "POST",
-			path = "/sap/bc/adt/abapsource/elementinfo",
-			query = { uri = target_uri },
-			content_type = "text/plain",
-			accept = "application/xml",
-			body = "",
-		}, function(info_body)
-			if not info_body or not info_body:find("elementInfo") then
-				return callback(nil)
-			end
-
-			local SECTIONS =
-				{ EXPORTING = true, IMPORTING = true, CHANGING = true, RETURNING = true, EXCEPTIONS = true }
-			local current_section = nil
-			local params_by_section = { EXPORTING = {}, IMPORTING = {}, CHANGING = {}, RETURNING = {}, EXCEPTIONS = {} }
-
-			for name in info_body:gmatch('adtcore:name="([^"]+)"') do
-				local up_name = name:upper()
-				if SECTIONS[up_name] then
-					current_section = up_name
-				elseif current_section and up_name ~= item.label:upper() then
-					table.insert(params_by_section[current_section], name:lower())
-				end
-			end
-
-			local snip = {}
-			local tabstop = 1
-
-			for _, sec in ipairs({ "EXPORTING", "IMPORTING", "CHANGING", "RETURNING", "EXCEPTIONS" }) do
-				local params = params_by_section[sec]
-				if #params > 0 then
-					table.insert(snip, "  " .. sec)
-					local has_others = false
-					for i, p in ipairs(params) do
-						if p == "others" then
-							has_others = true
-						end
-						if sec == "EXCEPTIONS" then
-							table.insert(snip, string.format("    %-20s = %d", p, i))
-						else
-							table.insert(snip, string.format("    %-20s = ${%d:}", p, tabstop))
-							tabstop = tabstop + 1
-						end
-					end
-					if sec == "EXCEPTIONS" and not has_others then
-						table.insert(snip, string.format("    %-20s = %d", "others", #params + 1))
-					end
-				end
-			end
-
-			if #snip > 0 then
-				item.sap_snippet = item.label .. "(\n" .. table.concat(snip, "\n") .. "\n)$0"
-				callback(item.sap_snippet)
-			else
-				callback(nil)
-			end
-		end)
+		item.sap_snippet = body
+		callback(body)
 	end)
 end
 
--- 🔥 RESOLVE: Pre-calcula el Snippet en caché mientras tienes el menú iluminado
+-- 🔥 RESOLVE: Pre-calcula el patrón en caché mientras tienes el ítem iluminado en el menú.
 function source:resolve(item, callback)
 	if not item.sap_resolve or not item.sap_resolve.is_method then
 		return callback(item)
 	end
-	fetch_method_snippet(item, function()
+	fetch_method_insertion(item, function()
 		callback(item)
 	end)
 end
 
--- 🔥 EXECUTE: Se dispara mágicamente justo al pulsar Enter
+-- 🔥 EXECUTE: justo al aceptar, sustituye el nombre pelado por el patrón completo del método.
 function source:execute(ctx, item)
 	if not item.sap_resolve or not item.sap_resolve.is_method then
 		return
 	end
 
-	-- Guardamos dónde ha dejado el cursor Blink tras insertar "GUI_UPLOAD"
+	-- Dónde dejó el cursor Blink tras insertar el nombre (p.ej. "GUI_UPLOAD").
 	local end_col = vim.api.nvim_win_get_cursor(0)[2]
 	local start_col = end_col - #item.label
 
-	-- Llamamos a la API. Si ya lo pre-calculó resolve(), esto tarda 0 milisegundos.
-	fetch_method_snippet(item, function(snip)
+	-- Si resolve() ya lo cacheó, esto es instantáneo.
+	fetch_method_insertion(item, function(text)
 		vim.schedule(function()
-			-- Si el usuario se movió de línea, abortamos por seguridad
+			-- Si el usuario cambió de línea, abortamos por seguridad.
 			if vim.api.nvim_win_get_cursor(0)[1] ~= item.sap_resolve.row then
 				return
 			end
-
-			-- Borramos el "GUI_UPLOAD" pelado que Blink acababa de escribir
-			local row = vim.api.nvim_win_get_cursor(0)[1]
-			vim.api.nvim_buf_set_text(0, row - 1, start_col, row - 1, end_col, {})
-			vim.api.nvim_win_set_cursor(0, { row, start_col })
-
-			-- Insertamos la obra de arte usando el motor de snippets nativo
-			snip = snip or (item.label .. "( $0 )")
-			if vim.snippet and vim.snippet.expand then
-				vim.snippet.expand(snip)
+			-- Sin patrón (método sin params o SAP no lo dio): dejamos el nombre tal cual.
+			if not text then
+				return
 			end
+
+			local row = vim.api.nvim_win_get_cursor(0)[1]
+			local cur = vim.api.nvim_buf_get_lines(0, row - 1, row, false)[1] or ""
+			local indent = cur:match("^%s*") or "" -- alinear el patrón con la indentación de la llamada
+
+			local out = vim.split(text, "\n", { plain = true })
+			while #out > 1 and out[#out] == "" do
+				table.remove(out) -- quita líneas vacías finales que mete SAP
+			end
+			-- La 1ª línea reemplaza el nombre tecleado; las siguientes van indentadas a la base.
+			for i = 2, #out do
+				out[i] = indent .. out[i]
+			end
+
+			-- Sustituye el nombre pelado por el patrón completo.
+			vim.api.nvim_buf_set_text(0, row - 1, start_col, row - 1, end_col, out)
+			-- Cursor al final del bloque insertado.
+			local last_row = row - 1 + (#out - 1)
+			pcall(vim.api.nvim_win_set_cursor, 0, { last_row + 1, #(out[#out] or "") })
 		end)
 	end)
 end
