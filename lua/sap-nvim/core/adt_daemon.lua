@@ -39,7 +39,7 @@ function M.available()
 	if vim.fn.executable("python3") ~= 1 then
 		return false
 	end
-	return require("sap-nvim.core.adt_http").creds() ~= nil
+	return require("sap-nvim.core.adt_http").ready()
 end
 
 -- ── Procesado del stdout del daemon (lineas JSON) ────────────────────────────

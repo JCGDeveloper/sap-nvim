@@ -1,10 +1,10 @@
 -- sap-nvim.core.connection
--- Login interactivo: elige la máquina SAP (por descripción) y mete la contraseña, que
--- se guarda SOLO en memoria (vía adt_http.use_connection) — nunca en disco. Así puedes
--- quitar `password:` de ~/.sapcli/config.yml y que te la pida al arrancar (más seguro).
---
--- Para la descripción de la máquina, añade un campo `description:` en su bloque de
--- `connections:` en config.yml; si no, se usa el nombre del contexto.
+-- Login interactivo: elige la máquina SAP (por descripción) y mete la contraseña, que se
+-- guarda en memoria + keyring del kernel (recordar estilo VSCode) — nunca en texto plano en
+-- disco. La contraseña se VALIDA con una sola petición ANTES de habilitar nada: así una
+-- contraseña errónea cuesta UN intento, no la ráfaga (completado por tecla + sapcli) que
+-- bloquea el usuario en SAP. Una vez validada, se propaga al entorno (SAP_USER/SAP_PASSWORD)
+-- para que sapcli la herede.
 
 local M = {}
 local adt = require("sap-nvim.core.adt_http")
@@ -15,31 +15,48 @@ local function notify(msg, level)
 	end)
 end
 
--- Pide la contraseña (oculta) para `conn` y la fija en memoria. cb(ok).
+-- Valida las credenciales del contexto activo con UNA petición y, según el resultado, habilita
+-- la conexión (mark_validated + persiste la contraseña) o activa el freno anti-bloqueo. cb(ok).
+local function validate_and_finish(conn, password, cb)
+	adt.validate(function(ok, code)
+		if ok then
+			if password and password ~= "" then
+				adt.persist_password(conn.context, password)
+			end
+			adt.mark_validated()
+			notify("Conectado a " .. conn.description .. " como " .. conn.user .. ".")
+			if cb then cb(true) end
+		else
+			-- SAP rechazó la auth: NO guardamos la contraseña y pausamos (freno) para no
+			-- seguir intentando y bloquear el usuario.
+			adt.on_auth_failure()
+			local why = (code == 401 or code == 403) and "contraseña incorrecta o usuario bloqueado"
+				or ("sin respuesta válida de SAP (HTTP " .. tostring(code) .. ")")
+			notify("Login rechazado: " .. why .. ". NO se guarda la contraseña. Reintenta con :SapLogin.", vim.log.levels.ERROR)
+			if cb then cb(false) end
+		end
+	end)
+end
+
+-- Pide la contraseña (oculta) para `conn`, la fija en memoria, la VALIDA y termina. cb(ok).
 function M.ask_password(conn, cb)
 	vim.schedule(function()
 		local pw = vim.fn.inputsecret("Contraseña " .. conn.user .. "@" .. conn.description .. ": ")
 		if pw == nil or pw == "" then
-			-- Sin password tecleada: si config.yml ya trae una, usamos esa; si no, abortamos.
-			if conn.pass and conn.pass ~= "" then
-				adt.use_connection(conn.context, nil)
-				notify("Conectado a " .. conn.description .. " (contraseña de config.yml).")
-				if cb then
-					cb(true)
-				end
+			-- Sin contraseña tecleada: si hay una recordada (keyring) o en config.yml, validamos esa.
+			adt.use_connection(conn.context, nil, { persist = false })
+			if adt.creds() then
+				validate_and_finish(conn, nil, cb)
 			else
 				notify("Login cancelado (sin contraseña).", vim.log.levels.WARN)
-				if cb then
-					cb(false)
-				end
+				if cb then cb(false) end
 			end
 			return
 		end
-		adt.use_connection(conn.context, pw)
-		notify("Conectado a " .. conn.description .. " como " .. conn.user .. ".")
-		if cb then
-			cb(true)
-		end
+		-- Contraseña tecleada: la ponemos SOLO en memoria (persist=false) hasta validar; si SAP
+		-- la acepta, validate_and_finish la persiste en el keyring.
+		adt.use_connection(conn.context, pw, { persist = false })
+		validate_and_finish(conn, pw, cb)
 	end)
 end
 
@@ -48,9 +65,7 @@ function M.choose(cb)
 	local conns = adt.list_connections()
 	if #conns == 0 then
 		notify("No hay conexiones en ~/.sapcli/config.yml. Usa :SapSetup.", vim.log.levels.WARN)
-		if cb then
-			cb(false)
-		end
+		if cb then cb(false) end
 		return
 	end
 	if #conns == 1 then
@@ -64,33 +79,52 @@ function M.choose(cb)
 		end,
 	}, function(choice)
 		if not choice then
-			if cb then
-				cb(false)
-			end
+			if cb then cb(false) end
 			return
 		end
 		M.ask_password(choice, cb)
 	end)
 end
 
--- Login solo si hace falta (no hay contraseña disponible). cb(ok). Para el arranque.
+-- Login solo si hace falta (no hay conexión validada). cb(ok). Para usar bajo demanda.
 function M.ensure(cb)
-	if not adt.needs_login() then
-		if cb then
-			cb(true)
-		end
+	if adt.ready() then
+		if cb then cb(true) end
 		return
 	end
 	M.choose(cb)
 end
 
+-- Arranque del plugin: si ya hay una contraseña recordada (keyring/config), la VALIDA en
+-- segundo plano con UNA petición y, si SAP la acepta, habilita la conexión (y la propaga al
+-- entorno para sapcli). Si la rechaza, activa el freno y avisa. Si no hay ninguna recordada,
+-- no hace nada (se pedirá al abrir el primer objeto). NUNCA pregunta al arrancar.
+function M.bootstrap()
+	if not adt.creds() then
+		adt.export_env() -- asegura que no queden SAP_USER/SAP_PASSWORD viejos en el entorno
+		return
+	end
+	adt.validate(function(ok, code)
+		if ok then
+			adt.mark_validated()
+		else
+			adt.on_auth_failure()
+		end
+	end)
+end
+
 function M.setup()
 	vim.api.nvim_create_user_command("SapLogin", function()
 		M.choose()
-	end, { desc = "SAP: elegir conexión + contraseña (en memoria)" })
+	end, { desc = "SAP: elegir conexión + contraseña (validada, en memoria + keyring)" })
 	vim.api.nvim_create_user_command("SapRelogin", function()
-		M.choose() -- vuelve a elegir conexión + contraseña (sobrescribe la de memoria)
+		M.choose() -- vuelve a elegir conexión + contraseña (sobrescribe la recordada)
 	end, { desc = "SAP: cambiar de conexión / re-login" })
+	-- Validación de arranque (no bloqueante, no pregunta): habilita la conexión si la
+	-- contraseña recordada sigue siendo válida.
+	vim.defer_fn(function()
+		pcall(M.bootstrap)
+	end, 200)
 end
 
 return M

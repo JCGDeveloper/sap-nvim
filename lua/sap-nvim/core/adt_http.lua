@@ -19,9 +19,14 @@ local secret = require("sap-nvim.core.secret")
 -- sesiones) la da el keyring del kernel (core.secret), no el disco.
 -- auth_locked: FRENO ANTI-BLOQUEO. Cuando SAP rechaza la auth (401), lo activamos para DEJAR
 -- DE MANDAR la contraseña errónea: es justo el martilleo de logins fallidos (uno por tecla en
--- el completado + daemon) lo que bloquea el usuario en SAP. Mientras esté activo, creds()
--- devuelve nil → nada de red. Se baja con un re-login explícito (use_connection).
-local state = { creds = nil, token = nil, cookies = nil, active_ctx = nil, passwords = {}, auth_locked = false }
+-- el completado + daemon + sapcli) lo que bloquea el usuario en SAP. Mientras esté activo,
+-- ready()=false → NINGUNA ruta (curl/daemon/sapcli) manda credenciales. Se baja con re-login.
+-- validated: la conexión se PROBÓ con UNA petición y SAP la aceptó. Hasta validar no dejamos
+-- correr nada (ni completado ni sapcli) → una contraseña mala cuesta 1 intento, no una ráfaga.
+local state = {
+  creds = nil, token = nil, cookies = nil, active_ctx = nil, passwords = {},
+  auth_locked = false, validated = false,
+}
 
 -- Resuelve la contraseña de `ctx`: 1º la de ESTA sesión (memoria), 2º la del keyring
 -- (recordada estilo VSCode), 3º la de config.yml (texto plano, último recurso).
@@ -135,6 +140,7 @@ function M.use_connection(ctx, password, opts)
   opts = opts or {}
   state.active_ctx = ctx
   state.auth_locked = false -- re-login intencionado → reanudamos la actividad de red
+  state.validated = false -- pero NADA corre hasta validar (M.validate) → 0 ráfagas
   if password and password ~= "" then
     state.passwords[ctx] = password
     if opts.persist ~= false then
@@ -150,6 +156,13 @@ function M.use_connection(ctx, password, opts)
   pcall(function()
     require("sap-nvim.core.adt_daemon").stop()
   end)
+end
+
+-- Guarda la contraseña de `ctx` en el keyring (persistencia estilo VSCode). Útil tras validar.
+function M.persist_password(ctx, password)
+  if password and password ~= "" then
+    pcall(secret.set, ctx, password)
+  end
 end
 
 -- ¿La respuesta es una página de error de SAP (401/login) en vez de datos? Cuando las
@@ -222,6 +235,7 @@ function M.on_auth_failure()
     return
   end
   state.auth_locked = true
+  state.validated = false
   state.creds = nil
   state.token = nil
   local txt = read_config()
@@ -230,6 +244,7 @@ function M.on_auth_failure()
     state.passwords[ctx] = nil
     pcall(secret.clear, ctx)
   end
+  M.export_env() -- borra SAP_USER/SAP_PASSWORD del entorno → sapcli TAMPOCO reintenta
   pcall(function()
     require("sap-nvim.core.adt_daemon").stop()
   end)
@@ -242,6 +257,35 @@ function M.on_auth_failure()
   end)
 end
 
+-- Exporta las credenciales al ENTORNO del proceso nvim para que `sapcli` (lanzado como hijo)
+-- las herede por SAP_USER/SAP_PASSWORD (env tiene prioridad sobre config.yml en sapcli). Así
+-- la MISMA contraseña alimenta curl (-K -), el daemon (ADT_PASS) y sapcli, sin texto plano en
+-- disco y sin desincronización. Si no hay conexión usable, BORRA las vars (no dejar nada viejo).
+function M.export_env()
+  local c = (state.validated and not state.auth_locked) and M.creds() or nil
+  vim.schedule(function()
+    if c then
+      vim.env.SAP_USER = c.user
+      vim.env.SAP_PASSWORD = c.pass
+    else
+      vim.env.SAP_USER = nil
+      vim.env.SAP_PASSWORD = nil
+    end
+  end)
+end
+
+-- ¿La conexión está LISTA para mandar credenciales a SAP? (validada, sin freno y con password)
+-- Todas las rutas (completado, daemon, sapcli) lo consultan antes de tocar la red.
+function M.ready()
+  return state.validated and not state.auth_locked and M.creds() ~= nil
+end
+
+-- Marca la conexión como validada (SAP aceptó la auth) y propaga las credenciales al entorno.
+function M.mark_validated()
+  state.validated = true
+  M.export_env()
+end
+
 -- Inspecciona un body de respuesta; si es la página de error/login de SAP, dispara el freno.
 -- Devuelve el body intacto para no alterar a los llamantes.
 local function check_auth(body)
@@ -252,7 +296,7 @@ local function check_auth(body)
 end
 
 function M.is_available()
-  return M.creds() ~= nil and vim.fn.executable("curl") == 1
+  return M.ready() and vim.fn.executable("curl") == 1
 end
 
 -- ── CSRF token + cookies (necesarios para POST) ──────────────────────────────
@@ -269,6 +313,39 @@ end
 local function curl_cfg(c)
   local esc = function(s) return (tostring(s or "")):gsub("\\", "\\\\"):gsub('"', '\\"') end
   return 'user = "' .. esc(c.user .. ":" .. c.pass) .. '"\n'
+end
+
+-- Prueba las credenciales actuales con UNA sola petición de discovery. cb(ok, http_code).
+-- Es el guardián anti-bloqueo: validar ANTES de habilitar nada hace que una contraseña errónea
+-- cueste UN intento, no la ráfaga (por tecla + sapcli) que dispara login/fails_to_user_lock.
+-- OJO: usa M.creds() directamente (no ready()), porque ready() exige validated y aún no lo está.
+function M.validate(cb)
+  local c = M.creds()
+  if not c then
+    cb(false, 0)
+    return
+  end
+  local out = {}
+  local args = {
+    "curl", "-sk", "-K", "-", "-o", "/dev/null", "-w", "%{http_code}",
+    c.base .. "/sap/bc/adt/core/discovery?sap-client=" .. c.client,
+  }
+  local job = vim.fn.jobstart(args, {
+    stdout_buffered = true,
+    on_stdout = function(_, data)
+      for _, l in ipairs(data) do out[#out + 1] = l end
+    end,
+    on_exit = function()
+      local code = tonumber((table.concat(out):gsub("%s", ""))) or 0
+      cb(code >= 200 and code < 400, code)
+    end,
+  })
+  if job and job > 0 then
+    pcall(vim.fn.chansend, job, curl_cfg(c))
+    pcall(vim.fn.chanclose, job, "stdin")
+  else
+    cb(false, 0)
+  end
 end
 
 -- Obtiene (y cachea) el token CSRF y el cookie-jar de la sesión. Sync.
@@ -293,6 +370,7 @@ end
 -- opts: { method="GET"|"POST", path=..., query={k=v}, body=<string>, accept=... }
 -- Devuelve el body (string) o nil + error. Sync (vim.fn.system).
 function M.request(opts)
+  if not M.ready() then return nil, "Conexión SAP no lista (sin validar / pausada)" end
   local c = M.creds()
   if not c then return nil, "Sin credenciales SAP (config.yml)" end
 
@@ -348,6 +426,7 @@ end
 
 -- Implementación con curl (un proceso por llamada). Fallback del daemon persistente.
 local function curl_request_async(opts, cb)
+  if not M.ready() then cb(nil); return end
   local c = M.creds()
   if not c then cb(nil); return end
   local args, bodyfile = build_args(c, opts)
@@ -392,7 +471,7 @@ end
 -- Si el daemon no responde a tiempo o devuelve nil, cae a curl SOLO esa vez (el daemon sigue
 -- activo). Si ni arranca, se marca muerto y se usa curl. Nunca rompe el completado.
 function M.request_async(opts, cb)
-  if not M.creds() then cb(nil); return end
+  if not M.ready() then cb(nil); return end
   local d = daemon_mod()
   if not d then curl_request_async(opts, cb); return end
   if pcall(d.ensure) == false then daemon_dead = true; curl_request_async(opts, cb); return end
@@ -425,6 +504,7 @@ end
 -- opts: { method, path, query, body, accept, content_type, stateful, headers={..} }
 -- Devuelve body (string), headers (string), http_code (number). Sync.
 function M.raw(opts)
+  if not M.ready() then return nil, nil, 0 end
   local c = M.creds()
   if not c then return nil, nil, 0 end
   local url = c.base .. opts.path

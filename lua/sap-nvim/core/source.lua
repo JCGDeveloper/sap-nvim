@@ -74,6 +74,16 @@ function M.open(name, group, opts)
     notify("No hay conexion SAP. Usa :SapSetup primero.", vim.log.levels.WARN)
     return
   end
+  -- GUARDIÁN ANTI-BLOQUEO: sapcli lee la contraseña de SAP_PASSWORD (entorno) o config.yml.
+  -- Si la conexión no está VALIDADA (recién arrancado, freno activo, password sin probar),
+  -- NO lanzamos sapcli — enviaría un login (vacío o sin validar) que puede bloquear el usuario.
+  -- Pedimos login (valida con 1 petición) y, si va bien, reintentamos la apertura.
+  if not require("sap-nvim.core.adt_http").ready() then
+    require("sap-nvim.core.connection").ensure(function(ok)
+      if ok then M.open(name, group, opts) end
+    end)
+    return
+  end
 
   -- Los módulos de función necesitan su GRUPO de funciones: `functionmodule read GROUP NAME`.
   -- Si no nos lo pasaron, lo pedimos y reintentamos open con opts.fgroup puesto.
@@ -260,6 +270,13 @@ function M.push(bufnr, activate)
   local obj = vim.b[bufnr].sap_obj
   if not obj then
     notify("Este buffer no es un objeto SAP abierto con sap-nvim.", vim.log.levels.WARN)
+    return
+  end
+  -- Guardián anti-bloqueo (ver M.open): no escribir vía sapcli sin conexión validada.
+  if not require("sap-nvim.core.adt_http").ready() then
+    require("sap-nvim.core.connection").ensure(function(ok)
+      if ok then M.push(bufnr, activate) end
+    end)
     return
   end
 
