@@ -23,8 +23,11 @@ function source:get_trigger_characters()
 end
 
 local Kind = vim.lsp.protocol.CompletionItemKind
-local KIND_MAP = { ["1"] = Kind.Variable, ["2"] = Kind.Class, ["3"] = Kind.Method, ["52"] = Kind.Keyword }
-local KIND_LABEL = { ["1"] = "variable", ["2"] = "clase/tipo", ["3"] = "método", ["52"] = "keyword" }
+-- AÑADIDO: Soporte explícito para "Funciones" y "Palabras clave"
+local KIND_MAP =
+	{ ["1"] = Kind.Variable, ["2"] = Kind.Class, ["3"] = Kind.Method, ["4"] = Kind.Function, ["52"] = Kind.Keyword }
+local KIND_LABEL =
+	{ ["1"] = "variable", ["2"] = "clase/tipo", ["3"] = "método", ["4"] = "función", ["52"] = "keyword" }
 
 function source:get_completions(ctx, callback)
 	local col = ctx.cursor[2]
@@ -37,7 +40,9 @@ function source:get_completions(ctx, callback)
 	local annotation = before:match("@[%w%._]*$") ~= nil
 	local cds_field = before:match("[%w_/]+%.[%w_/]*$") ~= nil
 	local cds_anno_val = before:match("@[%w%._]+%s*:%s*['#]?[%w_#]*$") ~= nil
-	local struct_field = before:match("[%w_]%-[%w_]*$") ~= nil
+	-- Acceso a campo tras `-`: nombre normal (wa-campo) Y también tras una expresión de tabla
+	-- o método: lt_rutas[ 1 ]-campo / get_struct( )-campo (el carácter previo es `]` o `)`).
+	local struct_field = before:match("[%w_%]%)]%-[%w_]*$") ~= nil
 	local bl = before:lower()
 	local type_ctx = bl:match("%s+type%s+[%w_/]*$") ~= nil or bl:match("%s+like%s+[%w_/]*$") ~= nil
 
@@ -87,9 +92,10 @@ function source:get_completions(ctx, callback)
 				insertText = p.word,
 				filterText = p.word,
 
-				-- Guardamos las coordenadas limpias para montar el Snippet a posteriori
 				sap_resolve = {
 					is_method = (p.kind == "3" and member),
+					-- 🔥 MAGIA PURA: Permitimos que funciones (4) y keywords (52) intenten buscar snippet
+					needs_pattern = (p.kind == "3" or p.kind == "4" or p.kind == "52"),
 					bufnr = bufnr,
 					row = row,
 					start_col = ctx.cursor[2] - plen,
@@ -125,16 +131,12 @@ function source:get_completions(ctx, callback)
 	return function() end
 end
 
--- Pide a SAP el TEXTO COMPLETO de inserción del método: el patrón con EXPORTING / IMPORTING /
--- CHANGING / EXCEPTIONS y el bloque IF SY-SUBRC, EXACTAMENTE como hace VSCode (abap-adt-api).
--- Usa el endpoint `codecompletion/insertion` con patternKey = identificador del método (en
--- MAYÚSCULAS). El `elementinfo` que se usaba antes devuelve 404 en estos sistemas. El resultado
--- se cachea en item.sap_snippet (string = patrón; false = no aplicable / SAP no devolvió patrón).
 local function fetch_method_insertion(item, callback)
 	if item.sap_snippet ~= nil then
 		return callback(item.sap_snippet or nil)
 	end
-	if not item.sap_resolve or not item.sap_resolve.is_method then
+	-- Modificado para que no se bloquee solo a is_method, usa la nueva propiedad abierta
+	if not item.sap_resolve or not item.sap_resolve.needs_pattern then
 		item.sap_snippet = false
 		return callback(nil)
 	end
@@ -152,13 +154,10 @@ local function fetch_method_insertion(item, callback)
 		return callback(nil)
 	end
 
-	-- Fuente con la línea TRUNCADA en el ancla (justo tras `=>` / `->`), sin el nombre ya tecleado:
-	-- la posición de inserción es ese ancla y el patternKey identifica qué método expandir.
 	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 	lines[row] = (lines[row] or ""):sub(1, start_col)
 	local src = table.concat(lines, "\n")
 
-	-- Contexto para includes (necesitan su programa principal), igual que el resto del módulo.
 	local ctx = ""
 	local meta = vim.b[bufnr].sap_obj
 	if meta and meta.group == "include" then
@@ -177,20 +176,17 @@ local function fetch_method_insertion(item, callback)
 		content_type = "application/*",
 		body = src,
 	}, function(body)
-		-- Éxito = texto plano que empieza por el nombre del método. Un error de SAP llega como XML.
 		if not body or body == "" or body:match("^%s*<") then
 			item.sap_snippet = false
 			return callback(nil)
 		end
-		-- SAP devuelve el texto con CRLF: quitamos los \r o quedarían como ^M en cada línea.
 		item.sap_snippet = (body:gsub("\r", ""))
 		callback(item.sap_snippet)
 	end)
 end
 
--- 🔥 RESOLVE: Pre-calcula el patrón en caché mientras tienes el ítem iluminado en el menú.
 function source:resolve(item, callback)
-	if not item.sap_resolve or not item.sap_resolve.is_method then
+	if not item.sap_resolve or not item.sap_resolve.needs_pattern then
 		return callback(item)
 	end
 	fetch_method_insertion(item, function()
@@ -198,36 +194,33 @@ function source:resolve(item, callback)
 	end)
 end
 
--- 🔥 EXECUTE: al aceptar, sustituye el nombre del método por su patrón completo.
--- Como el source `luasnip` de Blink: NO llamamos a default_implementation (así Blink no inserta
--- también el nombre y no se duplica), y limpiamos la región [ancla, cursor] anclada en
--- sap_resolve.start_col (el MISMO ancla con el que SAP generó el patrón), no en cursor-#label.
 function source:execute(ctx, item, callback, default_implementation)
 	callback = callback or function() end
-	if not item.sap_resolve or not item.sap_resolve.is_method then
-		if default_implementation then default_implementation() end
+	-- Ampliamos el filtro para dejar pasar el Snippet
+	if not item.sap_resolve or not item.sap_resolve.needs_pattern then
+		if default_implementation then
+			default_implementation()
+		end
 		return callback()
 	end
 
-	-- Si resolve() ya lo cacheó, esto es instantáneo.
 	fetch_method_insertion(item, function(text)
 		vim.schedule(function()
 			local cur = vim.api.nvim_win_get_cursor(0)
 			local row0 = item.sap_resolve.row - 1
-			-- Sin patrón, o el usuario cambió de línea: inserción normal (deja que Blink ponga el nombre).
 			if not text or (cur[1] - 1) ~= row0 then
-				if default_implementation then default_implementation() end
+				if default_implementation then
+					default_implementation()
+				end
 				return callback()
 			end
 
 			local from_col = item.sap_resolve.start_col
 			local to_col = math.max(from_col, cur[2])
 
-			-- Insertamos el patrón VERBATIM (como VSCode): los comentarios ABAP `*` de los
-			-- parámetros opcionales DEBEN quedar en la columna 1, así que NO re-indentamos.
 			local out = vim.split(text, "\n", { plain = true })
 			while #out > 1 and out[#out] == "" do
-				table.remove(out) -- quita líneas vacías finales que mete SAP
+				table.remove(out)
 			end
 
 			vim.api.nvim_buf_set_text(0, row0, from_col, row0, to_col, out)

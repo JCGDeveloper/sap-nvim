@@ -172,14 +172,14 @@ function M.parse(body)
 		end
 	end
 	if #items == 0 then
-		for block in body:gmatch("<SCC_COMPLETION>([\0-\255]-)</SCC_COMPLETION>") do
+		for block in body:gmatch("<SCC_COMPLETION>(.-)</SCC_COMPLETION>") do
 			local id = block:match("<IDENTIFIER>([^<]*)</IDENTIFIER>")
 			local kind = block:match("<KIND>([^<]*)</KIND>")
 			local plen = tonumber(block:match("<PREFIXLENGTH>([^<]*)</PREFIXLENGTH>"))
 
-			local pattern = block:match("<PATTERN>([\0-\255]-)</PATTERN>")
+			local pattern = block:match("<PATTERN>(.-)</PATTERN>")
 			if pattern then
-				local cdata = pattern:match("<!%[CDATA%[([\0-\255]-)%]%]>")
+				local cdata = pattern:match("<!%[CDATA%[(.-)%]%]>")
 				if cdata then
 					pattern = cdata
 				end
