@@ -35,21 +35,60 @@ local function open_in_browser(url)
 	vim.fn.setreg("+", url)
 end
 
--- Abre la URL en un navegador DENTRO de Neovim: carbonyl (Chromium en terminal) en un split.
-local function open_in_terminal(url)
+-- carbonyl (Chromium en medios-bloques) dentro de un split de Neovim. FALLBACK si no hay
+-- term-browser/Windows Terminal.
+local function open_in_carbonyl(url)
 	if vim.fn.executable("carbonyl") == 0 then
-		notify("carbonyl no está instalado (npm i -g carbonyl). Abriendo en el navegador.", vim.log.levels.WARN)
+		notify("Ni term-browser ni carbonyl disponibles. Abriendo en el navegador.", vim.log.levels.WARN)
 		open_in_browser(url)
 		return
 	end
 	notify("Abriendo WebGUI en la terminal (carbonyl)...", vim.log.levels.INFO)
-	vim.cmd("botright new") -- buffer vacío en split horizontal para el terminal
+	vim.cmd("botright new")
 	vim.api.nvim_win_set_height(0, math.max(20, math.floor(vim.o.lines * 0.7)))
 	vim.b.sap_webgui = true
-	-- jobstart con term=true engancha un terminal al buffer actual (nvim 0.10+). q sale del modo
-	-- terminal; el split se cierra con :q. carbonyl: ratón + scroll + JS (Chromium real).
 	vim.fn.jobstart({ "carbonyl", url }, { term = true })
 	vim.cmd("startinsert")
+end
+
+-- Localiza el lanzador de term-browser (~/term-browser o $TERM_BROWSER_DIR).
+local function term_browser_launcher()
+	local dir = vim.env.TERM_BROWSER_DIR
+	if not dir or dir == "" then
+		dir = vim.fn.expand("~/term-browser")
+	end
+	local sh = dir .. "/scripts/launch.sh"
+	return (vim.fn.filereadable(sh) == 1) and sh or nil
+end
+
+-- Abre la URL "en terminal": navegador HD term-browser (Chromium headless + Sixel) en un
+-- panel CONTIGUO de Windows Terminal — render fiel a Chrome (no medios-bloques) e interactivo
+-- (ratón/teclado/scroll). Si no está term-browser o falla, cae a carbonyl/navegador.
+local function open_in_terminal(url)
+	local launcher = term_browser_launcher()
+	if not launcher then
+		return open_in_carbonyl(url)
+	end
+	notify("Abriendo WebGUI en term-browser (panel HD de Windows Terminal)...", vim.log.levels.INFO)
+	local err = {}
+	vim.fn.jobstart({ "bash", launcher, url }, {
+		on_stderr = function(_, data)
+			for _, l in ipairs(data) do
+				if vim.trim(l) ~= "" then
+					err[#err + 1] = vim.trim(l)
+				end
+			end
+		end,
+		on_exit = function(_, code)
+			-- wt.exe lanza el panel y sale enseguida (0). Si falla (p.ej. sin wt.exe), caemos a carbonyl.
+			if code ~= 0 then
+				vim.schedule(function()
+					notify("term-browser no pudo lanzarse (" .. (err[1] or ("code " .. code)) .. "). Probando carbonyl…", vim.log.levels.WARN)
+					open_in_carbonyl(url)
+				end)
+			end
+		end,
+	})
 end
 
 -- Punto único: SIEMPRE pregunta dónde abrir (1 navegador / 2 terminal), salvo que el usuario
@@ -61,7 +100,7 @@ local function open_url(url)
 	elseif pref == "terminal" then
 		return open_in_terminal(url)
 	end
-	vim.ui.select({ "1. Navegador (Windows)", "2. Terminal (dentro de Neovim)" }, {
+	vim.ui.select({ "1. Navegador (Windows)", "2. Terminal HD (term-browser, panel WT)" }, {
 		prompt = "¿Dónde abrir la WebGUI?",
 	}, function(choice)
 		if not choice then
