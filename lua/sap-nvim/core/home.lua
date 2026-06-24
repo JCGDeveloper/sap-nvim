@@ -222,6 +222,31 @@ function M.open_dashboard()
 	-- Las opciones de arriba son de VENTANA: si abres un objeto SAP en esta misma
 	-- ventana, se quedarían pegadas (sin números ni signcolumn → no verías el
 	-- breakpoint). Al salir del dashboard las restauramos a valores normales.
+	-- RE-ASEGURAR el look del dashboard al entrar/enfocar: algunos plugins (cargados en
+	-- VeryLazy) reajustan opciones de ventana después de abrir el dashboard, y volvían a
+	-- aparecer los números y las `~`. Este autocmd las fija cada vez que se entra al buffer.
+	local function dash_winopts()
+		if vim.api.nvim_get_current_buf() ~= buf then
+			return -- solo tocamos la ventana cuando el dashboard es el buffer actual
+		end
+		pcall(function()
+			vim.wo.number = false
+			vim.wo.relativenumber = false
+			vim.wo.signcolumn = "no"
+			vim.wo.cursorline = true
+			vim.wo.list = false
+			vim.wo.statuscolumn = ""
+			vim.wo.fillchars = "eob: " -- ocultar las `~` de fin de buffer (temas transparentes)
+		end)
+	end
+	dash_winopts()
+	vim.schedule(dash_winopts) -- tras el tick actual
+	vim.defer_fn(dash_winopts, 250) -- por si un plugin VeryLazy reactiva números/columnas después
+	vim.api.nvim_create_autocmd({ "BufWinEnter", "BufEnter", "WinEnter" }, {
+		buffer = buf,
+		callback = dash_winopts,
+	})
+
 	vim.api.nvim_create_autocmd({ "BufLeave", "BufWinLeave" }, {
 		buffer = buf,
 		once = true,
@@ -267,7 +292,7 @@ function M.open_dashboard()
 	end, opt)
 	vim.keymap.set("n", "<leader><leader>", function()
 		M.pick_buffers()
-	end, opt)
+	end, vim.tbl_extend("force", opt, { desc = "Buffers abiertos (␣␣)" }))
 
 	pcall(vim.api.nvim_win_set_cursor, 0, { menu_start + 1, 7 })
 	return buf
