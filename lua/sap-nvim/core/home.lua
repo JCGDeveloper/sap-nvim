@@ -217,6 +217,7 @@ function M.open_dashboard()
 	vim.wo.cursorline = true
 	vim.wo.signcolumn = "no"
 	vim.wo.list = false
+	vim.wo.fillchars = "eob: " -- ocultar las `~` de fin de buffer (se veían con temas transparentes)
 
 	-- Las opciones de arriba son de VENTANA: si abres un objeto SAP en esta misma
 	-- ventana, se quedarían pegadas (sin números ni signcolumn → no verías el
@@ -231,6 +232,7 @@ function M.open_dashboard()
 				vim.wo.signcolumn = "yes"
 				vim.wo.cursorline = true
 				vim.wo.list = false
+				vim.wo.fillchars = "" -- restaurar las `~` normales fuera del dashboard
 			end)
 		end,
 	})
