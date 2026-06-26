@@ -2,7 +2,7 @@ local M = {}
 local adt_http = require("sap-nvim.core.adt_http")
 local objtype = require("sap-nvim.core.objtype")
 
-local SAP_FILETYPES = { abap = true, cds = true, acds = true, abapcds = true, ddls = true }
+local SAP_FILETYPES = { abap = true, cds = true, acds = true, abapcds = true, ddl = true, ddls = true }
 local function is_sap_ft(ft)
 	return SAP_FILETYPES[ft or vim.bo.filetype] == true
 end
@@ -63,20 +63,27 @@ local ADT_URI = {
 	program = "/sap/bc/adt/programs/programs/%s/source/main",
 	include = "/sap/bc/adt/programs/includes/%s/source/main",
 	functiongroup = "/sap/bc/adt/functions/groups/%s/source/main",
-	structure = "/sap/bc/adt/dictionary/structures/%s/source/main",
-	table = "/sap/bc/adt/dictionary/tables/%s/source/main",
-	dataelement = "/sap/bc/adt/dictionary/dataelements/%s/source/main",
-	tabletype = "/sap/bc/adt/dictionary/tabletypes/%s/source/main",
-	domain = "/sap/bc/adt/dictionary/domains/%s/source/main",
+	structure = "/sap/bc/adt/ddic/structures/%s/source/main",
+	table = "/sap/bc/adt/ddic/tables/%s/source/main",
+	dataelement = "/sap/bc/adt/ddic/dataelements/%s/source/main",
+	tabletype = "/sap/bc/adt/ddic/tabletypes/%s/source/main",
+	domain = "/sap/bc/adt/ddic/domains/%s/source/main",
+	ddl = "/sap/bc/adt/ddic/ddl/sources/%s/source/main",
 	ddls = "/sap/bc/adt/ddic/ddl/sources/%s/source/main",
 	ddlx = "/sap/bc/adt/ddic/ddlx/sources/%s/source/main",
 	dcl = "/sap/bc/adt/acm/dcl/sources/%s/source/main",
 	bdef = "/sap/bc/adt/bo/behaviordefinitions/%s/source/main",
 	srvd = "/sap/bc/adt/ddic/srvd/sources/%s/source/main",
+	acds = "/sap/bc/adt/ddic/ddl/sources/%s/source/main",
+	abapcds = "/sap/bc/adt/ddic/ddl/sources/%s/source/main",
 }
 
 function M.object_uri(bufnr)
 	local meta = vim.b[bufnr].sap_obj
+	if meta and meta.uri and meta.uri ~= "" then
+		local uri = meta.uri:gsub("/source/main$", "")
+		return uri .. "/source/main"
+	end
 	local group = meta and meta.group or objtype.group(vim.api.nvim_buf_get_name(bufnr))
 	local name = meta and meta.name or objtype.name(vim.api.nvim_buf_get_name(bufnr))
 	if meta and meta.group == "functionmodule" and meta.fgroup then
@@ -234,7 +241,8 @@ function M.proposals_async(bufnr, line, col, cb)
 	local meta = vim.b[bufnr].sap_obj
 	local is_cds_file = meta
 		and (
-			meta.group == "ddls"
+			meta.group == "ddl"
+			or meta.group == "ddls"
 			or meta.group == "ddlx"
 			or meta.group == "dcl"
 			or meta.group == "bdef"
@@ -376,7 +384,7 @@ function M.complete_debug()
 		vim.api.nvim_win_set_buf(0, buf)
 	end
 
-	local CDS_G = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+	local CDS_G = { ddl = true, ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
 	if meta and CDS_G[meta.group] then
 		add("ruta      : CDS (ddicrepositoryaccess)")
 		require("sap-nvim.core.cds").completion_debug(bufnr, row, col, function(info, body)
@@ -583,7 +591,7 @@ function M.goto_definition(filter)
 			pcall(vim.cmd, "normal! gD")
 		end
 	else
-		local cds_groups = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+		local cds_groups = { ddl = true, ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
 		if cds_groups[obj.group] then
 			require("sap-nvim.core.cds").open_adt(obj.group, obj.name, { line = obj.line, col = obj.col })
 		else
@@ -680,7 +688,7 @@ function M.hover()
 
 		local function extract_statement(lines_table, start_idx, group)
 			local stmt, in_braces = {}, false
-			local is_ddic = (group == "table" or group == "structure" or group == "ddls")
+			local is_ddic = (group == "table" or group == "structure" or group == "ddl" or group == "ddls")
 			for i = start_idx, math.min(start_idx + (is_ddic and 50 or 50), #lines_table) do
 				local l = lines_table[i] or ""
 				table.insert(stmt, l)
@@ -883,7 +891,7 @@ function M.references()
 			end
 			local obj = uri_to_object(choice.uri)
 			if obj and obj.group then
-				local cds_groups = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+				local cds_groups = { ddl = true, ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
 				if cds_groups[obj.group] then
 					require("sap-nvim.core.cds").open_adt(obj.group, obj.name, { line = obj.line, col = obj.col })
 				else
@@ -987,7 +995,7 @@ function M.type_hierarchy(super)
 		end
 		local obj = choice.uri and uri_to_object(choice.uri) or nil
 		if obj and obj.group then
-			local cds_groups = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+			local cds_groups = { ddl = true, ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
 			if cds_groups[obj.group] then
 				require("sap-nvim.core.cds").open_adt(obj.group, obj.name, { line = obj.line, col = obj.col })
 			else
@@ -1008,11 +1016,16 @@ end
 function M.check_syntax(bufnr, cb)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	if not adt_http.is_available() or not vim.api.nvim_buf_is_valid(bufnr) then
-		if cb then cb({}) end
+		if cb then
+			cb({})
+		end
 		return
 	end
 	local source_uri = M.object_uri(bufnr)
 	if not source_uri then
+		if cb then
+			cb({})
+		end
 		return
 	end
 	local obj_uri = source_uri:gsub("/source/main$", "")
@@ -1041,7 +1054,13 @@ function M.check_syntax(bufnr, cb)
 			local typ = msg:match('chkrun:type="([^"]*)"')
 			local text = msg:match('chkrun:shortText="([^"]*)"')
 			local line, col = (uri or ""):match("start=(%d+),(%d+)")
-			if line and uri and uri:find(obj_uri, 1, true) then
+			local msg_base = (uri or ""):gsub("#.*$", ""):gsub("/source/main$", "")
+			local same_object = uri and (
+				msg_base == obj_uri
+				or msg_base:find(obj_uri, 1, true)
+				or obj_uri:find(msg_base, 1, true)
+			)
+			if same_object then
 				local sev = vim.diagnostic.severity.INFO
 				if typ == "E" then
 					sev = vim.diagnostic.severity.ERROR
@@ -1049,7 +1068,7 @@ function M.check_syntax(bufnr, cb)
 					sev = vim.diagnostic.severity.WARN
 				end
 				diags[#diags + 1] = {
-					lnum = math.max(0, tonumber(line) - 1),
+					lnum = line and math.max(0, tonumber(line) - 1) or 0,
 					col = tonumber(col) or 0,
 					message = unxml(text or "syntax"),
 					severity = sev,
@@ -1061,7 +1080,9 @@ function M.check_syntax(bufnr, cb)
 			if vim.api.nvim_buf_is_valid(bufnr) then
 				vim.diagnostic.set(CHECK_NS, bufnr, diags)
 			end
-			if cb then cb(diags) end
+			if cb then
+				cb(diags)
+			end
 		end)
 	end)
 end
@@ -1141,7 +1162,7 @@ function M.setup()
 	local check_grp = vim.api.nvim_create_augroup("sap_nvim_sapcheck", { clear = true })
 	vim.api.nvim_create_autocmd("BufWritePost", {
 		group = check_grp,
-		pattern = { "*.abap", "*.cls", "*.intf", "*.prog" },
+		pattern = { "*.abap", "*.cls", "*.intf", "*.prog", "*.tabl", "*.stru", "*.dtel", "*.dome", "*.ddls", "*.ddl", "*.dcl", "*.bdef", "*.ddlx", "*.srvd" },
 		callback = function(ev)
 			if vim.b[ev.buf] and vim.b[ev.buf].sap_obj then
 				M.check_syntax(ev.buf, function()
@@ -1189,7 +1210,7 @@ function M.setup()
 	})
 
 	vim.api.nvim_create_autocmd("FileType", {
-		pattern = { "abap", "cds", "acds", "abapcds", "ddls" },
+		pattern = { "abap", "cds", "acds", "abapcds", "ddl", "ddls" },
 		group = g,
 		callback = function(ev)
 			local b = ev.buf

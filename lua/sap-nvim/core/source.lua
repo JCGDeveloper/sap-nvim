@@ -1,10 +1,10 @@
 -- sap-nvim.core.source
 -- Edición de objetos ABAP remotos al estilo de la extensión `abap-remote-fs` de
--- VSCode, pero sobre la CLI de sapcli (que envuelve la misma API REST de ADT):
+-- VSCode/Eclipse, usando ADT directo para la edición de código:
 --
---   abrir   -> sapcli <group> read NAME            (fuente completa por stdout)
---   push    -> sapcli <group> write NAME - [--corrnr T]   (lock/unlock interno)
---   activar -> sapcli <group> activate NAME        (ver adt.activate_current)
+--   abrir   -> GET  <obj>/source/main
+--   push    -> POST <obj>?_action=LOCK, PUT <obj>/source/main, POST <obj>?_action=UNLOCK
+--   activar -> ADT activation bulk/preaudit
 --
 -- El objeto se respalda en un archivo de caché real (~/.cache/sap-nvim/<contexto>/)
 -- con nombre abapGit, para que treesitter/abaplint/LSP funcionen. `:w` solo guarda
@@ -20,6 +20,176 @@ local session_transport = nil
 
 local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
+end
+
+local function url_part(s)
+  return tostring(s or ""):lower():gsub("([^%w_%-%.~])", function(c)
+    return string.format("%%%02X", string.byte(c))
+  end)
+end
+
+local ADT_OBJECT_PATH = {
+  program = "/sap/bc/adt/programs/programs/%s",
+  include = "/sap/bc/adt/programs/includes/%s",
+  class = "/sap/bc/adt/oo/classes/%s",
+  interface = "/sap/bc/adt/oo/interfaces/%s",
+  functiongroup = "/sap/bc/adt/functions/groups/%s",
+  table = "/sap/bc/adt/ddic/tables/%s",
+  structure = "/sap/bc/adt/ddic/structures/%s",
+  dataelement = "/sap/bc/adt/ddic/dataelements/%s",
+  domain = "/sap/bc/adt/ddic/domains/%s",
+  tabletype = "/sap/bc/adt/ddic/tabletypes/%s",
+  ddl = "/sap/bc/adt/ddic/ddl/sources/%s",
+  ddls = "/sap/bc/adt/ddic/ddl/sources/%s",
+  ddlx = "/sap/bc/adt/ddic/ddlx/sources/%s",
+  dcl = "/sap/bc/adt/acm/dcl/sources/%s",
+  bdef = "/sap/bc/adt/bo/behaviordefinitions/%s",
+  srvd = "/sap/bc/adt/ddic/srvd/sources/%s",
+}
+
+local function object_uri(obj_or_group, name, opts)
+  opts = opts or {}
+  if type(obj_or_group) == "table" then
+    local obj = obj_or_group
+    if obj.uri and obj.uri ~= "" then
+      return obj.uri:gsub("/source/main$", "")
+    end
+    return object_uri(obj.group, obj.name, obj)
+  end
+
+  local group = obj_or_group
+  if group == "functionmodule" then
+    if not opts.fgroup or opts.fgroup == "" then
+      return nil
+    end
+    return "/sap/bc/adt/functions/groups/"
+      .. url_part(opts.fgroup)
+      .. "/fmodules/"
+      .. url_part(name)
+  end
+
+  local tmpl = ADT_OBJECT_PATH[group]
+  if not tmpl or not name or name == "" then
+    return nil
+  end
+  return tmpl:format(url_part(name))
+end
+
+local function source_uri(obj_or_group, name, opts)
+  local uri = object_uri(obj_or_group, name, opts)
+  return uri and (uri .. "/source/main") or nil
+end
+
+local function strip_cr(s)
+  return (s or ""):gsub("\r", "")
+end
+
+local function adt_msg(body, code)
+  local msg = body
+    and (
+      body:match("<shortText>%s*<txt[^>]*>(.-)</txt>%s*</shortText>")
+      or body:match("<longText>%s*<txt[^>]*>(.-)</txt>%s*</longText>")
+      or body:match('message="([^"]*)"')
+      or body:match("<message[^>]*>(.-)</message>")
+      or body:match("<title[^>]*>(.-)</title>")
+    )
+  msg = tostring(msg or ""):gsub("<[^>]+>", " ")
+    :gsub("&quot;", '"')
+    :gsub("&apos;", "'")
+    :gsub("&lt;", "<")
+    :gsub("&gt;", ">")
+    :gsub("&amp;", "&")
+    :gsub("%s+", " ")
+  msg = vim.trim(msg)
+  if msg ~= "" then return msg end
+  return "HTTP " .. tostring(code or 0)
+end
+
+local function lock_handle(body)
+  return body and (
+    body:match("<LOCK_HANDLE>([^<]*)</LOCK_HANDLE>")
+    or body:match("<[^>]*LOCK_HANDLE[^>]*>([^<]*)</[^>]+>")
+  ) or nil
+end
+
+local function read_source_adt(group, name, opts)
+  local adt_http = require("sap-nvim.core.adt_http")
+  local uri = source_uri(group, name, opts)
+  if not uri then
+    return nil, "Tipo ADT no soportado para lectura: " .. tostring(group)
+  end
+  local body, _, code = adt_http.raw({ method = "GET", path = uri, accept = "text/plain" })
+  if code < 200 or code >= 300 or not body then
+    return nil, adt_msg(body, code), code
+  end
+  return strip_cr(body), nil, code, uri:gsub("/source/main$", "")
+end
+
+local function unlock_object(adt_http, uri, handle)
+  if not uri or not handle or handle == "" then
+    return
+  end
+  pcall(adt_http.raw, {
+    method = "POST",
+    path = uri,
+    query = { _action = "UNLOCK", lockHandle = handle },
+    stateful = true,
+  })
+end
+
+local function write_source_adt(obj, content, corrnr)
+  local adt_http = require("sap-nvim.core.adt_http")
+  local uri = object_uri(obj)
+  if not uri then
+    return false, "Tipo ADT no soportado para escritura: " .. tostring(obj.group)
+  end
+
+  local lock_body, _, lock_code = adt_http.raw({
+    method = "POST",
+    path = uri,
+    query = { _action = "LOCK", accessMode = "MODIFY" },
+    stateful = true,
+    accept = table.concat({
+      "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result;q=0.8",
+      "application/vnd.sap.as+xml;charset=UTF-8;dataname=com.sap.adt.lock.result2;q=0.9",
+    }, ", "),
+  })
+  local handle = lock_handle(lock_body)
+  if lock_code < 200 or lock_code >= 300 or not handle or handle == "" then
+    return false, "No se pudo bloquear " .. obj.name .. ": " .. adt_msg(lock_body, lock_code)
+  end
+
+  local query = { lockHandle = handle }
+  if corrnr then
+    query.corrNr = corrnr
+  end
+  local put_body, _, put_code = adt_http.raw({
+    method = "PUT",
+    path = uri .. "/source/main",
+    query = query,
+    body = content:gsub("\n$", ""),
+    content_type = "text/plain; charset=utf-8",
+    accept = "text/plain, application/xml, application/*",
+    stateful = true,
+  })
+  unlock_object(adt_http, uri, handle)
+
+  if put_code < 200 or put_code >= 300 then
+    return false, "No se pudo guardar " .. obj.name .. ": " .. adt_msg(put_body, put_code), put_code
+  end
+  return true, put_body, put_code
+end
+
+local function confirm_destructive(label, prompt, cb)
+  local cfg = require("sap-nvim.core.config").productive()
+  if not cfg.confirm_destructive then
+    return vim.ui.select({ "No", "Sí" }, { prompt = prompt }, function(choice)
+      cb(choice and choice:match("^Sí") ~= nil)
+    end)
+  end
+  vim.ui.input({ prompt = prompt .. " Escribe '" .. label .. "' para confirmar: " }, function(input)
+    cb(input and vim.trim(input):upper() == label:upper())
+  end)
 end
 
 -- abaplint.json RELAJADO para la caché. Los objetos remotos se editan EN AISLADO (sin las
@@ -58,7 +228,7 @@ end
 
 -- Abre un objeto remoto: lo lee de SAP, lo cachea y lo muestra en un buffer.
 -- opts.line / opts.col (opcional): salta a esa posición tras abrir (para go-to-definition).
-local RAP_KINDS = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+local RAP_KINDS = { ddl = true, ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
 
 function M.open(name, group, opts)
   opts = opts or {}
@@ -66,7 +236,8 @@ function M.open(name, group, opts)
     notify("Tipo de objeto desconocido para '" .. name .. "'", vim.log.levels.WARN)
     return
   end
-  -- Objetos CDS/RAP: sapcli no los lee. Los abre core/cds por ADT directo.
+  -- Objetos CDS/RAP: mantienen su abridor especializado, pero el guardado ya va por ADT
+  -- porque core.cds deja vim.b.sap_obj.uri poblada.
   if RAP_KINDS[group] then
     return require("sap-nvim.core.cds").open_adt(group, name, opts)
   end
@@ -85,7 +256,8 @@ function M.open(name, group, opts)
     return
   end
 
-  -- Los módulos de función necesitan su GRUPO de funciones: `functionmodule read GROUP NAME`.
+  -- Los módulos de función necesitan su grupo para construir la URI ADT:
+  -- /functions/groups/<grupo>/fmodules/<modulo>/source/main.
   -- Si no nos lo pasaron, lo pedimos y reintentamos open con opts.fgroup puesto.
   local fgroup = opts.fgroup
   if group == "functionmodule" and (not fgroup or fgroup == "") then
@@ -97,16 +269,39 @@ function M.open(name, group, opts)
     return
   end
 
-  local path = M.cache_dir() .. "/" .. objtype.gitfile(group, name)
-  notify("Leyendo " .. name .. " (" .. group .. ") desde SAP...")
+  local function open_from_lines(lines, uri)
+    local path = M.cache_dir() .. "/" .. objtype.gitfile(group, name)
+    vim.fn.writefile(lines, path)
+    pcall(function() require("sap-nvim.core.navigate").push_here() end)
+    vim.cmd("noswapfile edit! " .. vim.fn.fnameescape(path))
+    local bufnr = vim.api.nvim_get_current_buf()
+    vim.bo[bufnr].swapfile = false
+    vim.b[bufnr].sap_obj = { name = name:upper(), group = group, fgroup = fgroup, uri = uri }
+    vim.bo[bufnr].filetype = "abap"
+    pcall(function() require("sap-nvim.core.template_vars").prime(bufnr) end)
+    if opts.line then
+      pcall(vim.api.nvim_win_set_cursor, 0, { opts.line, opts.col or 0 })
+      vim.cmd("normal! zz")
+    end
+    notify(name:upper() .. " abierto (" .. group .. ") por ADT. :SapPush para guardar, :SapActivate para guardar+activar.")
+    if group == "program" then
+      M.prefetch_includes(lines)
+    end
+  end
 
-  -- Comando de lectura: el FM lleva GRUPO antes del nombre; el resto, el nombre a secas.
+  notify("Leyendo " .. name .. " (" .. group .. ") desde SAP por ADT...")
+  local body, read_err, _, uri = read_source_adt(group, name, { fgroup = fgroup })
+  if body then
+    return open_from_lines(vim.split(body, "\n", { plain = true }), uri)
+  end
+
+  notify("ADT no pudo leer " .. name .. " (" .. read_err .. "). Probando fallback sapcli...", vim.log.levels.WARN)
   local read_args = (group == "functionmodule")
-    and { "sapcli", "functionmodule", "read", fgroup, name }
-    or { "sapcli", group, "read", name }
+      and { "sapcli", "functionmodule", "read", fgroup, name }
+      or { "sapcli", group, "read", name }
 
-  local out, err = {}, {}
-  vim.fn.jobstart(read_args, {
+    local out, err = {}, {}
+    vim.fn.jobstart(read_args, {
     on_stdout = function(_, data)
       for _, l in ipairs(data) do table.insert(out, l) end
     end,
@@ -124,33 +319,7 @@ function M.open(name, group, opts)
         end
         -- jobstart entrega un último elemento "" por el EOF: lo descartamos.
         if out[#out] == "" then table.remove(out) end
-        vim.fn.writefile(out, path)
-        -- Apila el ORIGEN (el buffer actual, aún sin cambiar) en la pila de navegación para
-        -- que `-` vuelva al objeto anterior. Cubre TODA apertura (gd, búsqueda, browse,
-        -- include…). push_here ignora scratch/dashboard y deduplica, así que es seguro
-        -- aunque el caller ya hubiera apilado.
-        pcall(function() require("sap-nvim.core.navigate").push_here() end)
-        -- `noswapfile`: los archivos de caché son artefactos del plugin (la fuente real es
-        -- SAP, se re-leen al abrir), así que no queremos swap ni el aviso E325 "swap file
-        -- already exists" al reabrirlos tras un cierre/cuelgue previo.
-        vim.cmd("noswapfile edit! " .. vim.fn.fnameescape(path))
-        local bufnr = vim.api.nvim_get_current_buf()
-        vim.bo[bufnr].swapfile = false
-        vim.b[bufnr].sap_obj = { name = name, group = group, fgroup = fgroup }
-        vim.bo[bufnr].filetype = "abap"
-        -- Lee async los metadatos ADT (descripción + paquete real) para las variables
-        -- dinámicas de plantillas ($SHORTTEXT/$PACKAGE). Best-effort, no bloquea.
-        pcall(function() require("sap-nvim.core.template_vars").prime(bufnr) end)
-        if opts.line then
-          pcall(vim.api.nvim_win_set_cursor, 0, { opts.line, opts.col or 0 })
-          vim.cmd("normal! zz")
-        end
-        notify(name .. " abierto (" .. group .. "). :SapPush para subir, :SapActivate para activar.")
-        -- Programa: prefetch de sus includes a la caché (en segundo plano) para que
-        -- `gd` navegue forms/variables entre includes sin abrirlos antes.
-        if group == "program" then
-          M.prefetch_includes(out)
-        end
+        open_from_lines(out, object_uri(group, name, { fgroup = fgroup }))
       end)
     end,
   })
@@ -160,23 +329,15 @@ end
 -- para alimentar el go-to-definition cross-include.
 function M.prefetch_includes(lines)
   local dir = M.cache_dir()
-  for _, raw in ipairs(lines) do
+  for _, raw in ipairs(lines or {}) do
     local inc = raw:lower():match("^%s*include%s+([%w_/]+)")
     if inc then
       local p = dir .. "/" .. objtype.gitfile("include", inc)
       if vim.fn.filereadable(p) == 0 then
-        local acc = {}
-        vim.fn.jobstart({ "sapcli", "include", "read", inc }, {
-          on_stdout = function(_, data)
-            for _, l in ipairs(data) do acc[#acc + 1] = l end
-          end,
-          on_exit = function(_, code)
-            if code == 0 then
-              if acc[#acc] == "" then table.remove(acc) end
-              if #acc > 0 then pcall(vim.fn.writefile, acc, p) end
-            end
-          end,
-        })
+        local body = read_source_adt("include", inc)
+        if body and body ~= "" then
+          pcall(vim.fn.writefile, vim.split(body, "\n", { plain = true }), p)
+        end
       end
     end
   end
@@ -264,8 +425,8 @@ function M.reset_transport()
   notify("Transporte de sesion reiniciado; el proximo push preguntara de nuevo.")
 end
 
--- Sube el buffer actual a SAP. `activate` => añade -a (write + activate).
-function M.push(bufnr, activate)
+-- Guarda el buffer actual en SAP por ADT. `activate` => guarda y activa por ADT.
+function M.push(bufnr, activate, callback)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local obj = vim.b[bufnr].sap_obj
   if not obj then
@@ -275,7 +436,7 @@ function M.push(bufnr, activate)
   -- Guardián anti-bloqueo (ver M.open): no escribir vía sapcli sin conexión validada.
   if not require("sap-nvim.core.adt_http").ready() then
     require("sap-nvim.core.connection").ensure(function(ok)
-      if ok then M.push(bufnr, activate) end
+      if ok then M.push(bufnr, activate, callback) end
     end)
     return
   end
@@ -284,65 +445,45 @@ function M.push(bufnr, activate)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
 
   M.resolve_transport(function(corrnr)
-    -- El FM mete su GRUPO de funciones antes del nombre: `functionmodule write GROUP NAME -`.
-    local args = (obj.group == "functionmodule")
-      and { "sapcli", "functionmodule", "write", obj.fgroup, obj.name, "-" }
-      or { "sapcli", obj.group, "write", obj.name, "-" }
-    if corrnr then vim.list_extend(args, { "--corrnr", corrnr }) end
-    if activate then table.insert(args, "-a") end
-
-    local verb = activate and "Subiendo+activando " or "Subiendo "
+    local verb = activate and "Guardando+activando " or "Guardando "
     notify(verb .. obj.name .. (corrnr and (" [" .. corrnr .. "]") or " [$TMP]") .. "...")
 
-    -- sapcli imprime los hallazgos de activación por stdout y los errores de
-    -- conexión por stderr: capturamos AMBOS y los parseamos juntos.
-    local sink = {}
-    local function collect(_, data)
-      for _, l in ipairs(data) do
-        if l ~= "" then table.insert(sink, l) end
-      end
+    local ok, res = write_source_adt(obj, table.concat(lines, "\n"), corrnr)
+    if not ok then
+      vim.fn.setqflist({}, "r", {
+        items = { { filename = vim.api.nvim_buf_get_name(bufnr), lnum = 1, col = 1, text = res, type = "E" } },
+        title = "SAP " .. obj.name .. ": error al guardar",
+      })
+      pcall(vim.cmd, "copen")
+      notify(res, vim.log.levels.ERROR)
+      if callback then callback(false, { res }, {}) end
+      return
     end
 
-    local job = vim.fn.jobstart(args, {
-      on_stdout = collect,
-      on_stderr = collect,
-      on_exit = function(_, code)
-        vim.schedule(function()
-          local qf = adt._parse_activation_errors(sink, vim.api.nvim_buf_get_name(bufnr), bufnr)
-          local errors, warnings = {}, {}
-          for _, e in ipairs(qf) do
-            table.insert(e.type == "E" and errors or warnings, e)
-          end
+    if not activate then
+      vim.fn.setqflist({}, "r", { title = "SAP " .. obj.name .. ": OK" })
+      notify(obj.name .. " guardado correctamente por ADT.")
+      if callback then callback(true, {}, {}) end
+      return
+    end
 
-          -- Fallo: exit != 0 o cualquier hallazgo de error.
-          if code ~= 0 or #errors > 0 then
-            local list = #qf > 0 and qf or { { text = (sink[1] or ("sapcli code " .. code)), type = "E" } }
-            vim.fn.setqflist({}, "r", { items = list, title = "SAP " .. obj.name .. ": errores" })
-            pcall(vim.cmd, "copen")
-            pcall(vim.cmd, "cfirst")
-            local n = #errors > 0 and #errors or #list
-            notify(n .. " error(es) en " .. obj.name .. ". Revisa quickfix.", vim.log.levels.ERROR)
-            return
-          end
-
-          -- Éxito: si hay warnings, los volcamos al quickfix pero sin abrirlo.
-          if #warnings > 0 then
-            vim.fn.setqflist({}, "r", { items = warnings, title = "SAP " .. obj.name .. ": " .. #warnings .. " warning(s)" })
-            notify(obj.name .. (activate and " activado" or " subido") .. " con " .. #warnings
-              .. " warning(s) (:copen para verlos).", vim.log.levels.WARN)
-          else
-            vim.fn.setqflist({}, "r", { title = "SAP " .. obj.name .. ": OK" })
-            notify(obj.name .. (activate and " subido y activado correctamente." or " subido correctamente."))
-          end
-        end)
-      end,
-    })
-    if job > 0 then
-      vim.fn.chansend(job, table.concat(lines, "\n"))
-      vim.fn.chanclose(job, "stdin")
+    local uri = object_uri(obj)
+    require("sap-nvim.core.adt").activate_bulk({
+      {
+        name = obj.name,
+        group = obj.group,
+        uri = uri,
+        type = require("sap-nvim.core.adt").adt_type(obj.group),
+      },
+    }, function(resp, qf)
+      local errors = vim.tbl_filter(function(e) return e.type == "E" end, qf or {})
+      if resp and #errors == 0 then
+        notify(obj.name .. " guardado y activado correctamente por ADT.")
+        if callback then callback(true, {}, qf or {}) end
     else
-      notify("No se pudo lanzar sapcli write.", vim.log.levels.ERROR)
-    end
+        if callback then callback(false, {}, qf or {}) end
+      end
+    end)
   end)
 end
 
@@ -356,10 +497,8 @@ function M.delete(bufnr)
     return
   end
 
-  vim.ui.select({ "No", "Sí, BORRAR " .. obj.name .. " del sistema" },
-    { prompt = "¿Borrar " .. obj.name .. " (" .. obj.group .. ") de SAP? Esto es irreversible." },
-    function(choice)
-      if not choice or not choice:match("^Sí") then return end
+  confirm_destructive(obj.name, "¿Borrar " .. obj.name .. " (" .. obj.group .. ") de SAP? Esto es irreversible.", function(ok)
+      if not ok then return end
 
       M.resolve_transport(function(corrnr)
         local args = { "sapcli", obj.group, "delete", obj.name }
@@ -401,10 +540,23 @@ function M.activate()
   end
 end
 
+function M.activate_recursive()
+  local bufnr = vim.api.nvim_get_current_buf()
+  if vim.b[bufnr].sap_obj then
+    M.push(bufnr, false, function(ok)
+      if ok then
+        require("sap-nvim.core.adt").activate_related_current(bufnr)
+      end
+    end)
+  else
+    require("sap-nvim.core.adt").activate_related_current(bufnr)
+  end
+end
+
 function M.setup()
   vim.api.nvim_create_user_command("SapPush", function()
     M.push(nil, false)
-  end, { desc = "sap-nvim: Subir el objeto actual a SAP (sapcli write)" })
+  end, { desc = "sap-nvim: Guardar el objeto actual en SAP por ADT" })
 
   vim.api.nvim_create_user_command("SapPushActivate", function()
     M.push(nil, true)
@@ -413,6 +565,10 @@ function M.setup()
   vim.api.nvim_create_user_command("SapActivate", function()
     M.activate()
   end, { desc = "sap-nvim: Activar el objeto actual (sube antes si es objeto remoto)" })
+
+  vim.api.nvim_create_user_command("SapActivateRecursive", function()
+    M.activate_recursive()
+  end, { desc = "sap-nvim: Subir y activar raíz + includes relacionados" })
 
   vim.api.nvim_create_user_command("SapTransportReset", function()
     M.reset_transport()
@@ -435,6 +591,8 @@ function M.setup()
 
   vim.keymap.set("n", "<leader>au", function() M.push(nil, false) end,
     { desc = "ABAP: Subir (push) objeto a SAP sin activar" })
+  vim.keymap.set("n", "<leader>aA", function() M.activate_recursive() end,
+    { desc = "ABAP: Activar raíz + includes relacionados" })
   vim.keymap.set("n", "<leader>aX", function() M.delete(nil) end,
     { desc = "ABAP: Borrar objeto del sistema" })
 end

@@ -4,6 +4,14 @@ local M = {}
 function M.setup(opts)
 	opts = opts or {}
 
+	-- ====================================================================
+	-- REGISTRO DE COMANDOS (Para que existan desde el minuto 1)
+	-- ====================================================================
+	vim.api.nvim_create_user_command("SapActivateAll", function()
+		require("sap-nvim.core.adt").activate_ui()
+	end, { desc = "sap-nvim: Gestor de activación masiva" })
+	-- ====================================================================
+
 	vim.keymap.set("n", "<leader>aT", function()
 		local obj = vim.fn.expand("%:t:r")
 		if obj == "" then
@@ -50,9 +58,12 @@ sap-nvim atajos:
   <leader>aK   Quality check (ATC)
   <leader>ai   Objetos inactivos
   <leader>ad   Debuggear (vsp)
+  <leader>aR   Ejecutar programa/report en WebGUI (:SapRun)
 
   OBJETOS:
-  <leader>aa   Activar objeto (sube antes si es remoto) → errores/warnings a quickfix
+  <leader>aa   Activar SOLO objeto actual (:SapActivate)
+  <leader>aA   Activar raíz + includes relacionados (:SapActivateRecursive)
+  <leader>aG   Gestor global de inactivos (:SapActivateAll)
   <leader>au   Subir (push) objeto a SAP sin activar (:SapPush)
   <leader>ao   Outline del objeto: saltar a metodo/form/type/include (:SapOutline)
   <leader>ag   Ir a definicion bajo el cursor (gd): include/form/variable/objeto
@@ -152,13 +163,10 @@ sap-nvim atajos:
 		require("sap-nvim.core.connection").choose()
 	end, { desc = "ABAP: Conexión / login SAP (valida contraseña)" })
 
-	-- Quita el comentario ABAP `*` (col 1) de la línea / selección. Pensado para "activar"
-	-- rápidamente los parámetros opcionales del patrón de método (vienen comentados con `*`).
-	-- gc no sirve aquí porque usa `"` (comentario inline), no quita el `*`.
 	local function abap_uncomment_star(l1, l2)
 		for ln = l1, l2 do
 			local s = vim.fn.getline(ln)
-			local new = s:gsub("^(%s*)%*%s?", "%1") -- quita el 1er `*` (+ un espacio) tras la indentación
+			local new = s:gsub("^(%s*)%*%s?", "%1")
 			if new ~= s then
 				vim.fn.setline(ln, new)
 			end
@@ -174,25 +182,30 @@ sap-nvim atajos:
 			a, b = b, a
 		end
 		abap_uncomment_star(a, b)
-		vim.cmd("normal! \27") -- salir de modo visual
+		vim.cmd("normal! \27")
 	end, { desc = "ABAP: quitar comentario * de la selección (descomentar)" })
 
-	vim.keymap.set("n", "<leader>aa", function()
-		require("sap-nvim.core.source").activate()
-	end, { desc = "ABAP: Activar objeto (sube antes si es remoto, jump-to-error)" })
 	vim.keymap.set("n", "<leader>aw", function()
 		require("sap-nvim.core.whereused").whereused()
 	end, { desc = "ABAP: Where-used list" })
+
 	vim.keymap.set("n", "<leader>ack", function()
 		require("sap-nvim.core.checkout").checkout_package()
 	end, { desc = "ABAP: Checkout paquete SAP" })
+
 	vim.keymap.set("n", "<leader>ad", function()
-		require("sap-nvim.core.debugger").debug_current()
+		local ok = pcall(vim.cmd, "SapDap")
+		if not ok then
+			vim.notify("sap-nvim: nvim-dap no está disponible o :SapDap no se registró.", vim.log.levels.WARN)
+		end
 	end, { desc = "ABAP: Debuggear" })
 
-	-- 🎯 MAPEOS COMBINADOS ABAP + CDS
+	-- 🎯 MAPEOS COMBINADOS ABAP + CDS (Aquí se configuran los atajos finales)
 	local abap_maps = {
-		{ "<leader>aa", "<cmd>SapActivate<cr>", "Activar (sube antes si es remoto)" },
+		{ "<leader>aa", "<cmd>SapActivate<cr>", "Activar objeto actual" },
+		{ "<leader>aA", "<cmd>SapActivateRecursive<cr>", "Activar raíz + includes" },
+		{ "<leader>aG", "<cmd>SapActivateAll<cr>", "Gestor global de activación" },
+		{ "<C-F3>", "<cmd>SapActivate<cr>", "Activar objeto actual (Ctrl+F3)" },
 		{ "<leader>au", "<cmd>SapPush<cr>", "Subir (push) sin activar" },
 		{ "<leader>aX", "<cmd>SapDelete<cr>", "Borrar objeto del sistema" },
 		{ "<leader>ao", "<cmd>SapOutline<cr>", "Outline del objeto" },
@@ -219,7 +232,16 @@ sap-nvim atajos:
 		group = vim.api.nvim_create_augroup("sap_nvim_keymaps_abap", { clear = true }),
 		callback = function(ev)
 			for _, m in ipairs(abap_maps) do
-				vim.keymap.set("n", m[1], m[2], { buffer = ev.buf, silent = true, desc = "ABAP: " .. m[3] })
+				if m[1] == "<C-F3>" then
+					vim.keymap.set(
+						{ "n", "i" },
+						m[1],
+						m[2],
+						{ buffer = ev.buf, silent = true, desc = "ABAP: " .. m[3] }
+					)
+				else
+					vim.keymap.set("n", m[1], m[2], { buffer = ev.buf, silent = true, desc = "ABAP: " .. m[3] })
+				end
 			end
 			for _, m in ipairs(cds_maps) do
 				vim.keymap.set("n", m[1], m[2], { buffer = ev.buf, silent = true, desc = "CDS: " .. m[3] })

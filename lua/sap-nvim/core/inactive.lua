@@ -7,40 +7,6 @@ local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
--- sapcli (1.0.0) has no bulk "activate all inactive" command; the `activation
--- inactiveobjects` group only exposes `list`. Objects are activated one by one
--- via `sapcli <type> activate <name>` (see activate_single).
-local function activate_all_unsupported(count)
-  notify(
-    ("Activar en bloque no está soportado por sapcli. Activá los %d objetos de a uno.")
-      :format(count or 0),
-    vim.log.levels.WARN
-  )
-end
-
-local function activate_single(obj_name, group)
-  notify("Activating " .. obj_name .. " (" .. group .. ")...")
-  local out, err = {}, {}
-  vim.fn.jobstart({ "sapcli", group, "activate", obj_name }, {
-    on_stdout = function(_, data)
-      for _, l in ipairs(data) do if l ~= "" then table.insert(out, l) end end
-    end,
-    on_stderr = function(_, data)
-      for _, l in ipairs(data) do if vim.trim(l) ~= "" then table.insert(err, l) end end
-    end,
-    on_exit = function(_, code)
-      vim.schedule(function()
-        if code == 0 then
-          notify(obj_name .. " activated successfully.")
-        else
-          local msg = #err > 0 and err[1] or (#out > 0 and out[1] or "Failed to activate " .. obj_name)
-          notify(msg, vim.log.levels.ERROR)
-        end
-      end)
-    end,
-  })
-end
-
 local function try_open_local(obj_name)
   local cwd = vim.fn.getcwd()
   local name = obj_name:lower()
@@ -56,7 +22,8 @@ local function try_open_local(obj_name)
   return false
 end
 
-local function handle_single_object(obj_name)
+local function handle_single_object(obj)
+  local obj_name = obj.name or tostring(obj)
   vim.ui.select(
     { "Open local file", "Activate in system", "Open + Activate" },
     { prompt = obj_name .. " — choose action:" },
@@ -71,14 +38,7 @@ local function handle_single_object(obj_name)
         end
       end
       if activate_it then
-        vim.ui.select(
-          { "program", "class", "interface", "functiongroup", "functionmodule",
-            "table", "structure", "dataelement", "domain", "ddl", "include" },
-          { prompt = "Tipo de objeto para activar " .. obj_name .. ":" },
-          function(group)
-            if group then activate_single(obj_name, group) end
-          end
-        )
+        require("sap-nvim.core.adt").activate_bulk({ obj })
       end
     end
   )
@@ -102,24 +62,26 @@ function M.show_inactive()
         return
       end
 
-      local choices = { "[Activate ALL (" .. #objects .. " objects)]" }
+      local choices = { { name = "[Activate ALL (" .. #objects .. " objects)]", all = true } }
       for _, obj in ipairs(objects) do
         table.insert(choices, obj)
       end
 
       vim.ui.select(choices, {
         prompt = "Inactive objects — pick one to act on, or activate all:",
+        format_item = function(item)
+          if item.all then return item.name end
+          return string.format("%s [%s]", item.name or "?", item.type or "?")
+        end,
       }, function(choice)
         if not choice then return end
 
-        if choice:match("^%[Activate ALL") then
-          activate_all_unsupported(#objects)
+        if choice.all then
+          require("sap-nvim.core.adt").activate_bulk(objects)
           return
         end
 
-        -- sapcli output is "TYPE/NAME" or just "NAME"
-        local obj_name = vim.trim(choice:match("/(.+)$") or choice)
-        handle_single_object(obj_name)
+        handle_single_object(choice)
       end)
     end)
   end)

@@ -1,12 +1,17 @@
 -- lua/sap-nvim/core/preview.lua
 local M = {}
 local dbg = require("sap-nvim.core.debugger")
+local last_preview = nil
+local preview_win = nil
 
 local function notify(msg, level)
 	vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
 local function open_float(title, lines)
+	if preview_win and vim.api.nvim_win_is_valid(preview_win) then
+		pcall(vim.api.nvim_win_close, preview_win, true)
+	end
 	if #lines == 0 then
 		lines = { "(sin datos)" }
 	end
@@ -32,11 +37,21 @@ local function open_float(title, lines)
 		title = " " .. title .. " ",
 		style = "minimal",
 	})
+	preview_win = win
 
 	vim.wo[win].cursorline = true
 	for _, k in ipairs({ "q", "<Esc>" }) do
 		vim.keymap.set("n", k, "<cmd>close<CR>", { buffer = buf, nowait = true })
 	end
+	vim.api.nvim_create_autocmd("WinClosed", {
+		pattern = tostring(win),
+		once = true,
+		callback = function()
+			if preview_win == win then
+				preview_win = nil
+			end
+		end,
+	})
 end
 
 local function render_struct(name, fields)
@@ -147,16 +162,17 @@ local function render_table(name, rows, cells, filter_user)
 end
 
 -- 🔥 FIX ARQUITECTÓNICO: Resolvemos el ID oficial de SAP buscando en el Scope local y global primero
-function M.show_alv(mine_only)
+function M.show_alv(mine_only, name_override)
 	if not dbg.session then
 		notify("No hay sesión de debug activa.", vim.log.levels.WARN)
 		return
 	end
-	local name = vim.fn.expand("<cexpr>")
+	local name = name_override or vim.fn.expand("<cexpr>")
 	if not name or name == "" then
 		return
 	end
 	name = name:upper()
+	last_preview = { name = name, mine_only = mine_only == true }
 	local filter_user = mine_only and dbg.session.user or nil
 
 	-- 1. Buscamos el ID real de la variable dentro del Scope
@@ -206,6 +222,13 @@ function M.show_alv(mine_only)
 			end
 		end)
 	end)
+end
+
+function M.refresh_active()
+	if not last_preview or not dbg.session then
+		return
+	end
+	M.show_alv(last_preview.mine_only, last_preview.name)
 end
 
 function M.setup()

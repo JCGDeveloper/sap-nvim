@@ -12,6 +12,18 @@ local function extract_id(line)
   return line:match("%u%u%uK%d+") or line:match("^(%S+)")
 end
 
+local function confirm_destructive(id, prompt, cb)
+  local cfg = require("sap-nvim.core.config").productive()
+  if not cfg.confirm_destructive then
+    return vim.ui.select({ "No", "Sí" }, { prompt = prompt }, function(choice)
+      cb(choice and choice:match("^Sí") ~= nil)
+    end)
+  end
+  vim.ui.input({ prompt = prompt .. " Escribe '" .. id .. "' para confirmar: " }, function(input)
+    cb(input and vim.trim(input):upper() == id:upper())
+  end)
+end
+
 -- Muestra `lines` en un split de solo lectura con q/- para cerrar.
 local function show(bufname, lines)
   local b = vim.api.nvim_create_buf(true, true)
@@ -122,10 +134,8 @@ function M.release_transport()
         local id = extract_id(choice)
         if not id then return end
 
-        vim.ui.select({ "Cancelar", "Si, liberar " .. id }, {
-          prompt = "Confirmar liberacion (irreversible):",
-        }, function(confirm)
-          if not confirm or not confirm:match("^Si") then return end
+        confirm_destructive(id, "Confirmar liberación irreversible de " .. id .. ".", function(confirm)
+          if not confirm then return end
 
           notify("Liberando " .. id .. "...")
           vim.fn.jobstart({ "sapcli", "cts", "release", id }, {
@@ -168,10 +178,8 @@ function M.delete_transport()
         local id = extract_id(choice)
         if not id then return end
 
-        vim.ui.select({ "No", "Sí, borrar " .. id }, {
-          prompt = "Confirmar borrado (irreversible):",
-        }, function(confirm)
-          if not confirm or not confirm:match("^Sí") then return end
+        confirm_destructive(id, "Confirmar borrado irreversible de " .. id .. ".", function(confirm)
+          if not confirm then return end
 
           notify("Borrando " .. id .. "...")
           vim.fn.jobstart({ "sapcli", "cts", "delete", "transport", id }, {
@@ -218,18 +226,22 @@ function M.reassign_transport()
           if not owner or vim.trim(owner) == "" then return end
           owner = vim.trim(owner)
 
-          notify("Reasignando " .. id .. " a " .. owner .. "...")
-          vim.fn.jobstart({ "sapcli", "cts", "reassign", "transport", id, owner }, {
-            on_exit = function(_, code)
-              vim.schedule(function()
-                if code == 0 then
-                  notify("Orden " .. id .. " reasignada a " .. owner)
-                else
-                  notify("Error reasignando " .. id, vim.log.levels.ERROR)
-                end
-              end)
-            end,
-          })
+          confirm_destructive(id, "Confirmar reasignación de " .. id .. " a " .. owner .. ".", function(confirm)
+            if not confirm then return end
+
+            notify("Reasignando " .. id .. " a " .. owner .. "...")
+            vim.fn.jobstart({ "sapcli", "cts", "reassign", "transport", id, owner }, {
+              on_exit = function(_, code)
+                vim.schedule(function()
+                  if code == 0 then
+                    notify("Orden " .. id .. " reasignada a " .. owner)
+                  else
+                    notify("Error reasignando " .. id, vim.log.levels.ERROR)
+                  end
+                end)
+              end,
+            })
+          end)
         end)
       end)
     end)

@@ -17,6 +17,7 @@ local defaults = {
     package        = nil,   -- paquete por defecto (nil = pedir por prefijo)
     package_prefix = "Z",   -- prefijo de BÚSQUEDA de paquetes
     function_group = "Z",   -- default del grupo para function modules
+    language       = "ES",  -- idioma original al crear por ADT (tu sistema rechaza EN)
   },
   -- Prefijos de variables (convención del proyecto). Usados por los snippets y como
   -- sugerencia de nombres. SAP clásico por defecto; cada proyecto los puede sobreescribir.
@@ -39,6 +40,11 @@ local defaults = {
   format = {
     on_save = false,  -- formatear con el Pretty Printer de SAP al guardar (objetos remotos)
   },
+  -- Seguridad para uso profesional/productivo.
+  productive = {
+    safe_mode = true,
+    confirm_destructive = true, -- exige escribir el nombre/orden exacta para borrar/liberar/reasignar
+  },
 }
 
 M.values = vim.deepcopy(defaults)
@@ -50,6 +56,7 @@ function M.setup(opts)
     naming = opts.naming or {},
     data = opts.data or {},
     format = opts.format or {},
+    productive = opts.productive or {},
   })
 end
 
@@ -57,5 +64,6 @@ function M.new() return M.values.new end
 function M.naming() return M.values.naming end
 function M.data() return M.values.data end
 function M.format() return M.values.format end
+function M.productive() return M.values.productive end
 
 return M

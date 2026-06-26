@@ -70,6 +70,7 @@ function M.run()
   -- ── Live read-only ladder, chained ──
   local live = {
     { "Conectividad + login (abap systeminfo)", { "sapcli", "abap", "systeminfo" } },
+    { "Objetos inactivos (activation inactiveobjects list)", { "sapcli", "activation", "inactiveobjects", "list" } },
     { "Búsqueda de objetos (abap find Z)",      { "sapcli", "abap", "find", "--max-results", "5", "Z" } },
     { "Transportes (cts list transport)",       { "sapcli", "cts", "list", "transport" } },
   }
@@ -100,7 +101,16 @@ function M.run()
     })
   end
 
-  step()
+  require("sap-nvim.core.connection").ensure(function(ok)
+    if ok then
+      step()
+    else
+      table.insert(results, "  ❌ Login SAP no validado. Ejecuta :SapLogin y repite :SapDoctor.")
+      table.insert(results, "")
+      table.insert(results, "  q / <Esc> para cerrar.")
+      open_report(results)
+    end
+  end)
 end
 
 function M.setup()

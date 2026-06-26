@@ -196,7 +196,7 @@ function M.setup()
   if vim.fn.executable("abaplint") ~= 1 then return end
 
   local group = vim.api.nvim_create_augroup("sap_nvim_lsp", { clear = true })
-  local pat   = { "*.abap", "*.cls", "*.intf", "*.prog" }
+  local pat   = { "*.abap", "*.cls", "*.intf", "*.prog", "*.tabl", "*.stru", "*.dtel", "*.dome", "*.ddls", "*.ddl", "*.dcl", "*.bdef", "*.ddlx", "*.srvd" }
 
   vim.api.nvim_create_autocmd("BufEnter", {
     pattern = pat, group = group,

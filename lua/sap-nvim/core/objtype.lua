@@ -91,6 +91,12 @@ local GROUP_TO_EXT = {
   functionmodule = "func.abap",
   functiongroup = "fugr.abap",
   include       = "abap",
+  ddl           = "ddls",
+  ddls          = "ddls",
+  dcl           = "dcl",
+  bdef          = "bdef",
+  ddlx          = "ddlx",
+  srvd          = "srvd",
 }
 
 -- abapGit-style file name for an object, e.g. ("class","ZCL_X") -> "zcl_x.clas.abap".

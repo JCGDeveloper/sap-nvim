@@ -597,7 +597,7 @@ end
 -- ¿Es este buffer un objeto CDS/RAP? Robusto: no depende solo de sap_obj (que NO se fija al
 -- reabrir por sesión o al editar el fichero de caché directamente). Mira tambien la extensión
 -- del fichero (.ddls/.ddlx/.dcl/.bdef/.srvd) y el contenido (define view / behavior / @AbapCatalog).
-local CDS_GROUPS = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+local CDS_GROUPS = { ddl = true, ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
 function M.is_cds_buf(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	local meta = vim.b[bufnr].sap_obj
@@ -778,6 +778,7 @@ function M.completion_debug(bufnr, line, col, cb)
 end
 
 local RAP_PATH = {
+	ddl = "/sap/bc/adt/ddic/ddl/sources/%s",
 	ddls = "/sap/bc/adt/ddic/ddl/sources/%s",
 	ddlx = "/sap/bc/adt/ddic/ddlx/sources/%s",
 	dcl = "/sap/bc/adt/acm/dcl/sources/%s",
@@ -822,7 +823,8 @@ function M.open_adt(kind, name, opts)
 			vim.cmd("noswapfile edit! " .. vim.fn.fnameescape(file))
 			local b = vim.api.nvim_get_current_buf()
 			vim.bo[b].swapfile = false
-			vim.b[b].sap_obj = { name = name:upper(), group = kind, uri = uri }
+			local sapcli_group = kind == "ddls" and "ddl" or kind
+			vim.b[b].sap_obj = { name = name:upper(), group = sapcli_group, uri = uri }
 			-- Sin ftdetect propio para .ddls/.bdef/etc.: usamos filetype `abap`. Así se
 			-- aplica el coloreado nativo (abap.vim trae Neovim; select/from/key/as/on… son
 			-- keywords ABAP) sin depender de un parser treesitter de CDS, y se enganchan
