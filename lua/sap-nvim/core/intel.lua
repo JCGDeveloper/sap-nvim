@@ -27,15 +27,6 @@ local function unxml(s)
 		:gsub("&amp;", "&")
 end
 
-local function url_encode(str)
-	if not str then
-		return ""
-	end
-	return (str:gsub("[^%w_~%.%-]", function(c)
-		return string.format("%%%02X", string.byte(c))
-	end))
-end
-
 local function get_word_range(bufnr, row, col)
 	local cstart, cend = col, col
 	local line = vim.api.nvim_buf_get_lines(bufnr, row - 1, row, false)[1]
@@ -55,6 +46,68 @@ local function get_word_range(bufnr, row, col)
 		end
 	end
 	return cstart, cend
+end
+
+local function local_abap_field_proposals(bufnr, line, col)
+	local linetext = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)[1] or ""
+	local before = linetext:sub(1, col)
+	local owner, prefix = before:match("([%w_<>]+)%-([%w_]*)$")
+	if not owner then
+		return {}
+	end
+
+	local owner_key = owner:gsub("[<>]", ""):lower()
+	local pl = (prefix or ""):lower()
+	local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	local type_fields, var_type, table_row_type = {}, {}, {}
+
+	local cur_type
+	for _, raw in ipairs(lines) do
+		local l = raw:gsub("\".*$", "")
+		local begin_type = l:match("^[Tt][Yy][Pp][Ee][Ss]:?%s+[Bb][Ee][Gg][Ii][Nn]%s+[Oo][Ff]%s+([%w_]+)")
+		if begin_type then
+			cur_type = begin_type:lower()
+			type_fields[cur_type] = type_fields[cur_type] or {}
+		elseif cur_type and l:lower():match("end%s+of%s+" .. vim.pesc(cur_type)) then
+			cur_type = nil
+		elseif cur_type then
+			local fld = l:match("^%s*([%w_]+)%s+[%w%-]*[Tt][Yy][Pp][Ee]")
+				or l:match("^%s*([%w_]+)%s+[%w%-]*[Ll][Ii][Kk][Ee]")
+			if fld and fld:lower() ~= "include" then
+				type_fields[cur_type][#type_fields[cur_type] + 1] = fld
+			end
+		end
+
+		for v, t in l:gmatch("[Dd][Aa][Tt][Aa]:?%s+([%w_]+)%s+[%w%-]*[Tt][Yy][Pp][Ee]%s+([%w_]+)") do
+			var_type[v:lower()] = t:lower()
+		end
+		for v, t in l:gmatch("[Ff][Ii][Ee][Ll][Dd]%-[Ss][Yy][Mm][Bb][Oo][Ll][Ss]:?%s+<([%w_]+)>%s+[%w%-]*[Tt][Yy][Pp][Ee]%s+([%w_]+)") do
+			var_type[v:lower()] = t:lower()
+		end
+		for v, t in l:gmatch("[Dd][Aa][Tt][Aa]:?%s+([%w_]+)%s+[%w%-]*[Tt][Yy][Pp][Ee]%s+[%w%s]*[Tt][Aa][Bb][Ll][Ee]%s+[Oo][Ff]%s+([%w_]+)") do
+			table_row_type[v:lower()] = t:lower()
+			var_type[v:lower()] = t:lower()
+		end
+		for tab, fs in l:gmatch("[Ll][Oo][Oo][Pp]%s+[Aa][Tt]%s+([%w_]+)%s+.-[Aa][Ss][Ss][Ii][Gg][Nn][Ii][Nn][Gg]%s+<([%w_]+)>") do
+			local row_type = table_row_type[tab:lower()]
+			if row_type then
+				var_type[fs:lower()] = row_type
+			end
+		end
+	end
+
+	local typ = var_type[owner_key] or table_row_type[owner_key]
+	local fields = typ and type_fields[typ] or nil
+	if not fields or #fields == 0 then
+		return {}
+	end
+	local out = {}
+	for _, f in ipairs(fields) do
+		if pl == "" or f:lower():sub(1, #pl) == pl then
+			out[#out + 1] = { word = f:upper(), kind = "1", prefixlength = #prefix }
+		end
+	end
+	return out
 end
 
 local ADT_URI = {
@@ -129,7 +182,7 @@ local function context_suffix(bufnr)
 	if not uri then
 		return ""
 	end
-	return "?context=" .. url_encode(uri)
+	return "?context=" .. uri
 end
 
 function M.change_include()
@@ -210,7 +263,7 @@ function M.proposals(bufnr, line, col)
 		return {}
 	end
 	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
-	local q = { uri = uri .. "%23start=" .. line .. "," .. col, signalCompleteness = "true", getPattern = "true" }
+	local q = { uri = uri .. "#start=" .. line .. "," .. col, signalCompleteness = "true", getPattern = "true" }
 	local body = adt_http.request({
 		method = "POST",
 		path = "/sap/bc/adt/abapsource/codecompletion/proposal",
@@ -235,22 +288,14 @@ function M.proposals_async(bufnr, line, col, cb)
 	if not adt_http.is_available() then
 		return cb({})
 	end
-	local linetext = vim.api.nvim_get_current_line()
+	local linetext = vim.api.nvim_buf_get_lines(bufnr, line - 1, line, false)[1] or ""
 	local before = linetext:sub(1, col)
 
-	local meta = vim.b[bufnr].sap_obj
-	local is_cds_file = meta
-		and (
-			meta.group == "ddl"
-			or meta.group == "ddls"
-			or meta.group == "ddlx"
-			or meta.group == "dcl"
-			or meta.group == "bdef"
-			or meta.group == "srvd"
-		)
+	local ok_cds, cds = pcall(require, "sap-nvim.core.cds")
+	local is_cds_file = ok_cds and cds.is_cds_buf(bufnr)
 
 	if is_cds_file or is_sap_ft(vim.bo.filetype) and vim.bo.filetype ~= "abap" then
-		require("sap-nvim.core.cds").completion(bufnr, line, col, function(items)
+		cds.completion(bufnr, line, col, function(items)
 			cb(items or {})
 		end)
 		return
@@ -288,13 +333,13 @@ function M.proposals_async(bufnr, line, col, cb)
 
 	local uri = M.object_uri(bufnr)
 	if not uri then
-		return cb({})
+		return cb(local_abap_field_proposals(bufnr, line, col))
 	end
 	local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
 
 	-- 🔥 FIX: Usamos el content_type adecuado que fuerza la recarga del AST en SAP
 	local q = {
-		uri = uri .. context_suffix(bufnr) .. "%23start=" .. line .. "," .. col,
+		uri = uri .. context_suffix(bufnr) .. "#start=" .. line .. "," .. col,
 		signalCompleteness = "true",
 		getPattern = "true",
 	}
@@ -315,11 +360,19 @@ function M.proposals_async(bufnr, line, col, cb)
 				content_type = "application/*",
 				body = src,
 			}, function(body2)
-				cb(M.parse(body2))
+				local parsed = M.parse(body2)
+				if #parsed == 0 then
+					parsed = local_abap_field_proposals(bufnr, line, col)
+				end
+				cb(parsed)
 			end)
 			return
 		end
-		cb(M.parse(body))
+		local parsed = M.parse(body)
+		if #parsed == 0 then
+			parsed = local_abap_field_proposals(bufnr, line, col)
+		end
+		cb(parsed)
 	end)
 end
 
@@ -401,7 +454,7 @@ function M.complete_debug()
 	local body = adt_http.request({
 		method = "POST",
 		path = "/sap/bc/adt/abapsource/codecompletion/proposal",
-		query = { uri = uri .. "%23start=" .. row .. "," .. col, signalCompleteness = "true", getPattern = "true" },
+		query = { uri = uri .. "#start=" .. row .. "," .. col, signalCompleteness = "true", getPattern = "true" },
 		content_type = "text/plain",
 		body = src,
 	}) or ""
@@ -514,7 +567,7 @@ function M.definition_target(bufnr, row, col, filter)
 		method = "POST",
 		path = "/sap/bc/adt/navigation/target",
 		query = {
-			uri = uri .. ctx .. "%23start=" .. row .. "," .. cstart .. ";end=" .. row .. "," .. cend,
+			uri = uri .. ctx .. "#start=" .. row .. "," .. cstart .. ";end=" .. row .. "," .. cend,
 			filter = filter or "definition",
 		},
 		content_type = "text/plain",
@@ -622,7 +675,7 @@ function M.hover()
 	local req_params = {
 		method = "POST",
 		path = "/sap/bc/adt/abapsource/elementinfo",
-		query = { uri = uri .. ctx .. "%23start=" .. row .. "," .. cstart .. ";end=" .. row .. "," .. cend },
+		query = { uri = uri .. ctx .. "#start=" .. row .. "," .. cstart .. ";end=" .. row .. "," .. cend },
 		content_type = "text/plain",
 		accept = "application/xml",
 		body = src,
@@ -826,7 +879,7 @@ function M.references()
 	local cstart, cend = get_word_range(bufnr, row, col)
 	local ctx = context_suffix(bufnr)
 
-	local target_uri = uri .. ctx .. "%23start=" .. row .. "," .. cstart .. ";end=" .. row .. "," .. cend
+	local target_uri = uri .. ctx .. "#start=" .. row .. "," .. cstart .. ";end=" .. row .. "," .. cend
 
 	local function parse_and_show(body)
 		if not body or body == "" then
@@ -954,7 +1007,7 @@ function M.type_hierarchy(super)
 		method = "POST",
 		path = "/sap/bc/adt/abapsource/typehierarchy",
 		query = {
-			uri = uri .. context_suffix(bufnr) .. "%23start=" .. row .. "," .. col,
+			uri = uri .. context_suffix(bufnr) .. "#start=" .. row .. "," .. col,
 			type = super and "superTypes" or "subTypes",
 		},
 		content_type = "text/plain",
@@ -1125,7 +1178,7 @@ function M.daemon_test()
 	adt_http.daemon_self_test({
 		method = "POST",
 		path = "/sap/bc/adt/abapsource/codecompletion/proposal",
-		query = { uri = uri .. context_suffix(bufnr) .. "%23start=" .. row .. "," .. col, signalCompleteness = "true" },
+		query = { uri = uri .. context_suffix(bufnr) .. "#start=" .. row .. "," .. col, signalCompleteness = "true" },
 		content_type = "text/plain",
 		body = src,
 	}, function(body, info)

@@ -59,13 +59,15 @@ local function classify(before)
   return {
     member = before:match("[=%-]>[%w_]*$") ~= nil or before:match("~[%w_]*$") ~= nil,
     cds_field = before:match("[%w_/]+%.[%w_/]*$") ~= nil,
-    struct_field = before:match("[%w_]%-[%w_]*$") ~= nil,
+    struct_field = before:match("[%w_%>%]%)]%-[%w_]*$") ~= nil,
     type_ctx = bl:match("%s+type%s+[%w_/]*$") ~= nil or bl:match("%s+like%s+[%w_/]*$") ~= nil,
   }
 end
 
 ok(classify("  wl_vbak-").struct_field, "`wl_vbak-` => struct_field")
 ok(classify("  wl_vbak-vb").struct_field, "`wl_vbak-vb` => struct_field")
+ok(classify("  <fs_line>-").struct_field, "`<fs_line>-` => struct_field")
+ok(classify("  lt_alv[ 1 ]-").struct_field, "`lt_alv[ 1 ]-` => struct_field")
 ok(not classify("  lo_obj->").struct_field, "`lo_obj->` NO es struct_field (es member)")
 ok(classify("  lo_obj->").member, "`lo_obj->` => member")
 ok(not classify("  a - b").struct_field, "`a - b` (resta con espacios) NO es struct_field")

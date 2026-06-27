@@ -24,6 +24,15 @@ local function confirm_destructive(id, prompt, cb)
   end)
 end
 
+local function ensure_ready()
+  local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+  if ok_http and adt_http.ready() then
+    return true
+  end
+  notify("Conexión SAP no validada. Usa :SapLogin.", vim.log.levels.WARN)
+  return false
+end
+
 -- Muestra `lines` en un split de solo lectura con q/- para cerrar.
 local function show(bufname, lines)
   local b = vim.api.nvim_create_buf(true, true)
@@ -40,6 +49,7 @@ end
 
 -- Show picker of open transport orders; <cr> copies the ID to the clipboard.
 function M.list_transports()
+  if not ensure_ready() then return end
   if not adt.is_configured() then
     notify("No hay conexión SAP configurada. Usá :SapSetup primero.", vim.log.levels.WARN)
     return
@@ -70,6 +80,7 @@ end
 
 -- Create a new workbench transport order
 function M.create_transport()
+  if not ensure_ready() then return end
   if not adt.is_configured() then
     notify("No hay conexión SAP configurada.", vim.log.levels.WARN)
     return
@@ -113,6 +124,7 @@ end
 
 -- Release a transport order (shows picker first)
 function M.release_transport()
+  if not ensure_ready() then return end
   if not adt.is_configured() then
     notify("No hay conexión SAP configurada.", vim.log.levels.WARN)
     return
@@ -157,6 +169,7 @@ end
 
 -- Borrar una orden de transporte (muestra selector y confirma; §7 destructivo)
 function M.delete_transport()
+  if not ensure_ready() then return end
   if not adt.is_configured() then
     notify("No hay conexión SAP configurada.", vim.log.levels.WARN)
     return
@@ -201,6 +214,7 @@ end
 
 -- Reasignar una orden de transporte a otro owner
 function M.reassign_transport()
+  if not ensure_ready() then return end
   if not adt.is_configured() then
     notify("No hay conexión SAP configurada.", vim.log.levels.WARN)
     return
@@ -251,6 +265,7 @@ end
 -- Ver el CONTENIDO/detalle de una orden de transporte (objetos incluidos).
 -- Muestra selector de órdenes y luego `sapcli cts list transport ID -r` (-r = detalle).
 function M.transport_contents()
+  if not ensure_ready() then return end
   if not adt.is_configured() then
     notify("No hay conexión SAP configurada.", vim.log.levels.WARN)
     return

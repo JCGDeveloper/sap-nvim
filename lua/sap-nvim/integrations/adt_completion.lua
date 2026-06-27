@@ -1,21 +1,12 @@
 local source = {}
 
-local function url_encode(str)
-	if not str then
-		return ""
-	end
-	return (str:gsub("[^%w_~%.%-]", function(c)
-		return string.format("%%%02X", string.byte(c))
-	end))
-end
-
 function source.new(opts)
 	return setmetatable({ opts = opts or {} }, { __index = source })
 end
 
 function source:enabled()
 	local ft = vim.bo.filetype
-	return ft == "abap" or ft == "cds" or ft == "acds" or ft == "abapcds" or ft == "ddls"
+	return ft == "abap" or ft == "cds" or ft == "acds" or ft == "abapcds" or ft == "ddl" or ft == "ddls"
 end
 
 function source:get_trigger_characters()
@@ -54,7 +45,7 @@ function source:get_completions(ctx, callback)
 	local cds_anno_val = before:match("@[%w%._]+%s*:%s*['#]?[%w_#]*$") ~= nil
 	-- Acceso a campo tras `-`: nombre normal (wa-campo) Y también tras una expresión de tabla
 	-- o método: lt_rutas[ 1 ]-campo / get_struct( )-campo (el carácter previo es `]` o `)`).
-	local struct_field = before:match("[%w_%]%)]%-[%w_]*$") ~= nil
+	local struct_field = before:match("[%w_%>%]%)]%-[%w_]*$") ~= nil
 	local bl = before:lower()
 	local type_ctx = bl:match("%s+type%s+[%w_/]*$") ~= nil or bl:match("%s+like%s+[%w_/]*$") ~= nil
 
@@ -93,16 +84,29 @@ function source:get_completions(ctx, callback)
 	intel.proposals_async(bufnr, row, col, function(props)
 		local items = {}
 		local typed_len = #word
-		local struct_prefix = struct_field and (before:match("([%w_]+%-)[%w_]*$") or "") or nil
+		local struct_prefix = struct_field and (before:match("([%w_<>]+%-)[%w_]*$") or "") or nil
 
 		for _, p in ipairs(props or {}) do
 			local plen = p.prefixlength or typed_len
+			local sort = "50"
+			if p.kind == "1" then
+				sort = "00"
+			elseif p.kind == "2" then
+				sort = "10"
+			elseif p.kind == "3" then
+				sort = "20"
+			elseif p.kind == "4" or p.kind == "6" then
+				sort = "25"
+			elseif p.kind == "52" then
+				sort = "90"
+			end
 			local it = {
 				label = p.word,
 				kind = KIND_MAP[p.kind or ""] or Kind.Text,
 				labelDetails = { description = KIND_LABEL[p.kind or ""] or "SAP" },
 				insertText = p.word,
 				filterText = p.word,
+				sortText = sort .. "_" .. p.word,
 
 				sap_resolve = {
 					is_method = (p.kind == "3" and member),
@@ -181,11 +185,11 @@ local function fetch_method_insertion(item, callback)
 	if meta and meta.group == "include" then
 		local mps = intel.main_programs(meta.name)
 		if mps and mps[1] then
-			ctx = "?context=" .. url_encode(mps[1])
+			ctx = "?context=" .. mps[1]
 		end
 	end
 
-	local logical = uri .. ctx .. "%23start=" .. row .. "," .. pos_col
+	local logical = uri .. ctx .. "#start=" .. row .. "," .. pos_col
 
 	adt_http.request_async({
 		method = "POST",

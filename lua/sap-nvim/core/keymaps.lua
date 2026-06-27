@@ -58,6 +58,8 @@ sap-nvim atajos:
   <leader>aK   Quality check (ATC)
   <leader>ai   Objetos inactivos
   <leader>ad   Debuggear (vsp)
+  <leader>db   Limpiar breakpoints del objeto/buffer actual (:SapDapClearBreakpoints)
+  <leader>dB   Limpiar breakpoints raíz + includes relacionados (:SapDapClearBreakpointsRecursive)
   <leader>aR   Ejecutar programa/report en WebGUI (:SapRun)
 
   OBJETOS:
@@ -103,6 +105,7 @@ sap-nvim atajos:
 
   TRANSPORTES:
   <leader>atl  Listar ordenes (:SapTransports)
+  <leader>atL  Listar TODAS las ordenes del sistema (:SapListAllTransports)
   <leader>atc  Crear orden (:SapTransportCreate)
   <leader>atr  Liberar orden (:SapTransportRelease)
 
@@ -199,6 +202,13 @@ sap-nvim atajos:
 			vim.notify("sap-nvim: nvim-dap no está disponible o :SapDap no se registró.", vim.log.levels.WARN)
 		end
 	end, { desc = "ABAP: Debuggear" })
+
+	vim.keymap.set("n", "<leader>atL", function()
+		local ok = pcall(vim.cmd, "SapListAllTransports")
+		if not ok then
+			vim.notify("sap-nvim: :SapListAllTransports no se registró.", vim.log.levels.WARN)
+		end
+	end, { desc = "SAP: Ver todas las órdenes de transporte" })
 
 	-- 🎯 MAPEOS COMBINADOS ABAP + CDS (Aquí se configuran los atajos finales)
 	local abap_maps = {

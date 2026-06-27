@@ -71,7 +71,7 @@ function M.run()
   local live = {
     { "Conectividad + login (abap systeminfo)", { "sapcli", "abap", "systeminfo" } },
     { "Objetos inactivos (activation inactiveobjects list)", { "sapcli", "activation", "inactiveobjects", "list" } },
-    { "Búsqueda de objetos (abap find Z)",      { "sapcli", "abap", "find", "--max-results", "5", "Z" } },
+    { "Búsqueda global de objetos (abap find *)", { "sapcli", "abap", "find", "--max-results", "5", "*" } },
     { "Transportes (cts list transport)",       { "sapcli", "cts", "list", "transport" } },
   }
 

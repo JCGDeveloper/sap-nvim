@@ -254,9 +254,8 @@ function source:get_completions(ctx, callback)
 	local bufnr = (ctx and ctx.bufnr) or vim.api.nvim_get_current_buf()
 
 	-- 🔥 FIX: Si el buffer es un CDS, SILENCIAMOS las keywords de ABAP
-	local meta = vim.b[bufnr].sap_obj
-	local CDS_G = { ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
-	if meta and CDS_G[meta.group] then
+	local ok_cds, cds = pcall(require, "sap-nvim.core.cds")
+	if ok_cds and cds.is_cds_buf(bufnr) then
 		callback({ items = {}, is_incomplete_backward = false, is_incomplete_forward = false })
 		return function() end
 	end
@@ -274,7 +273,7 @@ function source:get_completions(ctx, callback)
 		if
 			before:match("[=%-]>[%w_]*$") -- =>  /  ->
 			or before:match("~[%w_]*$") -- ~ (interfaz)
-			or before:match("[%w_%]%)]%-[%w_]*$") -- wa-campo / lt[ 1 ]-campo / get( )-campo
+			or before:match("[%w_%>%]%)]%-[%w_]*$") -- wa-campo / <fs>-campo / lt[ 1 ]-campo / get( )-campo
 			or bl:match("%s+type%s+[%w_/]*$")
 			or bl:match("%s+like%s+[%w_/]*$")
 		then

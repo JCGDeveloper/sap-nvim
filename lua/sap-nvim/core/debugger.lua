@@ -24,6 +24,26 @@ local function fail(tag, msg)
 	end)
 end
 
+local function xmlesc(s)
+	return tostring(s or "")
+		:gsub("&", "&amp;")
+		:gsub("<", "&lt;")
+		:gsub(">", "&gt;")
+		:gsub('"', "&quot;")
+		:gsub("'", "&apos;")
+end
+
+local function norm_meta(s, table_lines)
+	s = vim.trim(tostring(s or "simple")):lower()
+	if s == "" then
+		s = "simple"
+	end
+	if (table_lines or 0) > 0 and s ~= "table" then
+		return "table"
+	end
+	return s
+end
+
 math.randomseed(os.time())
 local function uuid()
 	return (("xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"):gsub("[xy]", function(c)
@@ -172,6 +192,8 @@ function M.init_session(cb)
 		ideId = ideId,
 		user = c.user:upper(),
 		listener_job = nil,
+		listener_retries = 0,
+		stopping = false,
 		debugSessionId = nil,
 		breakpoints = {},
 	}
@@ -252,7 +274,12 @@ function M.resolve_bp_uri(group, name, source_uri, cb)
 	end)
 end
 
-function M.set_breakpoint(bp_uri, line, cb, sync_scope)
+local function clean_bp_uri(uri)
+	return (uri or ""):gsub("#.*$", ""):gsub("%?.*$", "")
+end
+
+function M.set_breakpoint(bp_uri, line, cb, sync_scope, opts)
+	opts = opts or {}
 	local s = M.session
 	if not s then
 		fail("bp", "sin sesión.")
@@ -303,11 +330,96 @@ function M.set_breakpoint(bp_uri, line, cb, sync_scope)
 			end
 			return
 		end
-		s.breakpoints[#s.breakpoints + 1] = { id = id, uri = uri, line = line }
+		s.breakpoints[#s.breakpoints + 1] =
+			{ id = id, uri = uri, line = line, source_uri = clean_bp_uri(opts.source_uri or bp_uri) }
 		if cb then
 			cb(true, { id = id, uri = uri })
 		end
 	end)
+end
+
+local function clear_breakpoints(match, cb)
+	local s = M.session
+	if not s then
+		if cb then
+			cb({ deleted = 0, failed = 0, matched = 0, reason = "no-session" })
+		end
+		return
+	end
+
+	local targets = {}
+	for idx, bp in ipairs(s.breakpoints or {}) do
+		if bp.id and match(bp) then
+			targets[#targets + 1] = { idx = idx, bp = bp }
+		end
+	end
+
+	if #targets == 0 then
+		if cb then
+			cb({ deleted = 0, failed = 0, matched = 0 })
+		end
+		return
+	end
+
+	local deleted, failed, i = 0, 0, 0
+	local function next_target()
+		i = i + 1
+		local target = targets[i]
+		if not target then
+			local keep = {}
+			for _, bp in ipairs(s.breakpoints or {}) do
+				if not bp.__sap_nvim_deleted then
+					keep[#keep + 1] = bp
+				end
+			end
+			s.breakpoints = keep
+			if cb then
+				cb({ deleted = deleted, failed = failed, matched = #targets })
+			end
+			return
+		end
+
+		curl({
+			method = "DELETE",
+			path = "/sap/bc/adt/debugger/breakpoints/" .. urlenc(target.bp.id),
+			accept = "application/xml",
+		}, function(body, status)
+			local ok = tostring(status):match("^2") ~= nil and not parse_exception(body)
+			if ok then
+				target.bp.__sap_nvim_deleted = true
+				deleted = deleted + 1
+			else
+				failed = failed + 1
+			end
+			next_target()
+		end)
+	end
+	next_target()
+end
+
+function M.clear_breakpoints_by_ids(ids, cb)
+	local wanted = {}
+	for _, id in ipairs(ids or {}) do
+		wanted[tostring(id)] = true
+	end
+	clear_breakpoints(function(bp)
+		return wanted[tostring(bp.id)]
+	end, cb)
+end
+
+function M.clear_breakpoints_for_sources(sources, cb)
+	local wanted = {}
+	for _, uri in ipairs(sources or {}) do
+		uri = clean_bp_uri(uri)
+		if uri ~= "" then
+			wanted[uri] = true
+			wanted[uri:gsub("/source/main$", "")] = true
+		end
+	end
+	clear_breakpoints(function(bp)
+		local uri = clean_bp_uri(bp.source_uri or bp.uri)
+		return wanted[uri] or wanted[uri:gsub("/source/main$", "")] or false
+	end, cb)
 end
 
 function M.attach(debuggeeId, cb)
@@ -348,6 +460,10 @@ function M.listen(cb)
 		fail("listen", "sin sesión.")
 		return
 	end
+	if s.listener_job then
+		pcall(vim.fn.jobstop, s.listener_job)
+		s.listener_job = nil
+	end
 	s.listener_job = curl({
 		method = "POST",
 		path = "/sap/bc/adt/debugger/listeners",
@@ -361,8 +477,19 @@ function M.listen(cb)
 		},
 	}, function(body, status)
 		s.listener_job = nil
+		if M.session ~= s or s.stopping then
+			log("listen", "listener cerrado.")
+			return
+		end
 		if not body or body == "" then
-			fail("listen", "respuesta vacía")
+			s.listener_retries = (s.listener_retries or 0) + 1
+			local delay = math.min(5000, 500 * s.listener_retries)
+			log("listen", "respuesta vacía (HTTP " .. tostring(status) .. "); reintentando...")
+			vim.defer_fn(function()
+				if M.session == s and not s.stopping then
+					M.listen(cb)
+				end
+			end, delay)
 			return
 		end
 		if body:find("conflictText", 1, true) then
@@ -379,6 +506,7 @@ function M.listen(cb)
 			if not ok then
 				return
 			end
+			s.listener_retries = 0
 			if info.isPostMortem then
 				log("listen", "DUMP (post-mortem). Ignorando...")
 				M.step("terminateDebuggee", function()
@@ -407,14 +535,19 @@ function M.get_stack(cb)
 			return
 		end
 		local frames = {}
-		for attrs in body:gmatch("<stackEntry(.-)/?>") do
-			local uri = attrs:match('adtcore:uri="([^"]*)"') or attrs:match('stackUri="([^"]*)"')
+		for attrs in body:gmatch("<[%w_:]*stackEntry%s(.-)/?>") do
+			local uri = attrs:match('adtcore:uri="([^"]*)"') or attrs:match('%suri="([^"]*)"')
+			local stack_uri = attrs:match('stackUri="([^"]*)"') or uri
+			local line = tonumber(attrs:match('line="([^"]*)"'))
+			if not line and uri then
+				line = tonumber(uri:match("#start=(%d+)"))
+			end
 			frames[#frames + 1] = {
-				program = attrs:match('programName="([^"]*)"'),
-				include = attrs:match('includeName="([^"]*)"'),
-				line = tonumber(attrs:match('line="([^"]*)"')) or 1,
+				program = attrs:match('programName="([^"]*)"') or attrs:match('program="([^"]*)"'),
+				include = attrs:match('includeName="([^"]*)"') or attrs:match('include="([^"]*)"'),
+				line = line or 1,
 				position = tonumber(attrs:match('stackPosition="([^"]*)"')),
-				stackUri = attrs:match('stackUri="([^"]*)"'),
+				stackUri = stack_uri and unxml(stack_uri) or nil,
 				stackType = attrs:match('stackType="([^"]*)"'),
 				eventName = attrs:match('eventName="([^"]*)"'),
 				systemProgram = attrs:match('systemProgram="true"') ~= nil,
@@ -445,7 +578,7 @@ function M.get_variables(scope, cb)
 	local parents = type(scope) == "table" and scope or { scope or "@ROOT" }
 	local h = {}
 	for _, p in ipairs(parents) do
-		h[#h + 1] = "<STPDA_ADT_VARIABLE_HIERARCHY><PARENT_ID>" .. p .. "</PARENT_ID></STPDA_ADT_VARIABLE_HIERARCHY>"
+		h[#h + 1] = "<STPDA_ADT_VARIABLE_HIERARCHY><PARENT_ID>" .. xmlesc(p) .. "</PARENT_ID></STPDA_ADT_VARIABLE_HIERARCHY>"
 	end
 	local body = '<?xml version="1.0" encoding="UTF-8" ?><asx:abap version="1.0" xmlns:asx="http://www.sap.com/abapxml"><asx:values><DATA><HIERARCHIES>'
 		.. table.concat(h)
@@ -471,14 +604,15 @@ function M.get_variables(scope, cb)
 			if #vars >= M.MAX_CHILDREN then
 				break
 			end
-			local meta = v:match("<META_TYPE>([^<]*)</META_TYPE>") or "simple"
+			local table_lines = tonumber(v:match("<TABLE_LINES>([^<]*)</TABLE_LINES>")) or 0
+			local meta = norm_meta(v:match("<META_TYPE>([^<]*)</META_TYPE>"), table_lines)
 			vars[#vars + 1] = {
 				id = v:match("<ID>([^<]*)</ID>"),
 				name = v:match("<NAME>([^<]*)</NAME>"),
 				value = unxml((v:match("<VALUE>(.-)</VALUE>") or "")),
 				type = v:match("<DECLARED_TYPE_NAME>([^<]*)</DECLARED_TYPE_NAME>"),
 				meta = meta,
-				table_lines = tonumber(v:match("<TABLE_LINES>([^<]*)</TABLE_LINES>")) or 0,
+				table_lines = table_lines,
 				expandable = (meta ~= "simple" and meta ~= "string"),
 			}
 		end
@@ -500,7 +634,7 @@ function M.get_vars_by_id(ids, cb)
 	ids = type(ids) == "table" and ids or { ids }
 	local b = {}
 	for _, id in ipairs(ids) do
-		b[#b + 1] = "<STPDA_ADT_VARIABLE><ID>" .. id .. "</ID></STPDA_ADT_VARIABLE>"
+		b[#b + 1] = "<STPDA_ADT_VARIABLE><ID>" .. xmlesc(id) .. "</ID></STPDA_ADT_VARIABLE>"
 	end
 	local body = '<?xml version="1.0" encoding="UTF-8" ?><asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0"><asx:values><DATA>'
 		.. table.concat(b)
@@ -524,14 +658,15 @@ function M.get_vars_by_id(ids, cb)
 			if #vars >= M.MAX_CHILDREN then
 				break
 			end
-			local meta = v:match("<META_TYPE>([^<]*)</META_TYPE>") or "simple"
+			local table_lines = tonumber(v:match("<TABLE_LINES>([^<]*)</TABLE_LINES>")) or 0
+			local meta = norm_meta(v:match("<META_TYPE>([^<]*)</META_TYPE>"), table_lines)
 			vars[#vars + 1] = {
 				id = v:match("<ID>([^<]*)</ID>"),
 				name = v:match("<NAME>([^<]*)</NAME>"),
 				value = unxml((v:match("<VALUE>(.-)</VALUE>") or "")),
 				type = v:match("<DECLARED_TYPE_NAME>([^<]*)</DECLARED_TYPE_NAME>"),
 				meta = meta,
-				table_lines = tonumber(v:match("<TABLE_LINES>([^<]*)</TABLE_LINES>")) or 0,
+				table_lines = table_lines,
 				expandable = (meta ~= "simple" and meta ~= "string"),
 			}
 		end
@@ -548,6 +683,25 @@ function M.table_row_ids(id, lines)
 		ids[#ids + 1] = (id:gsub("%[%]$", "")) .. "[" .. k .. "]"
 	end
 	return ids
+end
+
+function M.get_table_rows(id, lines, cb)
+	local row_ids = M.table_row_ids(id, lines)
+	if #row_ids == 0 then
+		cb({})
+		return
+	end
+	M.get_vars_by_id(row_ids, function(rows)
+		if rows and #rows > 0 then
+			cb(rows)
+			return
+		end
+		-- Algunos backends ADT no aceptan IDs fabricados ID[1]. En ese caso tratamos
+		-- la tabla como nodo padre y dejamos que SAP devuelva sus hijos reales.
+		M.get_variables(id, function(child_rows)
+			cb(child_rows or {})
+		end)
+	end)
 end
 
 function M.step(action, cb)
@@ -624,6 +778,7 @@ function M.stop(cb)
 		end
 		return
 	end
+	s.stopping = true
 	if s.listener_job then
 		pcall(vim.fn.jobstop, s.listener_job)
 		s.listener_job = nil
@@ -651,6 +806,7 @@ end
 -- 🔥 RESTAURADO: Función para matar todas las sesiones huérfanas
 function M.terminate_all(cb)
 	local function purge(s)
+		s.stopping = true
 		if s.listener_job then
 			pcall(vim.fn.jobstop, s.listener_job)
 			s.listener_job = nil

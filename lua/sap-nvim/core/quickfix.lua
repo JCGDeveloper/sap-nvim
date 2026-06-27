@@ -82,7 +82,7 @@ function M.quickfix()
   local body = adt_http.request({
     method = "POST",
     path = "/sap/bc/adt/quickfixes/evaluation",
-    query = { uri = uri .. "%23start=" .. row .. "," .. col },
+    query = { uri = uri .. "#start=" .. row .. "," .. col },
     content_type = "application/*",
     accept = "application/*",
     body = src,

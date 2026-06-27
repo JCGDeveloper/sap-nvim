@@ -1,47 +1,50 @@
 local intel = require("sap-nvim.core.intel")
 
 local SapSource = {}
+local Kind = require("blink.cmp.types").CompletionItemKind
 
 function SapSource.new()
 	return setmetatable({}, { __index = SapSource })
 end
 
--- Aquí le decimos a Blink que se despierte y pregunte al plugin
--- justo cuando el usuario teclee estos caracteres.
 function SapSource:get_trigger_characters()
-	return { ">", "-", "=", "~" }
+	return { ">", "-", "=", "~", ".", "@", ":", " ", ",", "$" }
 end
 
 function SapSource:get_completions(context, callback)
-	-- 1. Chivato: Si esto no sale en pantalla, Blink NO nos está llamando
-	vim.notify("¡Blink ha detectado la flecha y llama a SAP!", vim.log.levels.WARN)
-
-	local bufnr = vim.api.nvim_get_current_buf()
-	local row = context.cursor[1]
-	local col = context.cursor[2]
+	local bufnr = context.bufnr or vim.api.nvim_get_current_buf()
+	local row = (context.cursor and context.cursor[1]) or vim.api.nvim_win_get_cursor(0)[1]
+	local col = (context.cursor and context.cursor[2]) or vim.api.nvim_win_get_cursor(0)[2]
 
 	intel.proposals_async(bufnr, row, col, function(items)
 		local completions = {}
 
-		-- 2. Método falso de prueba: Lo metemos a la fuerza para ver si Blink lo dibuja
-		table.insert(completions, {
-			label = "METODO_FALSO_DE_PRUEBA",
-			kind = require("blink.cmp.types").CompletionItemKind.Method,
-			detail = "TEST",
-		})
-
 		for _, it in ipairs(items) do
-			local kind = require("blink.cmp.types").CompletionItemKind.Method
+			local kind = Kind.Text
+			local sort = "50"
 			if it.kind == "2" then
-				kind = require("blink.cmp.types").CompletionItemKind.Class
+				kind = Kind.Class
+				sort = "10"
 			elseif it.kind == "1" then
-				kind = require("blink.cmp.types").CompletionItemKind.Variable
+				kind = Kind.Variable
+				sort = "00"
+			elseif it.kind == "3" then
+				kind = Kind.Method
+				sort = "20"
+			elseif it.kind == "4" or it.kind == "6" then
+				kind = Kind.Function
+				sort = "25"
+			elseif it.kind == "52" then
+				kind = Kind.Keyword
+				sort = "90"
 			end
 
 			table.insert(completions, {
 				label = it.word,
 				kind = kind,
 				detail = "SAP ADT",
+				filterText = it.word,
+				sortText = sort .. "_" .. it.word,
 			})
 		end
 

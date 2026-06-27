@@ -485,6 +485,24 @@ local function cds_alias_map(src)
 	return map
 end
 
+local function cds_primary_source(src)
+	return src:match("[Ff][Rr][Oo][Mm]%s+([%w_/]+)%s+[Aa][Ss]%s+[%w_/]+")
+		or src:match("[Ff][Rr][Oo][Mm]%s+([%w_/]+)")
+end
+
+local function inside_select_list(bufnr, line)
+	local open = false
+	for _, l in ipairs(vim.api.nvim_buf_get_lines(bufnr, 0, line, false)) do
+		if l:find("{", 1, true) then
+			open = true
+		end
+		if l:find("}", 1, true) then
+			open = false
+		end
+	end
+	return open
+end
+
 -- Query del endpoint ddicrepositoryaccess. OJO (igual que abap-adt-api/vscode):
 --   CAMPOS de una fuente -> { requestScope = "all", path = "TABLA." }   (NO datasource=)
 --   FUENTES por prefijo  -> { datasource = "PREFIJO*" }
@@ -506,7 +524,7 @@ local function ddic_access(query, cb)
 		accept = "application/*",
 	}, function(body)
 		local names, seen = {}, {}
-		for nm in (body or ""):gmatch('adtcore:name="([^"]*)"') do
+		for nm in (body or ""):gmatch('[%w_:-]*name="([^"]*)"') do
 			if nm ~= "" and not seen[nm] then
 				seen[nm] = true
 				names[#names + 1] = nm
@@ -628,6 +646,22 @@ function M.is_cds_buf(bufnr)
 	return false
 end
 
+local function should_offer_keywords(before)
+	local b = (before or ""):lower()
+	if b:match("[%.%-][%w_]*$") then
+		return false
+	end
+	if b:match("@[%w%._]*$") or b:match("@[%w%._]+%s*:") then
+		return false
+	end
+	return b:match("^%s*[%w_%$]*$")
+		or b:match("[{,]%s*[%w_%$]*$")
+		or b:match("%s+[ao]n%s+[%w_%$]*$")
+		or b:match("%s+[as][se]?%s+[%w_%$]*$")
+		or b:match("%s+with%s+[%w_%$]*$")
+		or b:match("%s+define%s+[%w_%$]*$")
+end
+
 -- Completado en un buffer CDS en (line,col). Entrega items {word,kind} por cb.
 --   @Anno...: valor   -> enums/booleanos o campos del view
 --   alias.campo       -> campos de la fuente resuelta (kind "1")
@@ -704,6 +738,23 @@ function M.completion(bufnr, line, col, cb)
 		return
 	end
 
+	-- 1b) source-field o association-field en CDS. Evita mezclar keywords cuando el usuario
+	-- realmente está pidiendo elementos de una fuente/alias.
+	local dash_alias, dash_prefix = before:match("([%w_/]+)%-([%w_/]*)$")
+	if dash_alias then
+		local tbl = cds_alias_map(src)[dash_alias:lower()] or dash_alias
+		ddic_access(ddic_fields_query(tbl), function(names)
+			local items, pl = {}, dash_prefix:lower()
+			for _, n in ipairs(names) do
+				if n:lower() ~= tbl:lower() and (pl == "" or n:lower():sub(1, #pl) == pl) then
+					items[#items + 1] = { word = n:lower(), kind = "1" }
+				end
+			end
+			cb(items)
+		end)
+		return
+	end
+
 	-- 2) tras from/join -> nombres de fuentes
 	local sprefix = before:match("[Ff][Rr][Oo][Mm]%s+([%w_/]+)$") or before:match("[Jj][Oo][Ii][Nn]%s+([%w_/]+)$")
 	if sprefix then
@@ -724,7 +775,36 @@ function M.completion(bufnr, line, col, cb)
 		return
 	end
 
+	-- 3b) Dentro del select list, antes de escribir alias, Eclipse/VSCode priorizan campos
+	-- de la fuente principal. Esto evita que una línea vacía o "key " muestre solo keywords.
+	local select_word = before:match("[{,]%s*([%w_]*)$")
+		or before:match("^%s*[Kk][Ee][Yy]%s+([%w_]*)$")
+		or before:match("^%s*([%w_]*)$")
+	if select_word and inside_select_list(bufnr, line) then
+		local tbl = cds_primary_source(src)
+		if tbl then
+			ddic_access(ddic_fields_query(tbl), function(names)
+				local items, pl = {}, select_word:lower()
+				for _, n in ipairs(names) do
+					if n:lower() ~= tbl:lower() and (pl == "" or n:lower():sub(1, #pl) == pl) then
+						items[#items + 1] = { word = n:lower(), kind = "1" }
+					end
+				end
+				if #items > 0 then
+					cb(items)
+				else
+					cb({})
+				end
+			end)
+			return
+		end
+	end
+
 	-- 🔥 4) FALLBACK: Keywords nativas de CDS (incluyendo variables con $)
+	if not should_offer_keywords(before) then
+		cb({})
+		return
+	end
 	local word = before:match("[%w_%$]+$") or ""
 	local wl = word:lower()
 	local items = {}

@@ -266,6 +266,11 @@ return {
     name = "NEW #( )",
     body = [[NEW ${1:zcl_class}( ${0} )]],
   },
+  cobj = {
+    trig = "cobj",
+    name = "CREATE OBJECT con control sy-subrc",
+    body = [[IF ${1:o_container} IS INITIAL.\n  CREATE OBJECT ${1:o_container}\n    EXPORTING\n      container_name              = '${2:CONTROL_9000}'\n    EXCEPTIONS\n      cntl_error                  = 1\n      cntl_system_error           = 2\n      create_error                = 3\n      lifetime_error              = 4\n      lifetime_dynpro_dynpro_link = 5\n      OTHERS                      = 6.\n  IF sy-subrc <> 0.\n    MESSAGE ID sy-msgid\n          TYPE sy-msgty\n        NUMBER sy-msgno\n          WITH sy-msgv1\n               sy-msgv2\n               sy-msgv3\n               sy-msgv4.\n  ENDIF.\nENDIF.]],
+  },
   conv = {
     trig = "conv",
     name = "CONV #( )",

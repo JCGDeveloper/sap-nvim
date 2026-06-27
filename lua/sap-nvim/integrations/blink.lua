@@ -27,8 +27,8 @@ function M.setup(opts)
 	-- Registrar snippets y el motor de SAP ADT en blink
 	blink.setup({
 		sources = {
-			-- IMPORTANTE: Añadimos 'sap_adt' y 'abap_snippets' a la lista para que se muestren
-			default = { "lsp", "path", "snippets", "buffer", "abap_snippets", "sap_adt" },
+			-- SAP primero: en CDS los campos del DDIC deben salir antes que keywords/snippets.
+			default = { "sap_adt", "lsp", "path", "snippets", "buffer", "abap_snippets" },
 			providers = {
 				-- Tu provider original de snippets
 				abap_snippets = {
@@ -46,9 +46,12 @@ function M.setup(opts)
 				sap_adt = {
 					name = "SAP",
 					module = "sap-nvim.core.blink_source", -- Apunta al archivo nuevo que creaste
-					score_offset = 100, -- Prioridad alta para que los métodos salgan los primeros
+					score_offset = 1000, -- Prioridad alta para campos/métodos SAP
 					enabled = function()
-						return vim.bo.filetype == "abap"
+						local ok_intel, intel = pcall(require, "sap-nvim.core.intel")
+						local ok_cds, cds = pcall(require, "sap-nvim.core.cds")
+						return (ok_intel and intel.is_sap_ft(vim.bo.filetype))
+							or (ok_cds and cds.is_cds_buf(vim.api.nvim_get_current_buf()))
 					end,
 				},
 			},

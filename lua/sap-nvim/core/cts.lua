@@ -25,6 +25,21 @@ local function parse_exception(body)
 	return (msg:gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&amp;", "&"))
 end
 
+local function confirm_destructive(id, prompt, cb)
+	local ok_cfg, cfg = pcall(function()
+		return require("sap-nvim.core.config").productive()
+	end)
+	if ok_cfg and cfg and cfg.confirm_destructive then
+		vim.ui.input({ prompt = prompt .. " Escribe '" .. id .. "' para confirmar: " }, function(input)
+			cb(input and vim.trim(input):upper() == id:upper())
+		end)
+		return
+	end
+	vim.ui.select({ "No", "Sí" }, { prompt = prompt }, function(choice)
+		cb(choice and choice:match("^Sí") ~= nil)
+	end)
+end
+
 local function current_object()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local meta = vim.b[bufnr].sap_obj
@@ -122,15 +137,12 @@ local function fetch_transports_by_config(user_filter, title)
 		headers = { "If-Match: " .. (etag or "") },
 	})
 
-	local enc = (link:gsub("[^%w]", function(c)
-		return string.format("%%%02X", string.byte(c))
-	end))
 	notify("Descargando " .. title:lower() .. "...")
 
 	adt_http.request_async({
 		method = "GET",
 		path = "/sap/bc/adt/cts/transportrequests",
-		query = { configUri = enc, targets = "true" },
+		query = { configUri = link, targets = "true" },
 		accept = "application/vnd.sap.adt.transportorganizertree.v1+xml",
 	}, function(tbody)
 		vim.schedule(function()
@@ -141,7 +153,8 @@ end
 
 -- ── 1. Crear Orden ───────────────────────────────────────────────────────────
 function M.create_transport()
-	if not adt_http.is_available() then
+	if not adt_http.ready() then
+		notify("Conexión SAP no validada. Usa :SapLogin.", vim.log.levels.WARN)
 		return
 	end
 	-- NO exige estar dentro de un objeto: si hay uno abierto, lo usamos como referencia; si
@@ -202,7 +215,8 @@ end
 
 -- ── 2. Eliminar Orden (NUEVO) ────────────────────────────────────────────────
 function M.delete_transport()
-	if not adt_http.is_available() then
+	if not adt_http.ready() then
+		notify("Conexión SAP no validada. Usa :SapLogin.", vim.log.levels.WARN)
 		return
 	end
 
@@ -216,44 +230,48 @@ function M.delete_transport()
 		end
 		tr = vim.trim(tr):upper()
 
-		vim.ui.select(
-			{ "No", "Sí, ELIMINAR " .. tr },
-			{ prompt = "⚠️ PELIGRO: ¿Seguro que quieres borrar la orden " .. tr .. "?" },
-			function(choice)
-				if not choice or not choice:match("^Sí") then
-					notify("Operación cancelada.", vim.log.levels.INFO)
-					return
-				end
-
-				notify("Eliminando orden " .. tr .. "...")
-				local resp, _, code = adt_http.raw({
-					method = "DELETE",
-					path = "/sap/bc/adt/cts/transportrequests/" .. tr,
-					accept = "application/vnd.sap.as+xml",
-				})
-
-				local err = parse_exception(resp)
-				if err or not tostring(code):match("^2") then
-					notify(
-						"No se pudo eliminar (HTTP " .. tostring(code) .. "): " .. (err or "Error de SAP"),
-						vim.log.levels.ERROR
-					)
-				else
-					notify("Orden " .. tr .. " eliminada con éxito.", vim.log.levels.INFO)
-				end
+		confirm_destructive(tr, "PELIGRO: borrar la orden " .. tr .. ".", function(confirm)
+			if not confirm then
+				notify("Operación cancelada.", vim.log.levels.INFO)
+				return
 			end
-		)
+
+			notify("Eliminando orden " .. tr .. "...")
+			local resp, _, code = adt_http.raw({
+				method = "DELETE",
+				path = "/sap/bc/adt/cts/transportrequests/" .. tr,
+				accept = "application/vnd.sap.as+xml",
+			})
+
+			local err = parse_exception(resp)
+			if err or not tostring(code):match("^2") then
+				notify(
+					"No se pudo eliminar (HTTP " .. tostring(code) .. "): " .. (err or "Error de SAP"),
+					vim.log.levels.ERROR
+				)
+			else
+				notify("Orden " .. tr .. " eliminada con éxito.", vim.log.levels.INFO)
+			end
+		end)
 	end)
 end
 
 -- ── 3. Listados (Unificados) ─────────────────────────────────────────────────
 function M.list_transports()
+	if not adt_http.ready() then
+		notify("Conexión SAP no validada. Usa :SapLogin.", vim.log.levels.WARN)
+		return
+	end
 	local c = adt_http.creds()
 	local user = (c and c.user or ""):upper()
 	fetch_transports_by_config(user, "Mis órdenes de transporte")
 end
 
 function M.list_all_transports()
+	if not adt_http.ready() then
+		notify("Conexión SAP no validada. Usa :SapLogin.", vim.log.levels.WARN)
+		return
+	end
 	fetch_transports_by_config("", "Todas las órdenes del sistema")
 end
 

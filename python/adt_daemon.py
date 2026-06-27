@@ -22,6 +22,7 @@ import ssl
 import sys
 import threading
 import time
+from urllib.parse import urlencode
 
 GRAPH_PATH = "/sap/bc/adt/compatibility/graph"
 KEEPALIVE_SECS = 120
@@ -108,10 +109,9 @@ class AdtDaemon:
     def _build_url(self, path, query):
         url = path
         sep = "&" if ("?" in url) else "?"
-        url = url + sep + "sap-client=" + self.client
+        url = url + sep + urlencode({"sap-client": self.client})
         if query:
-            for k, v in query.items():
-                url = url + "&" + str(k) + "=" + str(v)
+            url = url + "&" + urlencode({str(k): str(v) for k, v in query.items()})
         return url
 
     def _store_session(self, resp):

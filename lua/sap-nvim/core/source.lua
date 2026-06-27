@@ -17,6 +17,7 @@ local objtype = require("sap-nvim.core.objtype")
 -- Transporte recordado por sesión (CORRNR o el sentinel LOCAL).
 local LOCAL = "__LOCAL__"
 local session_transport = nil
+local session_transport_key = nil
 
 local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
@@ -180,6 +181,24 @@ local function write_source_adt(obj, content, corrnr)
   return true, put_body, put_code
 end
 
+local function transport_from_lock_error(msg)
+  msg = tostring(msg or ""):upper()
+  return msg:match("ORDEN%s+([A-Z0-9]+K%d+)")
+    or msg:match("ORDER%s+([A-Z0-9]+K%d+)")
+    or msg:match("REQUEST%s+([A-Z0-9]+K%d+)")
+    or msg:match("TRANSPORT%s+([A-Z0-9]+K%d+)")
+end
+
+local function current_transport_key(devclass)
+  devclass = (devclass or ""):upper()
+  if devclass == "" then
+    return nil
+  end
+  local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+  local c = ok_http and adt_http.creds() or nil
+  return table.concat({ c and c.context or "", c and c.client or "", devclass }, "|")
+end
+
 local function confirm_destructive(label, prompt, cb)
   local cfg = require("sap-nvim.core.config").productive()
   if not cfg.confirm_destructive then
@@ -229,6 +248,78 @@ end
 -- Abre un objeto remoto: lo lee de SAP, lo cachea y lo muestra en un buffer.
 -- opts.line / opts.col (opcional): salta a esa posición tras abrir (para go-to-definition).
 local RAP_KINDS = { ddl = true, ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
+local DDIC_METADATA_KINDS = { dataelement = true, domain = true, tabletype = true }
+
+local function pretty_xml(xml)
+  return vim.split((xml or ""):gsub("><", ">\n<"):gsub("\r", ""), "\n", { plain = true })
+end
+
+local function is_customer_namespace(name)
+  name = (name or ""):upper()
+  return name:match("^[ZY]") ~= nil or name:match("^/[^/]+/") ~= nil
+end
+
+local function productive()
+  local ok, cfg = pcall(function()
+    return require("sap-nvim.core.config").productive()
+  end)
+  return ok and cfg or {}
+end
+
+local function readonly_reason(name, group, explicit)
+  if explicit then
+    return explicit
+  end
+  local cfg = productive()
+  if not cfg.safe_mode then
+    return nil
+  end
+  if DDIC_METADATA_KINDS[group] then
+    return "metadata ADT sin editor de código"
+  end
+  if not is_customer_namespace(name) then
+    return "objeto estándar/no cliente en modo productivo"
+  end
+  return nil
+end
+
+local function apply_readonly(bufnr, reason)
+  if not reason then
+    return
+  end
+  vim.bo[bufnr].readonly = true
+  vim.bo[bufnr].modifiable = false
+  vim.b[bufnr].sap_readonly_reason = reason
+end
+
+local function is_readonly_obj(obj)
+  return obj and (obj.readonly or readonly_reason(obj.name, obj.group))
+end
+
+local function confirm_activation(obj, corrnr, cb)
+  local reason = is_readonly_obj(obj)
+  if reason then
+    notify("No se activa " .. obj.name .. ": buffer de solo lectura (" .. reason .. ").", vim.log.levels.WARN)
+    return cb(false)
+  end
+  local non_local = corrnr ~= nil or ((obj.package or ""):upper() ~= "$TMP")
+  if not non_local then
+    return cb(true)
+  end
+  local cfg = productive()
+  local label = (obj.name or ""):upper()
+  local suffix = corrnr and (" usando orden " .. corrnr) or " sin paquete $TMP confirmado"
+  local prompt = "Activar " .. label .. suffix .. "."
+  if cfg.confirm_destructive then
+    vim.ui.input({ prompt = prompt .. " Escribe '" .. label .. "' para confirmar: " }, function(input)
+      cb(input and vim.trim(input):upper() == label)
+    end)
+  else
+    vim.ui.select({ "No", "Sí" }, { prompt = prompt }, function(choice)
+      cb(choice and choice:match("^Sí") ~= nil)
+    end)
+  end
+end
 
 function M.open(name, group, opts)
   opts = opts or {}
@@ -276,23 +367,55 @@ function M.open(name, group, opts)
     vim.cmd("noswapfile edit! " .. vim.fn.fnameescape(path))
     local bufnr = vim.api.nvim_get_current_buf()
     vim.bo[bufnr].swapfile = false
-    vim.b[bufnr].sap_obj = { name = name:upper(), group = group, fgroup = fgroup, uri = uri }
+    local reason = readonly_reason(name, group)
+    vim.b[bufnr].sap_obj = { name = name:upper(), group = group, fgroup = fgroup, uri = uri, readonly = reason ~= nil }
     vim.bo[bufnr].filetype = "abap"
+    apply_readonly(bufnr, reason)
     pcall(function() require("sap-nvim.core.template_vars").prime(bufnr) end)
     if opts.line then
       pcall(vim.api.nvim_win_set_cursor, 0, { opts.line, opts.col or 0 })
       vim.cmd("normal! zz")
     end
-    notify(name:upper() .. " abierto (" .. group .. ") por ADT. :SapPush para guardar, :SapActivate para guardar+activar.")
+    if reason then
+      notify(name:upper() .. " abierto (" .. group .. ") por ADT en solo lectura: " .. reason .. ".")
+    else
+      notify(name:upper() .. " abierto (" .. group .. ") por ADT. :SapPush para guardar, :SapActivate para guardar+activar.")
+    end
     if group == "program" then
       M.prefetch_includes(lines)
     end
+  end
+
+  local function open_metadata(body, uri)
+    local path = M.cache_dir() .. "/" .. name:lower() .. "." .. group .. ".adt.xml"
+    vim.fn.writefile(pretty_xml(body), path)
+    pcall(function() require("sap-nvim.core.navigate").push_here() end)
+    vim.cmd("noswapfile edit! " .. vim.fn.fnameescape(path))
+    local bufnr = vim.api.nvim_get_current_buf()
+    vim.bo[bufnr].swapfile = false
+    vim.bo[bufnr].filetype = "xml"
+    local reason = readonly_reason(name, group, "metadata ADT sin editor de código")
+    vim.b[bufnr].sap_obj = { name = name:upper(), group = group, fgroup = fgroup, uri = uri, readonly = true }
+    apply_readonly(bufnr, reason)
+    notify(name:upper() .. " abierto (" .. group .. ") como metadata ADT de solo lectura.")
   end
 
   notify("Leyendo " .. name .. " (" .. group .. ") desde SAP por ADT...")
   local body, read_err, _, uri = read_source_adt(group, name, { fgroup = fgroup })
   if body then
     return open_from_lines(vim.split(body, "\n", { plain = true }), uri)
+  end
+  if DDIC_METADATA_KINDS[group] then
+    local meta_uri = object_uri(group, name, { fgroup = fgroup })
+    local adt_http = require("sap-nvim.core.adt_http")
+    local meta_body, _, meta_code = adt_http.raw({
+      method = "GET",
+      path = meta_uri,
+      accept = "application/xml, application/vnd.sap.adt.ddic.*+xml, */*",
+    })
+    if meta_code >= 200 and meta_code < 300 and meta_body and meta_body ~= "" then
+      return open_metadata(meta_body, meta_uri)
+    end
   end
 
   notify("ADT no pudo leer " .. name .. " (" .. read_err .. "). Probando fallback sapcli...", vim.log.levels.WARN)
@@ -369,7 +492,21 @@ end
 -- Resuelve el transporte a usar para el push y llama cb(corrnr_or_nil).
 -- corrnr = nil  -> objeto local ($TMP), sin orden. Público para reusar (message.lua, etc.).
 function M.resolve_transport(cb)
-  if session_transport == LOCAL then return cb(nil) end
+  local meta = vim.b[vim.api.nvim_get_current_buf()].sap_obj
+  local devclass = (meta and meta.package) or ""
+  local is_local_object = devclass:upper() == "$TMP"
+  local tkey = current_transport_key(devclass)
+  if session_transport and session_transport_key ~= tkey then
+    session_transport = nil
+    session_transport_key = nil
+  end
+  if session_transport == LOCAL then
+    if is_local_object then
+      return cb(nil)
+    end
+    session_transport = nil
+    session_transport_key = nil
+  end
   if session_transport then return cb(session_transport) end
 
   local SENT_LOCAL = "(objeto local $TMP — sin orden)"
@@ -378,6 +515,7 @@ function M.resolve_transport(cb)
 
   local function choose(corrnr)
     session_transport = corrnr -- la 1ª palabra de la fila CTS es el ID (p.ej. SIDK900123)
+    session_transport_key = tkey
     cb(corrnr)
   end
 
@@ -387,6 +525,7 @@ function M.resolve_transport(cb)
       if not choice then return end -- cancelado
       if choice == SENT_LOCAL then
         session_transport = LOCAL
+        session_transport_key = tkey
         return cb(nil)
       elseif choice == SENT_MANUAL then
         vim.ui.input({ prompt = "Número de orden: " }, function(v)
@@ -410,7 +549,10 @@ function M.resolve_transport(cb)
 
   fetch_transports(function(transports)
     vim.schedule(function()
-      local items = { SENT_LOCAL }
+      local items = {}
+      if is_local_object then
+        items[#items + 1] = SENT_LOCAL
+      end
       for _, t in ipairs(transports or {}) do table.insert(items, t) end
       table.insert(items, SENT_MINE)
       table.insert(items, SENT_MANUAL)
@@ -422,6 +564,7 @@ end
 -- Olvida el transporte recordado para que el próximo push vuelva a preguntar.
 function M.reset_transport()
   session_transport = nil
+  session_transport_key = nil
   notify("Transporte de sesion reiniciado; el proximo push preguntara de nuevo.")
 end
 
@@ -431,6 +574,12 @@ function M.push(bufnr, activate, callback)
   local obj = vim.b[bufnr].sap_obj
   if not obj then
     notify("Este buffer no es un objeto SAP abierto con sap-nvim.", vim.log.levels.WARN)
+    return
+  end
+  local ro = is_readonly_obj(obj)
+  if ro then
+    notify("Este objeto está en solo lectura (" .. ro .. "); no se puede guardar como código.", vim.log.levels.WARN)
+    if callback then callback(false, { "readonly: " .. ro }, {}) end
     return
   end
   -- Guardián anti-bloqueo (ver M.open): no escribir vía sapcli sin conexión validada.
@@ -448,41 +597,57 @@ function M.push(bufnr, activate, callback)
     local verb = activate and "Guardando+activando " or "Guardando "
     notify(verb .. obj.name .. (corrnr and (" [" .. corrnr .. "]") or " [$TMP]") .. "...")
 
-    local ok, res = write_source_adt(obj, table.concat(lines, "\n"), corrnr)
-    if not ok then
-      vim.fn.setqflist({}, "r", {
-        items = { { filename = vim.api.nvim_buf_get_name(bufnr), lnum = 1, col = 1, text = res, type = "E" } },
-        title = "SAP " .. obj.name .. ": error al guardar",
-      })
-      pcall(vim.cmd, "copen")
-      notify(res, vim.log.levels.ERROR)
-      if callback then callback(false, { res }, {}) end
-      return
-    end
-
-    if not activate then
-      vim.fn.setqflist({}, "r", { title = "SAP " .. obj.name .. ": OK" })
-      notify(obj.name .. " guardado correctamente por ADT.")
-      if callback then callback(true, {}, {}) end
-      return
-    end
-
-    local uri = object_uri(obj)
-    require("sap-nvim.core.adt").activate_bulk({
-      {
-        name = obj.name,
-        group = obj.group,
-        uri = uri,
-        type = require("sap-nvim.core.adt").adt_type(obj.group),
-      },
-    }, function(resp, qf)
-      local errors = vim.tbl_filter(function(e) return e.type == "E" end, qf or {})
-      if resp and #errors == 0 then
-        notify(obj.name .. " guardado y activado correctamente por ADT.")
-        if callback then callback(true, {}, qf or {}) end
-    else
-        if callback then callback(false, {}, qf or {}) end
+    confirm_activation(obj, activate and corrnr or nil, function(confirmed)
+      if not confirmed then
+        notify("Operación cancelada.", vim.log.levels.INFO)
+        if callback then callback(false, { "activation cancelled" }, {}) end
+        return
       end
+
+      local ok, res = write_source_adt(obj, table.concat(lines, "\n"), corrnr)
+      local retry_corrnr = (not ok) and transport_from_lock_error(res) or nil
+      if retry_corrnr and retry_corrnr ~= corrnr then
+        session_transport = retry_corrnr
+        session_transport_key = current_transport_key((obj and obj.package) or "")
+        notify("El objeto ya estaba bloqueado en " .. retry_corrnr .. "; reintentando con esa orden...")
+        corrnr = retry_corrnr
+        ok, res = write_source_adt(obj, table.concat(lines, "\n"), corrnr)
+      end
+      if not ok then
+        vim.fn.setqflist({}, "r", {
+          items = { { filename = vim.api.nvim_buf_get_name(bufnr), lnum = 1, col = 1, text = res, type = "E" } },
+          title = "SAP " .. obj.name .. ": error al guardar",
+        })
+        pcall(vim.cmd, "copen")
+        notify(res, vim.log.levels.ERROR)
+        if callback then callback(false, { res }, {}) end
+        return
+      end
+
+      if not activate then
+        vim.fn.setqflist({}, "r", { title = "SAP " .. obj.name .. ": OK" })
+        notify(obj.name .. " guardado correctamente por ADT.")
+        if callback then callback(true, {}, {}) end
+        return
+      end
+
+      local uri = object_uri(obj)
+      require("sap-nvim.core.adt").activate_bulk({
+        {
+          name = obj.name,
+          group = obj.group,
+          uri = uri,
+          type = require("sap-nvim.core.adt").adt_type(obj.group),
+        },
+      }, function(resp, qf)
+        local errors = vim.tbl_filter(function(e) return e.type == "E" end, qf or {})
+        if resp and #errors == 0 then
+          notify(obj.name .. " guardado y activado correctamente por ADT.")
+          if callback then callback(true, {}, qf or {}) end
+        else
+          if callback then callback(false, {}, qf or {}) end
+        end
+      end)
     end)
   end)
 end
@@ -494,6 +659,11 @@ function M.delete(bufnr)
   local obj = vim.b[bufnr].sap_obj
   if not obj then
     notify("Este buffer no es un objeto SAP abierto con sap-nvim.", vim.log.levels.WARN)
+    return
+  end
+  local ro = is_readonly_obj(obj)
+  if ro then
+    notify("No se borra " .. obj.name .. ": objeto de solo lectura (" .. ro .. ").", vim.log.levels.WARN)
     return
   end
 
@@ -545,7 +715,13 @@ function M.activate_recursive()
   if vim.b[bufnr].sap_obj then
     M.push(bufnr, false, function(ok)
       if ok then
-        require("sap-nvim.core.adt").activate_related_current(bufnr)
+        confirm_activation(vim.b[bufnr].sap_obj, nil, function(confirmed)
+          if confirmed then
+            require("sap-nvim.core.adt").activate_related_current(bufnr)
+          else
+            notify("Activación cancelada.", vim.log.levels.INFO)
+          end
+        end)
       end
     end)
   else

@@ -171,11 +171,19 @@ function M.is_auth_error(body)
   if not body or body == "" then
     return false
   end
-  return body:match("^%s*<!?[Hh][Tt][Mm][Ll]") ~= nil
-    or body:match("^%s*<!DOCTYPE") ~= nil
-    or body:find("Nicht autorisiert", 1, true) ~= nil
+  return body:find("Nicht autorisiert", 1, true) ~= nil
     or body:find("Unauthorized", 1, true) ~= nil
     or body:find("Logon failed", 1, true) ~= nil
+    or body:find("name=\"sap-user\"", 1, true) ~= nil
+    or body:find("sap-system-login", 1, true) ~= nil
+end
+
+local function final_http_code(headers)
+  local code = 0
+  for c in tostring(headers or ""):gmatch("HTTP/[%d%.]+%s+(%d+)") do
+    code = tonumber(c) or code
+  end
+  return code
 end
 
 function M.creds()
@@ -263,15 +271,13 @@ end
 -- disco y sin desincronización. Si no hay conexión usable, BORRA las vars (no dejar nada viejo).
 function M.export_env()
   local c = (state.validated and not state.auth_locked) and M.creds() or nil
-  vim.schedule(function()
-    if c then
-      vim.env.SAP_USER = c.user
-      vim.env.SAP_PASSWORD = c.pass
-    else
-      vim.env.SAP_USER = nil
-      vim.env.SAP_PASSWORD = nil
-    end
-  end)
+  if c then
+    vim.env.SAP_USER = c.user
+    vim.env.SAP_PASSWORD = c.pass
+  else
+    vim.env.SAP_USER = nil
+    vim.env.SAP_PASSWORD = nil
+  end
 end
 
 -- ¿La conexión está LISTA para mandar credenciales a SAP? (validada, sin freno y con password)
@@ -313,6 +319,12 @@ end
 local function curl_cfg(c)
   local esc = function(s) return (tostring(s or "")):gsub("\\", "\\\\"):gsub('"', '\\"') end
   return 'user = "' .. esc(c.user .. ":" .. c.pass) .. '"\n'
+end
+
+local function url_encode(v)
+  return (tostring(v or ""):gsub("[^%w%-%._~]", function(c)
+    return string.format("%%%02X", string.byte(c))
+  end))
 end
 
 -- Prueba las credenciales actuales con UNA sola petición de discovery. cb(ok, http_code).
@@ -376,9 +388,9 @@ function M.request(opts)
 
   local url = c.base .. opts.path
   local sep = opts.path:find("?") and "&" or "?"
-  url = url .. sep .. "sap-client=" .. c.client
+  url = url .. sep .. "sap-client=" .. url_encode(c.client)
   if opts.query then
-    for k, v in pairs(opts.query) do url = url .. "&" .. k .. "=" .. v end
+    for k, v in pairs(opts.query) do url = url .. "&" .. url_encode(k) .. "=" .. url_encode(v) end
   end
 
   local args = { "curl", "-sk", "-K", "-", "-b", cookie_file() }
@@ -405,9 +417,9 @@ end
 local function build_args(c, opts)
   local url = c.base .. opts.path
   local sep = opts.path:find("?") and "&" or "?"
-  url = url .. sep .. "sap-client=" .. c.client
+  url = url .. sep .. "sap-client=" .. url_encode(c.client)
   if opts.query then
-    for k, v in pairs(opts.query) do url = url .. "&" .. k .. "=" .. v end
+    for k, v in pairs(opts.query) do url = url .. "&" .. url_encode(k) .. "=" .. url_encode(v) end
   end
   local args = { "curl", "-sk", "-K", "-", "-b", cookie_file() }
   if opts.accept then vim.list_extend(args, { "-H", "Accept: " .. opts.accept }) end
@@ -500,17 +512,18 @@ function M.daemon_self_test(opts, cb)
   end)
 end
 
--- ── Petición CRUDA flexible (para lock/PUT/unlock de text elements, etc.) ────
--- opts: { method, path, query, body, accept, content_type, stateful, headers={..} }
--- Devuelve body (string), headers (string), http_code (number). Sync.
 function M.raw(opts)
   if not M.ready() then return nil, nil, 0 end
   local c = M.creds()
   if not c then return nil, nil, 0 end
   local url = c.base .. opts.path
   local sep = opts.path:find("?") and "&" or "?"
-  url = url .. sep .. "sap-client=" .. c.client
-  if opts.query then for k, v in pairs(opts.query) do url = url .. "&" .. k .. "=" .. v end end
+  url = url .. sep .. "sap-client=" .. url_encode(c.client)
+  if opts.query then
+    for k, v in pairs(opts.query) do
+      url = url .. "&" .. url_encode(k) .. "=" .. url_encode(v)
+    end
+  end
 
   local method = (opts.method or "GET"):upper()
   local args = { "curl", "-sk", "-K", "-", "-b", cookie_file(), "-c", cookie_file() }
@@ -537,7 +550,7 @@ function M.raw(opts)
   local headers, code = "", 0
   pcall(function()
     headers = table.concat(vim.fn.readfile(hdrfile), "\n")
-    code = tonumber(headers:match("HTTP/[%d%.]+%s+(%d+)")) or 0
+    code = final_http_code(headers)
   end)
   if bodyfile then pcall(os.remove, bodyfile) end
   pcall(os.remove, hdrfile)

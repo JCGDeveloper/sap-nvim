@@ -72,6 +72,31 @@ local URI_GROUP = {
 	{ "/sap/bc/adt/programs/includes/([^/]+)", "include" },
 	{ "/sap/bc/adt/functions/groups/([^/]+)", "functiongroup" },
 }
+
+local function materialize_source(uri, group, name)
+	local oks, source = pcall(require, "sap-nvim.core.source")
+	local oko, objtype = pcall(require, "sap-nvim.core.objtype")
+	local okh, adt_http = pcall(require, "sap-nvim.core.adt_http")
+	if not (oks and oko and okh and uri and group and name) then
+		return nil
+	end
+	local path = source.cache_dir() .. "/" .. objtype.gitfile(group, name)
+	if vim.fn.filereadable(path) == 1 then
+		return path
+	end
+	local source_uri = uri:gsub("#.*$", "")
+	if not source_uri:match("/source/main$") then
+		source_uri = source_uri .. "/source/main"
+	end
+	local body, _, code = adt_http.raw({ method = "GET", path = source_uri, accept = "text/plain" })
+	if code >= 200 and code < 300 and body and body ~= "" and not adt_http.is_auth_error(body) then
+		pcall(vim.fn.mkdir, vim.fn.fnamemodify(path, ":h"), "p")
+		pcall(vim.fn.writefile, vim.split(body:gsub("\r", ""), "\n", { plain = true }), path)
+		return path
+	end
+	return nil
+end
+
 -- sourceReference para fuentes remotas (VFS): mapea ref<->uri ADT, dedupe por uri.
 local function source_ref(uri)
 	if state.srcref_by_uri[uri] then
@@ -102,8 +127,8 @@ local function frame_source(frame)
 	group = group or "program"
 
 	if oks and oko then
-		local path = source.cache_dir() .. "/" .. objtype.gitfile(group, name)
-		if vim.fn.filereadable(path) == 1 then
+		local path = materialize_source(frame.uri, group, name)
+		if path then
 			return { name = name, path = path }
 		end
 	end
@@ -165,7 +190,20 @@ end
 local function emit_stopped(reason)
 	reset_varrefs()
 	state.current_frame = nil -- tras parar, el cursor del debugger está en el frame top
-	event("stopped", { reason = reason or "breakpoint", threadId = 1, allThreadsStopped = true })
+	event("invalidated", { areas = { "variables" }, threadId = 1 })
+	local preserve_focus = state and state.preserve_focus_next_stop == true
+	if state then
+		state.preserve_focus_next_stop = false
+	end
+	event("stopped", {
+		reason = reason or "breakpoint",
+		threadId = 1,
+		allThreadsStopped = true,
+		preserveFocusHint = preserve_focus or nil,
+	})
+	pcall(function()
+		require("sap-nvim.core.preview").refresh_active()
+	end)
 end
 
 local function emit_terminated()
@@ -185,6 +223,9 @@ function handlers.initialize(req)
 		supportsGotoTargetsRequest = true,
 		supportsStepInTargetsRequest = false,
 		supportsEvaluateForHovers = true, -- 🔥 ESTO ESTABA EN FALSE
+		supportsCompletionsRequest = true,
+		completionTriggerCharacters = { "-", "[", "]" },
+		supportsInvalidatedEvent = true,
 	})
 	event("initialized")
 end
@@ -202,6 +243,23 @@ function handlers.setBreakpoints(req)
 	local uri = path and file_to_uri(path)
 	local bps = args.breakpoints or {}
 	local resp_bps = {}
+	if uri and #bps == 0 then
+		local kept = {}
+		for _, bp in ipairs(state.pending_bps or {}) do
+			if bp.uri ~= uri and bp.path ~= path then
+				kept[#kept + 1] = bp
+			end
+		end
+		state.pending_bps = kept
+		if dbg.session then
+			dbg.clear_breakpoints_for_sources({ uri }, function()
+				respond(req, { breakpoints = {} })
+			end)
+		else
+			respond(req, { breakpoints = {} })
+		end
+		return
+	end
 	for _, b in ipairs(bps) do
 		state.bpctr = (state.bpctr or 0) + 1
 		local id = state.bpctr
@@ -268,7 +326,7 @@ function handlers.configurationDone(req)
 						})
 					end
 					next_bp()
-				end, sync_scope)
+				end, sync_scope, { source_uri = bp.uri })
 				end)
 			else
 				next_bp()
@@ -345,6 +403,7 @@ local function to_dap(ref, name, v)
 		value = value,
 		type = v.type or v.meta,
 		variablesReference = v.expandable and new_varref({ id = v.id, meta = v.meta, lines = v.table_lines }) or 0,
+		indexedVariables = v.meta == "table" and (v.table_lines or 0) or nil,
 	}
 end
 
@@ -357,9 +416,7 @@ function handlers.variables(req)
 	end
 
 	if info.meta == "table" then
-		-- TABLA: las filas se piden por getVariables con IDs construidos ID[1]..ID[N].
-		local row_ids = dbg.table_row_ids(info.id, info.lines or 0)
-		dbg.get_vars_by_id(row_ids, function(rows)
+		dbg.get_table_rows(info.id, info.lines or 0, function(rows)
 			local out = {}
 			for i, v in ipairs(rows) do
 				out[#out + 1] = to_dap(ref, "[" .. i .. "]", v)
@@ -469,6 +526,56 @@ function handlers.evaluate(req)
 		})
 	end)
 end
+
+local function completion_prefix(text, column)
+	local upto = tostring(text or ""):sub(1, math.max(0, (column or 1) - 1))
+	local owner, field_prefix = upto:match("([%w_<>/]+)%-([%w_]*)$")
+	if owner then
+		return upto, owner:upper(), field_prefix:upper()
+	end
+	local prefix = upto:match("([%w_<>/]+)$") or ""
+	return upto, nil, prefix:upper()
+end
+
+function handlers.completions(req)
+	local a = req.arguments or {}
+	local _, owner, prefix = completion_prefix(a.text or "", a.column or 1)
+
+	local function finish(vars)
+		local targets = {}
+		local seen = {}
+		for _, v in ipairs(vars or {}) do
+			local name = (v.name or ""):upper()
+			if name ~= "" and not seen[name] and (prefix == "" or name:sub(1, #prefix) == prefix) then
+				seen[name] = true
+				targets[#targets + 1] = {
+					label = v.name,
+					text = v.name,
+					type = v.meta == "table" and "variable" or (v.meta == "structure" and "field" or "value"),
+				}
+			end
+		end
+		table.sort(targets, function(x, y) return x.label < y.label end)
+		respond(req, { targets = targets })
+	end
+
+	if owner then
+		dbg.get_vars_by_id(owner, function(found)
+			local v = found and found[1]
+			if not v or not v.expandable then
+				return respond(req, { targets = {} })
+			end
+			dbg.get_variables(v.id, function(fields)
+				finish(fields)
+			end)
+		end)
+		return
+	end
+
+	dbg.get_variables({ "@LOCALS", "@GLOBALS" }, function(vars)
+		finish(vars)
+	end)
+end
 -- Pilar 1 (VFS remoto): el cliente pide el contenido de una fuente remota por sourceReference.
 function handlers.source(req)
 	local args = req.arguments or {}
@@ -525,6 +632,179 @@ local function teardown(req)
 end
 handlers.disconnect = teardown
 handlers.terminate = teardown
+
+-- ── Limpieza de breakpoints ABAP/DAP ────────────────────────────────────────
+
+local function notify(msg, level)
+	vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
+end
+
+local function bp_source_uri(bufnr)
+	local path = vim.api.nvim_buf_get_name(bufnr)
+	local uri = path ~= "" and file_to_uri(path) or nil
+	if uri then
+		return uri:gsub("%?.*$", "")
+	end
+	local ok, intel = pcall(require, "sap-nvim.core.intel")
+	if ok and intel.object_uri then
+		uri = intel.object_uri(bufnr)
+		return uri and uri:gsub("%?.*$", "") or nil
+	end
+	return nil
+end
+
+local function add_buf(set, out, bufnr)
+	if bufnr and vim.api.nvim_buf_is_valid(bufnr) and not set[bufnr] then
+		set[bufnr] = true
+		out[#out + 1] = bufnr
+	end
+end
+
+local function related_breakpoint_buffers(bufnr)
+	bufnr = bufnr or vim.api.nvim_get_current_buf()
+	local set, out = {}, {}
+	add_buf(set, out, bufnr)
+
+	local ok_adt, adt = pcall(require, "sap-nvim.core.adt")
+	if not ok_adt or not adt.related_object_names then
+		return out
+	end
+
+	local names = adt.related_object_names(bufnr)
+	local ok_bp, breakpoints = pcall(require, "dap.breakpoints")
+	if ok_bp then
+		for b, _ in pairs(breakpoints.get()) do
+			if vim.api.nvim_buf_is_valid(b) then
+				local meta = vim.b[b].sap_obj
+				local name = meta and meta.name or nil
+				if not name or name == "" then
+					local ok_objtype, objtype = pcall(require, "sap-nvim.core.objtype")
+					name = ok_objtype and objtype.name(vim.api.nvim_buf_get_name(b)) or nil
+				end
+				if name and names[name:upper()] then
+					add_buf(set, out, b)
+				end
+			end
+		end
+	end
+	for _, b in ipairs(vim.api.nvim_list_bufs()) do
+		local meta = vim.b[b].sap_obj
+		if meta and meta.name and names[meta.name:upper()] then
+			add_buf(set, out, b)
+		end
+	end
+	return out
+end
+
+local function clear_breakpoints(bufnrs, label)
+	local ok_bp, breakpoints = pcall(require, "dap.breakpoints")
+	if not ok_bp then
+		notify("nvim-dap no está disponible.", vim.log.levels.WARN)
+		return
+	end
+
+	local ids, sources = {}, {}
+	local local_count = 0
+	for _, bufnr in ipairs(bufnrs) do
+		local uri = bp_source_uri(bufnr)
+		if uri then
+			sources[#sources + 1] = uri
+		end
+		local bps = breakpoints.get(bufnr)[bufnr] or {}
+		for _, bp in ipairs(bps) do
+			if bp.state and bp.state.id then
+				ids[#ids + 1] = bp.state.id
+			end
+			if breakpoints.remove(bufnr, bp.line) then
+				local_count = local_count + 1
+			end
+		end
+	end
+
+	local function finish(remote)
+		pcall(function()
+			require("dapui.elements.breakpoints").render()
+		end)
+		local deleted = (remote and remote.deleted) or 0
+		local failed = (remote and remote.failed) or 0
+		local msg = ("%s: %d local(es), %d SAP"):format(label, local_count, deleted)
+		if failed > 0 then
+			msg = msg .. (", " .. failed .. " fallo(s)")
+		end
+		notify(msg, failed > 0 and vim.log.levels.WARN or vim.log.levels.INFO)
+	end
+
+	local combined = { deleted = 0, failed = 0 }
+	dbg.clear_breakpoints_by_ids(ids, function(by_id)
+		combined.deleted = combined.deleted + ((by_id and by_id.deleted) or 0)
+		combined.failed = combined.failed + ((by_id and by_id.failed) or 0)
+		dbg.clear_breakpoints_for_sources(sources, function(by_source)
+			combined.deleted = combined.deleted + ((by_source and by_source.deleted) or 0)
+			combined.failed = combined.failed + ((by_source and by_source.failed) or 0)
+			finish(combined)
+		end)
+	end)
+end
+
+function M.clear_breakpoints_current()
+	clear_breakpoints({ vim.api.nvim_get_current_buf() }, "Breakpoints del buffer limpiados")
+end
+
+function M.clear_breakpoints_related()
+	clear_breakpoints(related_breakpoint_buffers(vim.api.nvim_get_current_buf()), "Breakpoints raíz + includes limpiados")
+end
+
+function M.step_from_preview(action)
+	local ok, dap = pcall(require, "dap")
+	if not ok then
+		notify("nvim-dap no está disponible.", vim.log.levels.WARN)
+		return
+	end
+	if state then
+		state.preserve_focus_next_stop = true
+	end
+	local fn = ({
+		continue = "continue",
+		step_over = "step_over",
+		step_into = "step_into",
+		step_out = "step_out",
+	})[action]
+	if fn and dap[fn] then
+		dap[fn]()
+	end
+end
+
+local function mark_preserve_focus_if_preview()
+	local ok_preview, preview = pcall(require, "sap-nvim.core.preview")
+	if ok_preview and preview.should_preserve_focus and preview.should_preserve_focus() then
+		if state then
+			state.preserve_focus_next_stop = true
+		end
+	end
+end
+
+local function preview_aware_switchbuf(bufnr, line, column)
+	local ok_preview, preview = pcall(require, "sap-nvim.core.preview")
+	if ok_preview and preview.should_preserve_focus and preview.should_preserve_focus() then
+		return
+	end
+
+	local target_win
+	for _, win in ipairs(vim.api.nvim_list_wins()) do
+		if vim.api.nvim_win_get_buf(win) == bufnr then
+			target_win = win
+			break
+		end
+	end
+	if not target_win then
+		target_win = vim.fn.win_getid(vim.fn.winnr("#"))
+	end
+	if target_win and target_win ~= 0 and vim.api.nvim_win_is_valid(target_win) then
+		pcall(vim.api.nvim_set_current_win, target_win)
+		pcall(vim.api.nvim_win_set_buf, target_win, bufnr)
+		pcall(vim.api.nvim_win_set_cursor, target_win, { line, math.max((column or 1) - 1, 0) })
+	end
+end
 
 -- ── Servidor TCP + parser de framing ─────────────────────────────────────────
 
@@ -629,10 +909,25 @@ function M.setup()
 			name = "ABAP: Adjuntar debugger (external breakpoints)",
 		},
 	}
+	pcall(function()
+		require("sap-nvim.core.preview").install_dap_focus_guard()
+	end)
+	for _, command in ipairs({ "continue", "next", "stepIn", "stepOut" }) do
+		dap.listeners.before[command]["sap_nvim_preview_preserve_focus"] = mark_preserve_focus_if_preview
+	end
+	dap.defaults.abap.switchbuf = preview_aware_switchbuf
 
 	vim.api.nvim_create_user_command("SapDap", function()
 		require("dap").continue()
 	end, { desc = "sap-nvim: Lanzar el debugger ABAP (nvim-dap)" })
+
+	vim.api.nvim_create_user_command("SapDapClearBreakpoints", function()
+		M.clear_breakpoints_current()
+	end, { desc = "sap-nvim: Limpiar breakpoints del objeto/buffer actual" })
+
+	vim.api.nvim_create_user_command("SapDapClearBreakpointsRecursive", function()
+		M.clear_breakpoints_related()
+	end, { desc = "sap-nvim: Limpiar breakpoints de raíz + includes relacionados" })
 
 	-- 🔥 1. Configuración de la UI (Paneles anchos estilo SAP GUI)
 	local ok_dapui, dapui = pcall(require, "dapui")
@@ -670,6 +965,14 @@ function M.setup()
 			vim.notify("Falta el archivo lua/sap-nvim/core/preview.lua", vim.log.levels.ERROR)
 		end
 	end, { desc = "DAP: ALV Table Preview" })
+
+	vim.keymap.set("n", "<leader>db", function()
+		M.clear_breakpoints_current()
+	end, { desc = "DAP: Limpiar breakpoints del buffer" })
+
+	vim.keymap.set("n", "<leader>dB", function()
+		M.clear_breakpoints_related()
+	end, { desc = "DAP: Limpiar breakpoints raíz + includes" })
 end
 
 return M

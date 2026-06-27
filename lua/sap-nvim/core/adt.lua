@@ -141,10 +141,17 @@ end
 -- Fetch open transport orders (async)
 -- callback(transports, err)  — each entry is the raw sapcli output line
 function M.fetch_transport_orders(callback)
-	local ctx = M.get_current_context()
 	local args = { "sapcli", "cts", "list", "transport" }
-	if ctx and ctx.user and ctx.user ~= "" then
-		vim.list_extend(args, { "--owner", ctx.user:upper() })
+	local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+	if ok_http and not adt_http.ready() then
+		callback(nil, "Conexión SAP no validada. Usa :SapLogin.")
+		return
+	end
+	local creds = ok_http and adt_http.creds() or nil
+	local ctx = M.get_current_context()
+	local owner = (creds and creds.user) or (ctx and ctx.user) or nil
+	if owner and owner ~= "" then
+		vim.list_extend(args, { "--owner", owner:upper() })
 	end
 
 	local transports = {}
@@ -182,8 +189,8 @@ end
 -- de otros), no solo las del owner. callback(list, err) — item: "TRKORR  descripción  (user)".
 function M.fetch_object_transports(source_uri, devclass, callback)
 	local adt_http = require("sap-nvim.core.adt_http")
-	if not adt_http.is_available() then
-		callback(nil, "ADT no disponible")
+	if not adt_http.ready() then
+		callback(nil, "Conexión SAP no validada. Usa :SapLogin.")
 		return
 	end
 	local uri = (source_uri or ""):gsub("%?.*$", "")
@@ -199,15 +206,20 @@ function M.fetch_object_transports(source_uri, devclass, callback)
 		.. uri
 		.. "</URI></DATA></asx:values></asx:abap>"
 	-- raw es síncrono pero gestiona CSRF/cookies de forma fiable; el push es acción puntual.
-	local resp = adt_http.raw({
+	local resp, _, code = adt_http.raw({
 		method = "POST",
 		path = "/sap/bc/adt/cts/transportchecks",
 		accept = mt,
 		content_type = mt:gsub(";", "; "),
 		body = body,
 	})
-	if not resp or resp == "" then
-		callback(nil, "sin respuesta de transportchecks")
+	if code < 200 or code >= 300 or not resp or resp == "" then
+		callback(nil, "transportchecks falló (HTTP " .. tostring(code) .. ")")
+		return
+	end
+	if resp:find("<exc:exception", 1, true) or resp:find("<exception", 1, true) then
+		local msg = resp:match("<message[^>]*>([^<]*)</message>") or "excepción ADT en transportchecks"
+		callback(nil, msg:gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&amp;", "&"))
 		return
 	end
 	local out = {}
@@ -588,7 +600,7 @@ function M.activate_bulk(selected_objects, callback)
 	end
 
 	local function send(objects, preaudit)
-		local resp, headers = adt_http.raw({
+		local resp, headers, code = adt_http.raw({
 			method = "POST",
 			path = "/sap/bc/adt/activation",
 			query = { method = "activate", preauditRequested = preaudit and "true" or "false" },
@@ -596,12 +608,14 @@ function M.activate_bulk(selected_objects, callback)
 			content_type = "application/xml",
 			body = payload_for(objects),
 		})
-		return resp, headers
+		return resp, headers, code
 	end
 
-	local resp, headers = send(selected_objects, true)
+	local resp, headers, code = send(selected_objects, true)
 	if
-		resp
+		code >= 200
+		and code < 300
+		and resp
 		and (
 			resp:find("inactiveCtsObjects", 1, true)
 			or (headers or ""):find("application/vnd.sap.adt.inactivectsobjects", 1, true)
@@ -611,11 +625,28 @@ function M.activate_bulk(selected_objects, callback)
 			return not obj.deleted
 		end, parse_inactive_objects_xml(resp))
 		if #preaudit_objects > 0 then
-			resp = send(preaudit_objects, false)
+			resp, headers, code = send(preaudit_objects, false)
 		end
 	end
 
 	local qf = M._parse_activation_response(resp, vim.api.nvim_buf_get_name(0))
+	if code < 200 or code >= 300 then
+		qf[#qf + 1] = {
+			filename = vim.api.nvim_buf_get_name(0),
+			lnum = 0,
+			col = 1,
+			text = "Activación ADT falló (HTTP " .. tostring(code) .. ").",
+			type = "E",
+		}
+	elseif resp and (resp:find("<exc:exception", 1, true) or resp:find("<exception", 1, true)) then
+		qf[#qf + 1] = {
+			filename = vim.api.nvim_buf_get_name(0),
+			lnum = 0,
+			col = 1,
+			text = resp:match("<message[^>]*>([^<]*)</message>") or "Excepción ADT al activar.",
+			type = "E",
+		}
+	end
 	local errors = vim.tbl_filter(function(e)
 		return e.type == "E"
 	end, qf)
@@ -663,27 +694,59 @@ local function include_names_from_lines(lines, seen, ordered)
 	end
 end
 
+local function add_related_name(name, seen, ordered)
+	name = name and name:upper()
+	if name and name ~= "" and not seen[name] then
+		seen[name] = true
+		ordered[#ordered + 1] = name
+	end
+end
+
+local function program_name_from_uri(uri)
+	return uri and uri:match("/programs/programs/([^/%?#]+)")
+end
+
 function M.related_object_names(bufnr)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	local seen, ordered = {}, {}
 	local meta = vim.b[bufnr].sap_obj
 	if meta and meta.name then
-		seen[meta.name:upper()] = true
-		ordered[#ordered + 1] = meta.name:upper()
+		add_related_name(meta.name, seen, ordered)
 	end
 
 	include_names_from_lines(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), seen, ordered)
 
 	local ok_source, source = pcall(require, "sap-nvim.core.source")
 	local ok_objtype, objtype = pcall(require, "sap-nvim.core.objtype")
+	local ok_intel, intel = pcall(require, "sap-nvim.core.intel")
 	if ok_source and ok_objtype then
 		local dir = source.cache_dir()
+
+		if meta and meta.group == "include" and ok_intel and intel.main_programs then
+			for _, uri in ipairs(intel.main_programs(meta.name) or {}) do
+				local main = program_name_from_uri(uri)
+				add_related_name(main, seen, ordered)
+				local main_file = main and (dir .. "/" .. objtype.gitfile("program", main)) or nil
+				if main_file and vim.fn.filereadable(main_file) == 0 then
+					local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+					if ok_http and adt_http.is_available() then
+						local body = adt_http.request({ method = "GET", path = uri .. "/source/main", accept = "text/plain" })
+						if body and body ~= "" and not body:match("<exc:exception") then
+							pcall(vim.fn.writefile, vim.split(body:gsub("\r", ""), "\n", { plain = true }), main_file)
+						end
+					end
+				end
+			end
+		end
+
 		local i = 1
 		while i <= #ordered do
 			local name = ordered[i]
-			local p = dir .. "/" .. objtype.gitfile("include", name)
-			if vim.fn.filereadable(p) == 1 then
-				include_names_from_lines(vim.fn.readfile(p), seen, ordered)
+			for _, group in ipairs({ "program", "include" }) do
+				local p = dir .. "/" .. objtype.gitfile(group, name)
+				if vim.fn.filereadable(p) == 1 then
+					include_names_from_lines(vim.fn.readfile(p), seen, ordered)
+				end
 			end
 			i = i + 1
 		end
@@ -719,6 +782,18 @@ function M.activate_related_current(bufnr)
 		uri = current_uri:gsub("/source/main$", ""),
 		type = M.adt_type(meta and meta.group),
 	})
+
+	if meta and meta.group == "include" and ok_intel and intel.main_programs then
+		for _, uri in ipairs(intel.main_programs(meta.name) or {}) do
+			local main = program_name_from_uri(uri)
+			add({
+				name = main and main:upper() or main,
+				group = "program",
+				uri = uri:gsub("/source/main$", ""),
+				type = M.adt_type("program"),
+			})
+		end
+	end
 
 	M.fetch_inactive_objects(function(objects, err)
 		vim.schedule(function()
