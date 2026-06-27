@@ -18,6 +18,13 @@ local function is_own(name)
   return n:match("^[ZY]") ~= nil or n:match("^/%w+/") ~= nil
 end
 
+local function remote_delete_allowed()
+  local ok, cfg = pcall(function()
+    return require("sap-nvim.core.config").productive()
+  end)
+  return ok and cfg.allow_delete_objects == true
+end
+
 -- Parsea el MESSAGE con literal+número. Devuelve los trozos necesarios para reescribir.
 -- { indent, literal, msgno, type, class?, rest } donde `rest` es lo que va tras el
 -- '...'(nnn) (TYPE/DISPLAY/WITH... + punto).
@@ -235,6 +242,13 @@ end
 
 -- Borra el mensaje bajo el cursor (con confirmación, §7 S2).
 local function manage_delete(buf)
+  if not remote_delete_allowed() then
+    notify(
+      "Borrado remoto desactivado por seguridad. Para habilitarlo: productive.allow_delete_objects = true.",
+      vim.log.levels.WARN
+    )
+    return
+  end
   local st = manage_state[buf]; if not st then return end
   local no = msgno_under_cursor()
   if not no or not st.by_no[no] then notify("Pon el cursor en una línea de mensaje.", vim.log.levels.WARN); return end

@@ -72,7 +72,7 @@ sap-nvim atajos:
   gd           = <leader>ag (en buffers ABAP)
   -            Volver al archivo anterior de la navegacion (:SapBack)
   <leader>an   Crear objeto ABAP EN SAP y abrirlo (:SapNew)
-  <leader>aX   Borrar el objeto actual del sistema (:SapDelete)
+  <leader>aX   Borrar objeto remoto (:SapDelete, desactivado salvo opt-in)
   <leader>aw   Where-used list → quickfix
   <leader>aD   Diff local vs sistema SAP (:SapDiff)
 
@@ -217,7 +217,7 @@ sap-nvim atajos:
 		{ "<leader>aG", "<cmd>SapActivateAll<cr>", "Gestor global de activación" },
 		{ "<C-F3>", "<cmd>SapActivate<cr>", "Activar objeto actual (Ctrl+F3)" },
 		{ "<leader>au", "<cmd>SapPush<cr>", "Subir (push) sin activar" },
-		{ "<leader>aX", "<cmd>SapDelete<cr>", "Borrar objeto del sistema" },
+		{ "<leader>aX", "<cmd>SapDelete<cr>", "Borrar objeto remoto (requiere opt-in)" },
 		{ "<leader>ao", "<cmd>SapOutline<cr>", "Outline del objeto" },
 		{ "<leader>ag", "<cmd>SapGotoDef<cr>", "Ir a definición" },
 		{ "<leader>aw", "<cmd>SapWhereUsed<cr>", "Where-used" },

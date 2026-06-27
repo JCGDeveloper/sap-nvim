@@ -105,6 +105,11 @@ function M.preview(sql, rows)
     notify("No hay conexión SAP. Usa :SapSetup primero.", vim.log.levels.WARN)
     return
   end
+  sql = vim.trim(tostring(sql or ""))
+  if not sql:upper():match("^SELECT%f[%s%(]") then
+    notify(":SapData solo permite consultas SELECT de solo lectura.", vim.log.levels.WARN)
+    return
+  end
   rows = rows or require("sap-nvim.core.config").data().rows or 100
   notify("Consultando: " .. sql .. " (máx " .. rows .. " filas)...")
 
@@ -214,15 +219,36 @@ local function read_and_show(group, real_name)
   })
 end
 
--- Muestra la definición de tabla / CDS / estructura / data element / dominio. Resuelve el
--- tipo y el NOMBRE REAL con `abap find` (clave para CDS: el nombre de la entidad
--- -p.ej. ZCDS_JCG_CALE- difiere del DDL source -ZCDS_JCG_CALENDARIO-).
-function M.read_definition(name)
-  if not adt.is_configured() then
-    notify("No hay conexión SAP. Usa :SapSetup primero.", vim.log.levels.WARN)
-    return
+-- Tipo ADT completo (adtcore:type) -> grupo de sapcli para leer la definición.
+local ADT_TYPE_TO_GROUP = {
+  ["TABL/DT"] = "table",
+  ["TABL/DS"] = "structure",
+  ["VIEW/DV"] = "table",
+  ["DDLS/DF"] = "ddl",
+  ["DTEL/DE"] = "dataelement",
+  ["DOMA/DO"] = "domain",
+}
+local function adt_data_group(adt_type)
+  if not adt_type then return nil end
+  if ADT_TYPE_TO_GROUP[adt_type] then return ADT_TYPE_TO_GROUP[adt_type] end
+  local prefix = adt_type:match("^(%u+)")
+  return TYPE_TO_GROUP[prefix or ""]
+end
+
+-- NOMBRE REAL leíble. Para CDS (ddl) el nombre de la ENTIDAD (p.ej. ZCDS_JCG_CALE) difiere del
+-- DDL source (ZCDS_JCG_CALENDARIO); la URI del objeto SIEMPRE trae el source (.../sources/<src>),
+-- así garantizamos que `sapcli ddl read` reciba el nombre correcto, devuelva ADT la entidad o el
+-- source como adtcore:name.
+local function real_read_name(group, row_name, uri)
+  if group == "ddl" then
+    local src = (uri or ""):match("/sources/([^/%?#]+)")
+    if src and src ~= "" then return src:upper() end
   end
-  name = name:upper()
+  return row_name:upper()
+end
+
+-- Fallback DEGRADADO (sin ADT): resuelve tipo + nombre real con `sapcli abap find`.
+local function read_definition_sapcli(name)
   notify("Resolviendo " .. name .. "...")
   local rows = {}
   vim.fn.jobstart({ "sapcli", "abap", "find", name }, {
@@ -256,6 +282,54 @@ function M.read_definition(name)
       end)
     end,
   })
+end
+
+-- Muestra la definición de tabla / CDS / estructura / data element / dominio. Ruta PRINCIPAL:
+-- búsqueda ADT (estructurada, fiable); fallback a `sapcli abap find` si ADT no está disponible.
+-- Clave para CDS: la entidad (p.ej. ZCDS_JCG_CALE) difiere del DDL source (ZCDS_JCG_CALENDARIO);
+-- el source real se toma de la URI del objeto -> `sapcli ddl read` recibe el nombre correcto.
+function M.read_definition(name)
+  if not adt.is_configured() then
+    notify("No hay conexión SAP. Usa :SapSetup primero.", vim.log.levels.WARN)
+    return
+  end
+  name = name:upper()
+  local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+  if not (ok_http and adt_http.is_available()) then
+    return read_definition_sapcli(name)
+  end
+  notify("Resolviendo " .. name .. "...")
+  adt.find_objects_async(name, function(results, err)
+    if not results then
+      notify("No se pudo resolver " .. name .. (err and (": " .. err) or "") .. ".", vim.log.levels.WARN)
+      return
+    end
+    -- Filtra a tipos DDIC/CDS leíbles.
+    local rows = {}
+    for _, r in ipairs(results) do
+      local group = adt_data_group(r.type)
+      if group then
+        rows[#rows + 1] = { name = r.name, group = group, uri = r.uri }
+      end
+    end
+    -- 1) coincidencia exacta de nombre.
+    for _, r in ipairs(rows) do
+      if r.name:upper() == name then
+        return read_and_show(r.group, real_read_name(r.group, r.name, r.uri))
+      end
+    end
+    -- 2) CDS: el nombre buscado era la entidad -> leer el primer DDL source (nombre real de la URI).
+    for _, r in ipairs(rows) do
+      if r.group == "ddl" then
+        return read_and_show("ddl", real_read_name("ddl", r.name, r.uri))
+      end
+    end
+    -- 3) primer objeto leíble.
+    for _, r in ipairs(rows) do
+      return read_and_show(r.group, real_read_name(r.group, r.name, r.uri))
+    end
+    notify("No se encontró definición para " .. name .. " (tabla/CDS/estructura/...).", vim.log.levels.WARN)
+  end)
 end
 
 -- Alias para compatibilidad.

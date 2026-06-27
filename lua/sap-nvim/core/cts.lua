@@ -40,6 +40,13 @@ local function confirm_destructive(id, prompt, cb)
 	end)
 end
 
+local function transport_delete_allowed()
+	local ok_cfg, cfg = pcall(function()
+		return require("sap-nvim.core.config").productive()
+	end)
+	return ok_cfg and cfg and cfg.allow_delete_transports == true
+end
+
 local function current_object()
 	local bufnr = vim.api.nvim_get_current_buf()
 	local meta = vim.b[bufnr].sap_obj
@@ -215,6 +222,13 @@ end
 
 -- ── 2. Eliminar Orden (NUEVO) ────────────────────────────────────────────────
 function M.delete_transport()
+	if not transport_delete_allowed() then
+		notify(
+			"Borrado de transportes desactivado por seguridad. Para habilitarlo: productive.allow_delete_transports = true.",
+			vim.log.levels.WARN
+		)
+		return
+	end
 	if not adt_http.ready() then
 		notify("Conexión SAP no validada. Usa :SapLogin.", vim.log.levels.WARN)
 		return

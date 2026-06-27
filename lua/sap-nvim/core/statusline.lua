@@ -83,13 +83,26 @@ local function activation_indicator()
   return ""
 end
 
+-- Badge compacto de capacidades del objeto abierto, estilo Eclipse: "[V E A T]".
+-- Cada letra aparece si la capacidad está; si no, se atenúa con "-". ASCII, legible en
+-- cualquier terminal. Lee vim.b.sap_caps (cacheado por source.open); vacío si no hay objeto.
+local function caps_badge()
+  local caps = vim.b.sap_caps
+  if not caps or not caps.view then return "" end
+  local function flag(on, letter) return on and letter or "-" end
+  return " [" .. flag(caps.view, "V")
+    .. " " .. flag(caps.edit, "E")
+    .. " " .. flag(caps.activate, "A")
+    .. " " .. flag(caps.transport, "T") .. "]"
+end
+
 -- lualine component — add it to lualine_x or any section:
 --   { require('sap-nvim.core.statusline').component, color = { fg = '#e8a87c' } }
 M.component = {
   function()
     local ctx = get_cached()
     if not ctx then return "" end
-    return " " .. ctx.sysid .. " · " .. ctx.client .. " · " .. ctx.user .. activation_indicator()
+    return " " .. ctx.sysid .. " · " .. ctx.client .. " · " .. ctx.user .. activation_indicator() .. caps_badge()
   end,
   cond = function()
     local ft = vim.bo.filetype
@@ -110,7 +123,7 @@ local function apply_native_statusline()
   end
   if not _has_lualine then
     local sap_part = " [SAP: " .. ctx.sysid .. "/" .. ctx.client .. "/" .. ctx.user .. activation_indicator() .. "]"
-    vim.opt_local.statusline = "%f %m%=%y" .. sap_part .. " %l:%c "
+    vim.opt_local.statusline = "%f %m%=%y" .. sap_part .. caps_badge() .. " %l:%c "
   end
 end
 
@@ -147,6 +160,34 @@ function M.setup()
   vim.keymap.set("n", "<leader>asi", function()
     vim.cmd("SapStatus")
   end, { desc = "ABAP: Info de conexion activa" })
+
+  -- Muestra las 4 capacidades del objeto abierto y, si algo está denegado, el motivo.
+  vim.api.nvim_create_user_command("SapCaps", function()
+    local bufnr = vim.api.nvim_get_current_buf()
+    local ok, caps = pcall(function()
+      return require("sap-nvim.core.source").capabilities(bufnr)
+    end)
+    if not ok or not caps or not caps.view then
+      vim.notify("[sap-nvim] No hay objeto SAP abierto en este buffer.", vim.log.levels.WARN)
+      return
+    end
+    local function mark(on) return on and "SÍ" or "no" end
+    local lines = {
+      "[sap-nvim] Capacidades del objeto:",
+      "  VER       : " .. mark(caps.view),
+      "  EDITAR    : " .. mark(caps.edit),
+      "  ACTIVAR   : " .. mark(caps.activate),
+      "  TRANSPORTAR: " .. mark(caps.transport),
+    }
+    if caps.reason and not (caps.edit and caps.activate and caps.transport) then
+      table.insert(lines, "  Motivo    : " .. caps.reason)
+    end
+    vim.notify(table.concat(lines, "\n"), vim.log.levels.INFO)
+  end, { desc = "sap-nvim: Mostrar capacidades (VER/EDITAR/ACTIVAR/TRANSPORTAR) del objeto" })
+
+  vim.keymap.set("n", "<leader>asc", function()
+    vim.cmd("SapCaps")
+  end, { desc = "ABAP: Capacidades del objeto abierto" })
 end
 
 return M

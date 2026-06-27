@@ -9,14 +9,14 @@ local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
--- Maps file extension → sapcli read command args builder
+-- Mapea la extensión del fichero → builder del comando sapcli read (FALLBACK).
 local READERS = {
   abap = function(name) return { "sapcli", "program",   "read", name } end,
   prog = function(name) return { "sapcli", "program",   "read", name } end,
   cls  = function(name) return { "sapcli", "class",     "read", name } end,
   intf = function(name) return { "sapcli", "interface", "read", name } end,
 }
--- Stable sorted list for display
+-- Lista ordenada estable para mostrar
 local SUPPORTED_EXTS = { "abap", "cls", "intf", "prog" }
 
 local function open_diff(obj_name, system_lines)

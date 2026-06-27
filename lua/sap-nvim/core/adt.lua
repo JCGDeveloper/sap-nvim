@@ -61,6 +61,123 @@ function M.adt_type(group)
 	return ADT_TYPE_BY_GROUP[group]
 end
 
+-- Mapa INVERSO: tipo ADT completo (adtcore:type, p.ej. "CLAS/OC") -> grupo de sapcli/source.
+-- Lo usan los consumidores de la búsqueda ADT (navigate goto_global) para abrir el objeto sin
+-- heurística frágil: la fila ADT ya trae el tipo exacto.
+local GROUP_BY_ADT_TYPE = {
+	["CLAS/OC"] = "class",
+	["INTF/OI"] = "interface",
+	["PROG/P"] = "program",
+	["PROG/I"] = "include",
+	["FUGR/F"] = "functiongroup",
+	["FUGR/FF"] = "functionmodule",
+	["FUNC/FF"] = "functionmodule",
+	["TABL/DT"] = "table",
+	["TABL/DS"] = "structure",
+	["VIEW/DV"] = "table",
+	["TTYP/TT"] = "tabletype",
+	["DTEL/DE"] = "dataelement",
+	["DOMA/DO"] = "domain",
+	["MSAG/N"] = "messageclass",
+	["DDLS/DF"] = "ddls",
+	["DDLX/EX"] = "ddlx",
+	["DCLS/DL"] = "dcl",
+	["BDEF/BDO"] = "bdef",
+	["SRVD/SRV"] = "srvd",
+}
+
+-- Grupo de sapcli/source a partir del tipo ADT. nil si no se reconoce.
+function M.group_from_adt_type(adt_type)
+	if not adt_type or adt_type == "" then
+		return nil
+	end
+	local g = GROUP_BY_ADT_TYPE[adt_type]
+	if g then
+		return g
+	end
+	-- Fallback por prefijo (subtipos no listados): PROG/*, FUGR/*, y aliases de grupo.
+	local prefix, sub = adt_type:match("(%u+)/(%u+)")
+	prefix = prefix or adt_type:match("^(%u+)")
+	if prefix == "PROG" then
+		return sub == "I" and "include" or "program"
+	end
+	if prefix == "FUGR" then
+		return sub == "F" and "functiongroup" or "functionmodule"
+	end
+	return ({ CLAS = "class", INTF = "interface", FUGS = "functiongroup" })[prefix or ""]
+end
+
+-- Codifica un valor para la query string de ADT, conservando el comodín `*`.
+local function search_url_encode(str)
+	if not str then
+		return ""
+	end
+	return (str:gsub("[^%w_]", function(c)
+		if c == "*" then
+			return "*"
+		end
+		return string.format("%%%02X", string.byte(c))
+	end))
+end
+
+-- Parsea el XML de resultados del Information System de ADT (mismo endpoint que core/search)
+-- a filas ESTRUCTURADAS. Cada <... adtcore:.../> trae name/type/uri/packageName/description.
+-- Dedupe por nombre (como hace core/search.parse_body).
+local function parse_search_results(body)
+	local rows, seen = {}, {}
+	if not body or body == "" then
+		return rows
+	end
+	for tag in body:gmatch("<[^>]+>") do
+		local name = tag:match('adtcore:name="([^"]*)"')
+		local typ = tag:match('adtcore:type="([^"]*)"')
+		if name and typ and not seen[name] then
+			seen[name] = true
+			rows[#rows + 1] = {
+				name = unxml(name),
+				type = unxml(typ),
+				uri = unxml(tag:match('adtcore:uri="([^"]*)"') or ""),
+				packageName = unxml(tag:match('adtcore:packageName="([^"]*)"') or ""),
+				description = unxml(tag:match('adtcore:description="([^"]*)"') or ""),
+			}
+		end
+	end
+	return rows
+end
+
+-- Búsqueda de objetos vía ADT (el MISMO endpoint que :SapSearchLive), asíncrona y fiable
+-- (no parsea texto humano de sapcli ni arriesga ráfagas de login). callback(rows, err) con
+-- rows = lista de { name, type (adtcore:type p.ej. "CLAS/OC"), uri, packageName, description }.
+-- `query` se manda tal cual (en mayúsculas): usa `*` para prefijo, sin `*` = coincidencia exacta.
+function M.find_objects_async(query, callback)
+	local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+	if not ok_http or not adt_http.is_available() then
+		return callback(nil, "ADT no disponible")
+	end
+	local q = (query or ""):upper():gsub("%*+", "*")
+	if q == "" then
+		return callback(nil, "Consulta vacía")
+	end
+	local path = "/sap/bc/adt/repository/informationsystem/search?query="
+		.. search_url_encode(q)
+		.. "&maxResults=100&operation=quickSearch"
+	adt_http.request_async({
+		method = "GET",
+		path = path,
+		accept = "application/vnd.sap.adt.repository.informationsystem.searchresult.v1+xml, application/xml",
+	}, function(body)
+		vim.schedule(function()
+			if not body or body == "" then
+				return callback(nil, "Sin respuesta de SAP en la búsqueda")
+			end
+			if adt_http.is_auth_error(body) then
+				return callback(nil, "Autenticación rechazada por SAP")
+			end
+			callback(parse_search_results(body), nil)
+		end)
+	end)
+end
+
 local function productive()
 	local ok, cfg = pcall(function()
 		return require("sap-nvim.core.config").productive()
@@ -267,9 +384,8 @@ function M.fetch_object_transports(source_uri, devclass, callback)
 	callback(out, nil)
 end
 
--- Search ABAP objects by name pattern (async)
--- callback(results, err)
-function M.fetch_objects(query, callback)
+-- Fallback DEGRADADO: búsqueda por sapcli (texto humano) cuando ADT no está disponible.
+local function fetch_objects_sapcli(query, callback)
 	local results = {}
 	local stderr = {}
 
@@ -298,6 +414,28 @@ function M.fetch_objects(query, callback)
 			end
 		end,
 	})
+end
+
+-- Search ABAP objects by name pattern (async). Ruta PRINCIPAL: ADT (find_objects_async);
+-- fallback degradado a sapcli si ADT no está disponible.
+-- callback(results, err) — results = lista de STRINGS en formato tabla "TIPO | NOMBRE | DESCR"
+-- (col1 = adtcore:type p.ej. "CLAS/OC"), el shape que esperan sus llamadores (browser,
+-- intel.fetch_objects, type_resolver.parse_ddic_output).
+function M.fetch_objects(query, callback)
+	local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+	if not (ok_http and adt_http.is_available()) then
+		return fetch_objects_sapcli(query, callback)
+	end
+	M.find_objects_async(query, function(rows, err)
+		if not rows then
+			return callback(nil, err)
+		end
+		local out = {}
+		for _, r in ipairs(rows) do
+			out[#out + 1] = string.format("%s | %s | %s", r.type, r.name, r.description or "")
+		end
+		callback(out, nil)
+	end)
 end
 
 -- Seleccionar conexión activa
@@ -987,8 +1125,19 @@ function M.run_aunit()
 	})
 end
 
--- Buscar objetos en SAP
+-- Buscar objetos en SAP (vía ADT; fallback sapcli si ADT no está disponible).
 function M.search(query)
+	local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+	if ok_http and adt_http.is_available() then
+		M.find_objects_async(query, function(rows, err)
+			if rows and #rows > 0 then
+				vim.notify(("sap-nvim: %d resultados para '%s'"):format(#rows, query))
+			elseif err then
+				vim.notify("sap-nvim: " .. err, vim.log.levels.WARN)
+			end
+		end)
+		return
+	end
 	vim.fn.jobstart({ "sapcli", "abap", "find", query }, {
 		on_stdout = function(_, data)
 			if data then

@@ -187,9 +187,17 @@ end
 
 -- ── stopped / terminated ─────────────────────────────────────────────────────
 
+local function close_dapui()
+	local ok, dapui = pcall(require, "dapui")
+	if ok and dapui.close then
+		pcall(dapui.close)
+	end
+end
+
 local function emit_stopped(reason)
 	reset_varrefs()
 	state.current_frame = nil -- tras parar, el cursor del debugger está en el frame top
+	close_dapui()
 	event("invalidated", { areas = { "variables" }, threadId = 1 })
 	local preserve_focus = state and state.preserve_focus_next_stop == true
 	if state then
@@ -202,13 +210,25 @@ local function emit_stopped(reason)
 		preserveFocusHint = preserve_focus or nil,
 	})
 	pcall(function()
-		require("sap-nvim.core.preview").refresh_active()
+		local preview = require("sap-nvim.core.preview")
+		preview.open_cockpit()
+		preview.refresh_active()
 	end)
 end
 
 local function emit_terminated()
+	close_dapui()
 	event("terminated")
 	log("terminated")
+	-- A5: al terminar la depuración cerramos la sesión ADT stateful (cookies + listener)
+	-- en lugar de dejarla viva hasta :SapDebugKillAll. Guard idempotente para no
+	-- duplicar el cierre si `teardown` ya lo lanzó.
+	if dbg.session and not (state and state.__teardown_done) then
+		if state then
+			state.__teardown_done = true
+		end
+		dbg.stop(function() end)
+	end
 end
 
 -- ── Handlers por comando DAP ─────────────────────────────────────────────────
@@ -416,13 +436,24 @@ function handlers.variables(req)
 	end
 
 	if info.meta == "table" then
-		dbg.get_table_rows(info.id, info.lines or 0, function(rows)
+		-- A2: respetar la paginación que pide el cliente DAP. Cuando llegan `start`
+		-- (0-based) y `count`, pedimos SOLO ese rango de filas; si no, mantenemos el
+		-- comportamiento previo (primera página de MAX_CHILDREN filas).
+		local args = req.arguments or {}
+		local total = info.lines or 0
+		local count = tonumber(args.count)
+		local paged = count ~= nil and count > 0
+		local offset = paged and (tonumber(args.start) or 0) or nil
+		local limit = paged and count or nil
+		dbg.get_table_rows(info.id, total, function(rows)
+			local base = offset or 0
 			local out = {}
 			for i, v in ipairs(rows) do
-				out[#out + 1] = to_dap(ref, "[" .. i .. "]", v)
+				-- el índice mostrado refleja la fila real dentro de la tabla
+				out[#out + 1] = to_dap(ref, "[" .. (base + i) .. "]", v)
 			end
 			respond(req, { variables = out })
-		end)
+		end, offset, limit)
 	else
 		-- Estructura / scope: campos por getChildVariables.
 		dbg.get_variables(info.id, function(vars)
@@ -621,6 +652,9 @@ function handlers.stepOut(req)
 end
 
 local function teardown(req)
+	if state then
+		state.__teardown_done = true
+	end
 	dbg.stop(function()
 		respond(req)
 	end)
@@ -918,7 +952,17 @@ function M.setup()
 	dap.defaults.abap.switchbuf = preview_aware_switchbuf
 
 	vim.api.nvim_create_user_command("SapDap", function()
+		close_dapui()
+		pcall(function()
+			require("sap-nvim.core.preview").open_cockpit()
+		end)
 		require("dap").continue()
+		vim.defer_fn(function()
+			close_dapui()
+			pcall(function()
+				require("sap-nvim.core.preview").open_cockpit()
+			end)
+		end, 250)
 	end, { desc = "sap-nvim: Lanzar el debugger ABAP (nvim-dap)" })
 
 	vim.api.nvim_create_user_command("SapDapClearBreakpoints", function()

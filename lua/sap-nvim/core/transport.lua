@@ -24,6 +24,13 @@ local function confirm_destructive(id, prompt, cb)
   end)
 end
 
+local function transport_delete_allowed()
+  local ok, cfg = pcall(function()
+    return require("sap-nvim.core.config").productive()
+  end)
+  return ok and cfg.allow_delete_transports == true
+end
+
 local function ensure_ready()
   local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
   if ok_http and adt_http.ready() then
@@ -169,6 +176,13 @@ end
 
 -- Borrar una orden de transporte (muestra selector y confirma; §7 destructivo)
 function M.delete_transport()
+  if not transport_delete_allowed() then
+    notify(
+      "Borrado de transportes desactivado por seguridad. Para habilitarlo: productive.allow_delete_transports = true.",
+      vim.log.levels.WARN
+    )
+    return
+  end
   if not ensure_ready() then return end
   if not adt.is_configured() then
     notify("No hay conexión SAP configurada.", vim.log.levels.WARN)

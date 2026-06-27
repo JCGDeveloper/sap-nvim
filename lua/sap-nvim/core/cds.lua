@@ -8,6 +8,32 @@ local function notify(msg, level)
 	end)
 end
 
+local function is_customer_namespace(name)
+	name = (name or ""):upper()
+	return name:match("^[ZY]") ~= nil or name:match("^/[^/]+/") ~= nil
+end
+
+local function safe_mode_enabled()
+	local ok, cfg = pcall(function()
+		return require("sap-nvim.core.config").productive()
+	end)
+	return not ok or cfg.safe_mode ~= false
+end
+
+local function apply_sap_policy(bufnr, obj)
+	vim.b[bufnr].sap_obj = obj
+	if safe_mode_enabled() and not is_customer_namespace(obj.name) then
+		local reason = "objeto estándar/no cliente en modo productivo"
+		vim.b[bufnr].sap_obj.readonly = true
+		vim.b[bufnr].sap_readonly_reason = reason
+		vim.bo[bufnr].readonly = true
+		vim.bo[bufnr].modifiable = false
+	end
+	pcall(function()
+		vim.b[bufnr].sap_caps = require("sap-nvim.core.source").capabilities(bufnr)
+	end)
+end
+
 local function unxml(s)
 	return (s or ""):gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"'):gsub("&apos;", "'"):gsub("&amp;", "&")
 end
@@ -904,7 +930,7 @@ function M.open_adt(kind, name, opts)
 			local b = vim.api.nvim_get_current_buf()
 			vim.bo[b].swapfile = false
 			local sapcli_group = kind == "ddls" and "ddl" or kind
-			vim.b[b].sap_obj = { name = name:upper(), group = sapcli_group, uri = uri }
+			apply_sap_policy(b, { name = name:upper(), group = sapcli_group, uri = uri })
 			-- Sin ftdetect propio para .ddls/.bdef/etc.: usamos filetype `abap`. Así se
 			-- aplica el coloreado nativo (abap.vim trae Neovim; select/from/key/as/on… son
 			-- keywords ABAP) sin depender de un parser treesitter de CDS, y se enganchan

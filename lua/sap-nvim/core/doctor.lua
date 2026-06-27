@@ -91,7 +91,7 @@ function M.run()
     { "Conectividad + login (abap systeminfo)", { "sapcli", "abap", "systeminfo" } },
     { "Objetos inactivos (activation inactiveobjects list)", { "sapcli", "activation", "inactiveobjects", "list" } },
     { "Búsqueda global de objetos (abap find *)", { "sapcli", "abap", "find", "--max-results", "5", "*" } },
-    { "Transportes (cts list transport)",       { "sapcli", "cts", "list", "transport" } },
+    { "Transportes visibles (cts list transport)", { "sapcli", "cts", "list", "transport" } },
   }
 
   local i = 0

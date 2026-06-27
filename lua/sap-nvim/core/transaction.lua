@@ -12,6 +12,13 @@ local function notify(msg, level)
 	vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
+local function remote_delete_allowed()
+	local ok, cfg = pcall(function()
+		return require("sap-nvim.core.config").productive()
+	end)
+	return ok and cfg.allow_delete_objects == true
+end
+
 -- Muestra `lines` en un split de solo lectura con q/- para cerrar.
 local function show(bufname, lines)
 	local b = vim.api.nvim_create_buf(true, true)
@@ -88,6 +95,13 @@ end
 
 -- BORRAR una transacción (§7 destructivo): confirma y resuelve transporte.
 function M.delete(name)
+	if not remote_delete_allowed() then
+		notify(
+			"Borrado remoto desactivado por seguridad. Para habilitarlo: productive.allow_delete_objects = true.",
+			vim.log.levels.WARN
+		)
+		return
+	end
 	if not name or name == "" then
 		return
 	end

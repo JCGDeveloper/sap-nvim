@@ -278,6 +278,19 @@ local function clean_bp_uri(uri)
 	return (uri or ""):gsub("#.*$", ""):gsub("%?.*$", "")
 end
 
+-- Detecta el caso "ubicación no válida": SAP no permite un breakpoint en esa línea
+-- porque no hay sentencia ejecutable (línea en blanco, declaración, comentario…).
+local function is_unavailable_location(text)
+	local t = tostring(text or ""):lower()
+	return t:find("unavailable location", 1, true) ~= nil
+		or t:find("no executable", 1, true) ~= nil
+		or t:find("not executable", 1, true) ~= nil
+		or t:find("executable statement", 1, true) ~= nil
+		or t:find("invalid line", 1, true) ~= nil
+		or t:find("invalidlocation", 1, true) ~= nil
+		or t:find("kein ausführbare", 1, true) ~= nil
+end
+
 function M.set_breakpoint(bp_uri, line, cb, sync_scope, opts)
 	opts = opts or {}
 	local s = M.session
@@ -322,11 +335,28 @@ function M.set_breakpoint(bp_uri, line, cb, sync_scope, opts)
 		accept = "application/xml",
 	}, function(resp, status)
 		local errmsg = resp and resp:match('errorMessage="([^"]+)"')
+		local exc_msg, subtype = parse_exception(resp)
 		local id = resp and resp:match('<breakpoint[^>]-%sid="([^"]*)"')
-		if parse_exception(resp) or (errmsg and errmsg ~= "") then
-			fail("bp", "L" .. line .. " rechazado: " .. (errmsg or "ver SAP"))
+		if exc_msg or (errmsg and errmsg ~= "") then
+			local raw = errmsg or exc_msg or "rechazado"
+			-- A6: si SAP indica que la ubicación no es válida (no hay sentencia
+			-- ejecutable en esa línea), devolvemos un mensaje accionable en español.
+			local unavailable = is_unavailable_location(raw)
+				or is_unavailable_location(resp)
+				or is_unavailable_location(subtype)
+			local friendly = raw
+			if unavailable then
+				friendly = "La línea " .. line .. " no es ejecutable; mueve el breakpoint a una sentencia."
+			end
+			fail("bp", "L" .. line .. " rechazado: " .. friendly)
 			if cb then
-				cb(false, { errorMessage = errmsg or "rechazado", uri = uri })
+				cb(false, {
+					errorMessage = friendly,
+					raw = raw,
+					line = line,
+					uri = uri,
+					unavailableLocation = unavailable,
+				})
 			end
 			return
 		end
@@ -676,17 +706,28 @@ function M.get_vars_by_id(ids, cb)
 	end)
 end
 
-function M.table_row_ids(id, lines)
-	local n = math.min(lines or 0, M.MAX_CHILDREN)
+-- Genera los IDs de fila de una tabla para un rango [offset+1 .. offset+limit].
+-- offset (0-based) y limit (tamaño de página) permiten paginar tablas grandes en
+-- lugar de truncar siempre desde la primera fila. Por defecto: offset=0, limit=MAX_CHILDREN.
+function M.table_row_ids(id, lines, offset, limit)
+	lines = lines or 0
+	offset = tonumber(offset) or 0
+	if offset < 0 then
+		offset = 0
+	end
+	limit = tonumber(limit) or M.MAX_CHILDREN
+	local first = offset + 1
+	local last = math.min(lines, offset + limit)
 	local ids = {}
-	for k = 1, n do
+	for k = first, last do
 		ids[#ids + 1] = (id:gsub("%[%]$", "")) .. "[" .. k .. "]"
 	end
 	return ids
 end
 
-function M.get_table_rows(id, lines, cb)
-	local row_ids = M.table_row_ids(id, lines)
+-- Propaga offset/limit para pedir SOLO la página solicitada de la tabla.
+function M.get_table_rows(id, lines, cb, offset, limit)
+	local row_ids = M.table_row_ids(id, lines, offset, limit)
 	if #row_ids == 0 then
 		cb({})
 		return

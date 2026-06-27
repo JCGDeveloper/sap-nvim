@@ -126,6 +126,37 @@ local function read_source_adt(group, name, opts)
   return strip_cr(body), nil, code, uri:gsub("/source/main$", "")
 end
 
+-- Extrae el paquete de desarrollo del XML de metadata ADT (<adtcore:packageRef ...>).
+-- Devuelve nil si no aparece (NO inventa: el llamador será conservador).
+local function package_from_xml(xml)
+  if not xml or xml == "" then
+    return nil
+  end
+  local pkg = xml:match('packageRef[^>]-adtcore:name="([^"]*)"')
+  if pkg and pkg ~= "" then
+    return pkg
+  end
+  return nil
+end
+
+-- Lee (síncrono, mismo patrón que read_source_adt) la metadata ADT del objeto para
+-- conocer su paquete real. Best-effort: sin conexión, error HTTP o sin packageRef ->
+-- nil, de modo que confirm_activation no pueda DEMOSTRAR $TMP y pida confirmación.
+local function fetch_object_package(uri)
+  if not uri or uri == "" then
+    return nil
+  end
+  local adt_http = require("sap-nvim.core.adt_http")
+  if not adt_http.is_available() then
+    return nil
+  end
+  local body, _, code = adt_http.raw({ method = "GET", path = uri, accept = "application/*" })
+  if not body or code < 200 or code >= 300 then
+    return nil
+  end
+  return package_from_xml(body)
+end
+
 local function unlock_object(adt_http, uri, handle)
   if not uri or not handle or handle == "" then
     return
@@ -209,6 +240,13 @@ local function confirm_destructive(label, prompt, cb)
   vim.ui.input({ prompt = prompt .. " Escribe '" .. label .. "' para confirmar: " }, function(input)
     cb(input and vim.trim(input):upper() == label:upper())
   end)
+end
+
+local function remote_delete_allowed()
+  local ok, cfg = pcall(function()
+    return require("sap-nvim.core.config").productive()
+  end)
+  return ok and cfg.allow_delete_objects == true
 end
 
 -- abaplint.json RELAJADO para la caché. Los objetos remotos se editan EN AISLADO (sin las
@@ -296,6 +334,40 @@ local function is_readonly_obj(obj)
   return obj and (obj.readonly or readonly_reason(obj.name, obj.group))
 end
 
+-- Capacidades del objeto abierto en el buffer, estilo Eclipse: { view, edit, activate,
+-- transport, reason }. SOLO refleja lo que readonly_reason/is_customer_namespace ya deciden;
+-- no concede ningún permiso nuevo. La statusline y :SapCaps lo consumen.
+function M.capabilities(bufnr)
+  bufnr = bufnr or vim.api.nvim_get_current_buf()
+  local obj = vim.b[bufnr].sap_obj
+  if not obj then
+    return { view = false, edit = false, activate = false, transport = false, reason = "sin objeto SAP abierto" }
+  end
+  local caps = { view = true, edit = false, activate = false, transport = false, reason = nil }
+  -- EDITAR: ni readonly explícito ni razón de solo-lectura por namespace/modo productivo.
+  local reason = obj.readonly and (vim.b[bufnr].sap_readonly_reason or "solo lectura")
+    or readonly_reason(obj.name, obj.group)
+  if reason then
+    caps.reason = reason
+    return caps
+  end
+  caps.edit = true
+  -- ACTIVAR: solo objetos de namespace cliente (los estándar no se activan desde aquí).
+  caps.activate = is_customer_namespace(obj.name)
+  -- TRANSPORTAR: customer namespace y paquete real distinto de $TMP. $TMP es local: no viaja.
+  local pkg = obj.package
+  if pkg == nil or pkg == "" then
+    caps.reason = "paquete desconocido"
+  elseif not caps.activate then
+    caps.reason = "objeto fuera de namespace cliente"
+  elseif pkg:upper() == "$TMP" then
+    caps.reason = "paquete $TMP (local, no transportable)"
+  else
+    caps.transport = true
+  end
+  return caps
+end
+
 local function confirm_activation(obj, corrnr, cb)
   local reason = is_readonly_obj(obj)
   if reason then
@@ -310,6 +382,36 @@ local function confirm_activation(obj, corrnr, cb)
   local label = (obj.name or ""):upper()
   local suffix = corrnr and (" usando orden " .. corrnr) or " sin paquete $TMP confirmado"
   local prompt = "Activar " .. label .. suffix .. "."
+  if cfg.confirm_destructive then
+    vim.ui.input({ prompt = prompt .. " Escribe '" .. label .. "' para confirmar: " }, function(input)
+      cb(input and vim.trim(input):upper() == label)
+    end)
+  else
+    vim.ui.select({ "No", "Sí" }, { prompt = prompt }, function(choice)
+      cb(choice and choice:match("^Sí") ~= nil)
+    end)
+  end
+end
+
+local function needs_remote_confirmation(obj, corrnr)
+  local cfg = productive()
+  if not cfg.safe_mode then
+    return false
+  end
+  if corrnr and corrnr ~= "" then
+    return true
+  end
+  return ((obj.package or ""):upper() ~= "$TMP")
+end
+
+local function confirm_remote_write(obj, corrnr, cb)
+  if not needs_remote_confirmation(obj, corrnr) then
+    return cb(true)
+  end
+  local cfg = productive()
+  local label = (obj.name or ""):upper()
+  local suffix = corrnr and corrnr ~= "" and (" usando orden " .. corrnr) or " sin paquete $TMP confirmado"
+  local prompt = "Guardar " .. label .. " en SAP" .. suffix .. "."
   if cfg.confirm_destructive then
     vim.ui.input({ prompt = prompt .. " Escribe '" .. label .. "' para confirmar: " }, function(input)
       cb(input and vim.trim(input):upper() == label)
@@ -368,9 +470,14 @@ function M.open(name, group, opts)
     local bufnr = vim.api.nvim_get_current_buf()
     vim.bo[bufnr].swapfile = false
     local reason = readonly_reason(name, group)
-    vim.b[bufnr].sap_obj = { name = name:upper(), group = group, fgroup = fgroup, uri = uri, readonly = reason ~= nil }
+    -- Paquete real desde la metadata ADT: permite a confirm_activation DEMOSTRAR $TMP
+    -- (rama rápida) o, si no se puede leer, quedarse en nil y exigir confirmación.
+    local package = fetch_object_package(uri)
+    vim.b[bufnr].sap_obj = { name = name:upper(), group = group, fgroup = fgroup, uri = uri, package = package, readonly = reason ~= nil }
     vim.bo[bufnr].filetype = "abap"
     apply_readonly(bufnr, reason)
+    -- Cacheamos las capacidades para que la statusline las lea barato (sin recomputar).
+    vim.b[bufnr].sap_caps = M.capabilities(bufnr)
     pcall(function() require("sap-nvim.core.template_vars").prime(bufnr) end)
     if opts.line then
       pcall(vim.api.nvim_win_set_cursor, 0, { opts.line, opts.col or 0 })
@@ -395,8 +502,11 @@ function M.open(name, group, opts)
     vim.bo[bufnr].swapfile = false
     vim.bo[bufnr].filetype = "xml"
     local reason = readonly_reason(name, group, "metadata ADT sin editor de código")
-    vim.b[bufnr].sap_obj = { name = name:upper(), group = group, fgroup = fgroup, uri = uri, readonly = true }
+    -- El paquete sale del propio cuerpo de metadata ya descargado (sin llamada extra).
+    local package = package_from_xml(body)
+    vim.b[bufnr].sap_obj = { name = name:upper(), group = group, fgroup = fgroup, uri = uri, package = package, readonly = true }
     apply_readonly(bufnr, reason)
+    vim.b[bufnr].sap_caps = M.capabilities(bufnr)
     notify(name:upper() .. " abierto (" .. group .. ") como metadata ADT de solo lectura.")
   end
 
@@ -653,7 +763,7 @@ function M.push(bufnr, activate, callback)
     if activate then
       confirm_activation(obj, corrnr, after_confirm)
     else
-      after_confirm(true)
+      confirm_remote_write(obj, corrnr, after_confirm)
     end
   end)
 end
@@ -661,6 +771,13 @@ end
 -- Borra un objeto del sistema: `sapcli <group> delete NAME [--corrnr]`. Pide confirmación
 -- y resuelve transporte (igual que el push). Tras borrar, limpia el buffer y la caché.
 function M.delete(bufnr)
+  if not remote_delete_allowed() then
+    notify(
+      "Borrado remoto desactivado por seguridad. Para habilitarlo: productive.allow_delete_objects = true.",
+      vim.log.levels.WARN
+    )
+    return
+  end
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local obj = vim.b[bufnr].sap_obj
   if not obj then
@@ -758,7 +875,7 @@ function M.setup()
 
   vim.api.nvim_create_user_command("SapDelete", function()
     M.delete(nil)
-  end, { desc = "sap-nvim: Borrar el objeto actual del sistema (con confirmación)" })
+  end, { desc = "sap-nvim: Borrar el objeto actual del sistema (requiere opt-in)" })
 
   vim.api.nvim_create_user_command("SapOpenFunction", function()
     -- Un módulo de función necesita GRUPO + NOMBRE: pedimos ambos y abrimos.
@@ -776,7 +893,7 @@ function M.setup()
   vim.keymap.set("n", "<leader>aA", function() M.activate_recursive() end,
     { desc = "ABAP: Activar raíz + includes relacionados" })
   vim.keymap.set("n", "<leader>aX", function() M.delete(nil) end,
-    { desc = "ABAP: Borrar objeto del sistema" })
+    { desc = "ABAP: Borrar objeto remoto (requiere opt-in)" })
 end
 
 return M

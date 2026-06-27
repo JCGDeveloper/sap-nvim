@@ -222,9 +222,8 @@ local function group_from_find_row(row)
   return TYPE_PREFIX_TO_GROUP[prefix or ""]
 end
 
--- Resolución global (objeto del repositorio) vía `abap find` -> source.open. Si no hay
--- nada, intenta el go-to-definition de LSP (abaplint) como último recurso.
-local function goto_global(word)
+-- Fallback DEGRADADO (sin ADT): resolución global vía `sapcli abap find` -> source.open.
+local function goto_global_sapcli(word)
   notify("Buscando objeto '" .. word .. "' en SAP...")
   local rows = {}
   vim.fn.jobstart({ "sapcli", "abap", "find", word }, {
@@ -268,6 +267,48 @@ local function goto_global(word)
       end)
     end,
   })
+end
+
+-- Resolución global (objeto del repositorio) vía búsqueda ADT -> source.open. La fila ADT ya
+-- trae el TIPO exacto (adtcore:type) y la URI, así que el grupo se mapea sin heurística frágil
+-- (adt.group_from_adt_type). Prioriza la coincidencia EXACTA de nombre. Si ADT no devuelve nada,
+-- cae al go-to-definition de LSP (abaplint). Si ADT no está disponible, usa el fallback sapcli.
+local function goto_global(word)
+  local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+  if not (ok_http and adt_http.is_available()) then
+    return goto_global_sapcli(word)
+  end
+  notify("Buscando objeto '" .. word .. "' en SAP...")
+  local adt = require("sap-nvim.core.adt")
+  adt.find_objects_async(word, function(rows, err)
+    if not rows or #rows == 0 then
+      -- Último recurso: definición por LSP (abaplint). Conserva el fallback original.
+      if not pcall(vim.lsp.buf.definition) then
+        notify("No se encontró la definición de '" .. word .. "'." ..
+          (err and (" (" .. err .. ")") or ""), vim.log.levels.WARN)
+      end
+      return
+    end
+    local source = require("sap-nvim.core.source")
+    -- Priorizar coincidencia exacta de nombre.
+    local exact = {}
+    for _, r in ipairs(rows) do
+      if (r.name or ""):upper() == word:upper() then exact[#exact + 1] = r end
+    end
+    local pool = #exact > 0 and exact or rows
+    local function open_row(r)
+      local g = adt.group_from_adt_type(r.type)
+      if g then push_here(); source.open(r.name, g)
+      else notify("No se pudo resolver el tipo de '" .. r.name .. "' (" .. (r.type or "?") .. ").",
+        vim.log.levels.WARN) end
+    end
+    if #pool == 1 then open_row(pool[1])
+    else
+      vim.ui.select(pool, { prompt = "Ir a definición de '" .. word .. "':",
+        format_item = function(r) return string.format("%-28s %s", r.name, r.type or "") end },
+        function(choice) if choice then open_row(choice) end end)
+    end
+  end)
 end
 
 -- F16: ir a definición de la palabra bajo el cursor. Orden:

@@ -9,6 +9,22 @@ local function notify(msg, level)
 	vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
+local function productive()
+	local ok, cfg = pcall(function()
+		return require("sap-nvim.core.config").productive()
+	end)
+	return ok and cfg or {}
+end
+
+local function safe_mode()
+	return productive().safe_mode ~= false
+end
+
+local function is_customer_namespace(name)
+	name = (name or ""):upper()
+	return name:match("^[ZY]") ~= nil or name:match("^/[^/]+/") ~= nil
+end
+
 local function xml_escape(s)
 	return tostring(s or "")
 		:gsub("&", "&amp;")
@@ -182,7 +198,202 @@ local function create_cds_adt(name, desc, pkg, corrnr)
 	end)
 end
 
+-- ─── Creación por ADT directo (evita el idioma EN hardcodeado de sapcli) ────────
+-- sapcli fija `language='EN'`/`master_language='EN'` al crear (ver sap/cli/*.py): en
+-- sistemas con idioma original ES eso hace FALLAR la creación. CDS ya se migró por esto;
+-- aquí extendemos el mismo enfoque a programas, clases, interfaces, function groups y
+-- paquetes. El idioma sale SIEMPRE de config (default "ES"), nunca hardcodeado.
+
+-- Construye el XML de creación ADT con la cabecera adtcore común (type/description/
+-- language/name/masterLanguage/responsible), idéntica a la que serializa sapcli pero con
+-- el idioma de config. `root` = elemento raíz con prefijo (p.ej. "class:abapClass"),
+-- `ns` = su declaración xmlns, `objtype` = código adtcore (p.ej. "CLAS/OC"), `root_extra`
+-- = atributos extra del raíz, `children` = nodos hijos ya serializados (incluye packageRef).
+local function adt_create_body(root, ns, objtype, root_extra, desc, lang, name, user, children)
+	return table.concat({
+		'<?xml version="1.0" encoding="UTF-8"?>',
+		"<"
+			.. root
+			.. " "
+			.. ns
+			.. ' xmlns:adtcore="http://www.sap.com/adt/core"'
+			.. ' adtcore:type="'
+			.. objtype
+			.. '"'
+			.. ' adtcore:description="'
+			.. xml_escape(desc)
+			.. '"'
+			.. ' adtcore:language="'
+			.. xml_escape(lang)
+			.. '"'
+			.. ' adtcore:name="'
+			.. xml_escape(name)
+			.. '"'
+			.. ' adtcore:masterLanguage="'
+			.. xml_escape(lang)
+			.. '"'
+			.. ' adtcore:responsible="'
+			.. xml_escape(user)
+			.. '"'
+			.. (root_extra or "")
+			.. ">",
+		children,
+		"</" .. root .. ">",
+	}, "\n")
+end
+
+-- Tabla de creación ADT por tipo (key = spec.key). path = basepath del POST,
+-- content_type = MIME de creación (versión v2 = la más compatible), build = constructor
+-- del XML. Endpoints y XML calcados de sapcli (sap/adt/{programs,objects,function}.py).
+local ADT_CREATE = {
+	program = {
+		path = "/sap/bc/adt/programs/programs",
+		content_type = "application/vnd.sap.adt.programs.programs.v2+xml; charset=utf-8",
+		build = function(name, desc, lang, user, pkg)
+			return adt_create_body(
+				"program:abapProgram",
+				'xmlns:program="http://www.sap.com/adt/programs/programs"',
+				"PROG/P",
+				' adtcore:version="active"',
+				desc,
+				lang,
+				name,
+				user,
+				table.concat({
+					'<adtcore:packageRef adtcore:name="' .. xml_escape(pkg) .. '"/>',
+					"<program:logicalDatabase>",
+					"<program:ref/>",
+					"</program:logicalDatabase>",
+				}, "\n")
+			)
+		end,
+	},
+	class = {
+		path = "/sap/bc/adt/oo/classes",
+		content_type = "application/vnd.sap.adt.oo.classes.v2+xml; charset=utf-8",
+		build = function(name, desc, lang, user, pkg)
+			return adt_create_body(
+				"class:abapClass",
+				'xmlns:class="http://www.sap.com/adt/oo/classes"',
+				"CLAS/OC",
+				' class:final="true" class:visibility="public"',
+				desc,
+				lang,
+				name,
+				user,
+				table.concat({
+					'<adtcore:packageRef adtcore:name="' .. xml_escape(pkg) .. '"/>',
+					'<class:include adtcore:name="CLAS/OC" adtcore:type="CLAS/OC" class:includeType="testclasses"/>',
+					"<class:superClassRef/>",
+				}, "\n")
+			)
+		end,
+	},
+	interface = {
+		path = "/sap/bc/adt/oo/interfaces",
+		content_type = "application/vnd.sap.adt.oo.interfaces.v2+xml; charset=utf-8",
+		build = function(name, desc, lang, user, pkg)
+			return adt_create_body(
+				"intf:abapInterface",
+				'xmlns:intf="http://www.sap.com/adt/oo/interfaces"',
+				"INTF/OI",
+				"",
+				desc,
+				lang,
+				name,
+				user,
+				'<adtcore:packageRef adtcore:name="' .. xml_escape(pkg) .. '"/>'
+			)
+		end,
+	},
+	function_group = {
+		path = "/sap/bc/adt/functions/groups",
+		content_type = "application/vnd.sap.adt.functions.groups.v2+xml; charset=utf-8",
+		build = function(name, desc, lang, user, pkg)
+			return adt_create_body(
+				"group:abapFunctionGroup",
+				'xmlns:group="http://www.sap.com/adt/functions/groups"',
+				"FUGR/F",
+				"",
+				desc,
+				lang,
+				name,
+				user,
+				'<adtcore:packageRef adtcore:name="' .. xml_escape(pkg) .. '"/>'
+			)
+		end,
+	},
+}
+
+-- Abre/siembra el objeto recién creado (igual para la ruta ADT y la sapcli). CDS lleva su
+-- plantilla inicial (seed); el resto se abre directamente con source.open.
+local function open_after_create(spec, name, desc, corrnr)
+	if spec.open_group == "ddls" then
+		notify(name .. " creado. Escribiendo plantilla CDS inicial...")
+		seed_cds_source(name, desc, corrnr, function()
+			require("sap-nvim.core.source").open(name, spec.open_group)
+		end)
+	else
+		notify(name .. " creado. Abriendo para editar...")
+		require("sap-nvim.core.source").open(name, spec.open_group or spec.group)
+	end
+end
+
+-- Crea un objeto (programa/clase/interface/function group) por ADT directo y lo abre.
+-- Mismo patrón que create_cds_adt: exige conexión validada (ready) o la pide; POST con
+-- CSRF/cookies vía adt_http.raw; el idioma viene de config.
+local function create_object_adt(spec, name, desc, pkg, corrnr)
+	local adt_http = require("sap-nvim.core.adt_http")
+	local connection = require("sap-nvim.core.connection")
+	if not adt_http.ready() then
+		connection.ensure(function(ok)
+			if ok then
+				create_object_adt(spec, name, desc, pkg, corrnr)
+			else
+				notify("Conexión SAP no lista. Usa :SapLogin o :SapRelogin.", vim.log.levels.ERROR)
+			end
+		end)
+		return
+	end
+
+	local meta = ADT_CREATE[spec.key]
+	local cfg = require("sap-nvim.core.config").new()
+	local c = adt_http.creds()
+	local lang = ((cfg.language or vim.g.sap_nvim_language or "ES") .. ""):upper()
+	local body = meta.build(name, desc, lang, c.user:upper(), pkg)
+
+	local query = {}
+	if corrnr and corrnr ~= "" then
+		query.corrNr = corrnr
+	end
+
+	notify("Creando " .. spec.label .. " " .. name .. " en " .. pkg .. " por ADT (" .. lang .. ")...")
+	local resp, _, code = adt_http.raw({
+		method = "POST",
+		path = meta.path,
+		query = query,
+		body = body,
+		content_type = meta.content_type,
+		accept = "application/*",
+	})
+	if code < 200 or code >= 300 then
+		notify("No se pudo crear " .. name .. ": " .. adt_error_message(resp, code), vim.log.levels.ERROR)
+		return
+	end
+
+	open_after_create(spec, name, desc, corrnr)
+end
+
 local function do_create(spec, name, desc, pkg, corrnr, fgroup)
+	-- Tipos con creación por ADT directo (programa/clase/interface/function group): evitan el
+	-- idioma EN hardcodeado de sapcli. Los module functions (needs_group) y DDIC (tabla,
+	-- estructura, data element, dominio, message class) NO tienen endpoint ADT de creación
+	-- fiable aquí, así que siguen por sapcli.
+	if not spec.needs_group and ADT_CREATE[spec.key] then
+		create_object_adt(spec, name, desc, pkg, corrnr)
+		return
+	end
+
 	local args = { "sapcli", spec.group, "create" }
 	if spec.needs_group then
 		vim.list_extend(args, { fgroup, name, desc }) -- functionmodule: GROUP NAME DESC
@@ -209,15 +420,7 @@ local function do_create(spec, name, desc, pkg, corrnr, fgroup)
 					notify("No se pudo crear " .. name .. ": " .. (err[1] or ("code " .. code)), vim.log.levels.ERROR)
 					return
 				end
-				if spec.open_group == "ddls" then
-					notify(name .. " creado. Escribiendo plantilla CDS inicial...")
-					seed_cds_source(name, desc, corrnr, function()
-						require("sap-nvim.core.source").open(name, spec.open_group)
-					end)
-				else
-					notify(name .. " creado. Abriendo para editar...")
-					require("sap-nvim.core.source").open(name, spec.open_group or spec.group)
-				end
+				open_after_create(spec, name, desc, corrnr)
 			end)
 		end,
 	})
@@ -293,7 +496,21 @@ local function create_transaction(name, desc, pkg, corrnr, ttype, prog)
 	})
 end
 
--- Crea un paquete (firma: package create NAME DESC [--super-package SUPER] [--corrnr T]).
+-- Tras crear un paquete: no es código (no source.open). Ofrecemos explorarlo.
+local function package_explore_prompt(name)
+	notify(name .. " (paquete) creado.")
+	vim.ui.select({ "Sí, explorar " .. name, "No" }, { prompt = "¿Explorar el paquete?" }, function(ch)
+		if ch and ch:match("^Sí") then
+			pcall(function()
+				require("sap-nvim.core.browser").browse_package(name)
+			end)
+		end
+	end)
+end
+
+-- Crea un paquete por sapcli (firma: package create NAME DESC [--super-package SUPER]
+-- [--corrnr T]). FALLBACK: solo se usa si ADT no pudo crearlo (ver create_package_adt).
+-- OJO: sapcli fija el idioma a EN (sap/cli/package.py); por eso preferimos ADT.
 local function create_package(name, desc, super, corrnr)
 	-- Seguridad §7: aviso si el nombre no parece de cliente (Z/Y o namespace /).
 	if not name:match("^[ZY]") and not name:match("^/") then
@@ -323,18 +540,92 @@ local function create_package(name, desc, super, corrnr)
 					notify("No se pudo crear " .. name .. ": " .. (err[1] or ("code " .. code)), vim.log.levels.ERROR)
 					return
 				end
-				-- Un paquete no es código: no abrimos source.open. Ofrecemos explorarlo.
-				notify(name .. " (paquete) creado.")
-				vim.ui.select({ "Sí, explorar " .. name, "No" }, { prompt = "¿Explorar el paquete?" }, function(ch)
-					if ch and ch:match("^Sí") then
-						pcall(function()
-							require("sap-nvim.core.browser").browse_package(name)
-						end)
-					end
-				end)
+				package_explore_prompt(name)
 			end)
 		end,
 	})
+end
+
+-- Crea un paquete por ADT directo (endpoint /sap/bc/adt/packages). El XML es calcado del
+-- que serializa sapcli (sap/adt/package.py) pero con el idioma de config en vez de EN. Si
+-- ADT falla (p.ej. el sistema no expone el endpoint o rechaza el XML), CAE a sapcli como
+-- fallback explícito. softwareComponent=LOCAL y packageType=development = mismos defaults
+-- que `sapcli package create`, para no cambiar el comportamiento más allá del idioma.
+-- NOTA: el XML de paquete es el de mayor riesgo de validar en vivo (mejor esfuerzo); el
+-- fallback a sapcli garantiza que la creación siga funcionando si SAP rechaza el payload.
+local function create_package_adt(name, desc, super, corrnr)
+	-- Seguridad §7: aviso si el nombre no parece de cliente (Z/Y o namespace /).
+	if not name:match("^[ZY]") and not name:match("^/") then
+		notify("Aviso: '" .. name .. "' no empieza por Z/Y; SAP puede rechazarlo.", vim.log.levels.WARN)
+	end
+
+	local adt_http = require("sap-nvim.core.adt_http")
+	local connection = require("sap-nvim.core.connection")
+	if not adt_http.ready() then
+		connection.ensure(function(ok)
+			if ok then
+				create_package_adt(name, desc, super, corrnr)
+			else
+				notify("Conexión SAP no lista. Usa :SapLogin o :SapRelogin.", vim.log.levels.ERROR)
+			end
+		end)
+		return
+	end
+
+	local cfg = require("sap-nvim.core.config").new()
+	local c = adt_http.creds()
+	local lang = ((cfg.language or vim.g.sap_nvim_language or "ES") .. ""):upper()
+	local superref = (super and super ~= "")
+			and ('<pak:superPackage adtcore:name="' .. xml_escape(super:upper()) .. '"/>')
+		or "<pak:superPackage/>"
+	local body = adt_create_body(
+		"pak:package",
+		'xmlns:pak="http://www.sap.com/adt/packages"',
+		"DEVC/K",
+		' adtcore:version="active"',
+		desc,
+		lang,
+		name,
+		c.user:upper(),
+		table.concat({
+			'<adtcore:packageRef adtcore:name="' .. xml_escape(name) .. '"/>',
+			'<pak:attributes pak:packageType="development"/>',
+			superref,
+			"<pak:applicationComponent/>",
+			"<pak:transport>",
+			'<pak:softwareComponent pak:name="LOCAL"/>',
+			"<pak:transportLayer/>",
+			"</pak:transport>",
+			"<pak:translation/>",
+			"<pak:useAccesses/>",
+			"<pak:packageInterfaces/>",
+			"<pak:subPackages/>",
+		}, "\n")
+	)
+
+	local query = {}
+	if corrnr and corrnr ~= "" then
+		query.corrNr = corrnr
+	end
+
+	notify("Creando paquete " .. name .. " por ADT (" .. lang .. ")...")
+	local resp, _, code = adt_http.raw({
+		method = "POST",
+		path = "/sap/bc/adt/packages",
+		query = query,
+		body = body,
+		content_type = "application/vnd.sap.adt.packages.v1+xml; charset=utf-8",
+		accept = "application/*",
+	})
+	if code < 200 or code >= 300 then
+		notify(
+			"ADT no pudo crear el paquete (" .. adt_error_message(resp, code) .. "). Reintentando con sapcli...",
+			vim.log.levels.WARN
+		)
+		create_package(name, desc, super, corrnr) -- fallback sapcli (idioma EN)
+		return
+	end
+	package_explore_prompt(name)
 end
 
 -- ─── Pickers de paquete y transporte (desde el sistema) ─────────────────────
@@ -441,14 +732,23 @@ local function ask_transport(callback)
 	local adt = require("sap-nvim.core.adt")
 	if not adt.is_configured() then
 		vim.ui.input({ prompt = "Orden de transporte (vacío = ninguna): " }, function(t)
-			callback(t and t:upper() or "")
+			t = vim.trim(t or "")
+			if safe_mode() and t == "" then
+				notify("Modo productivo: se requiere transporte para paquete no local.", vim.log.levels.WARN)
+				return
+			end
+			callback(t:upper())
 		end)
 		return
 	end
 	notify("Obteniendo órdenes de transporte...")
 	adt.fetch_transport_orders(function(transports, err)
 		vim.schedule(function()
-			local items = { "[ Sin transporte ]", "[ Ingresar manualmente ]" }
+			local items = {}
+			if not safe_mode() then
+				items[#items + 1] = "[ Sin transporte ]"
+			end
+			items[#items + 1] = "[ Ingresar manualmente ]"
 			for _, t in ipairs(transports or {}) do
 				items[#items + 1] = t
 			end
@@ -464,7 +764,12 @@ local function ask_transport(callback)
 				end
 				if choice == "[ Ingresar manualmente ]" then
 					vim.ui.input({ prompt = "Orden: " }, function(t)
-						callback(t and t:upper() or "")
+						t = vim.trim(t or "")
+						if safe_mode() and t == "" then
+							notify("Modo productivo: se requiere transporte para paquete no local.", vim.log.levels.WARN)
+							return
+						end
+						callback(t:upper())
 					end)
 					return
 				end
@@ -499,7 +804,11 @@ function M.new_object()
 				return
 			end
 			name = name:upper()
-			if not name:match("^[ZY]") and not name:match("^/") then
+			if not is_customer_namespace(name) then
+				if safe_mode() then
+					notify("Modo productivo: no se crea '" .. name .. "' fuera de namespace Z/Y o /.../.", vim.log.levels.ERROR)
+					return
+				end
 				notify("Aviso: '" .. name .. "' no empieza por Z/Y; SAP puede rechazarlo.", vim.log.levels.WARN)
 			end
 
@@ -559,7 +868,7 @@ function M.new_object()
 				if spec.group == "package" then
 					vim.ui.input({ prompt = "Super-paquete (vacío = ninguno): ", default = "" }, function(super)
 						ask_transport(function(corrnr)
-							create_package(name, desc, super, corrnr)
+							create_package_adt(name, desc, super, corrnr)
 						end)
 					end)
 					return

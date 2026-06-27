@@ -44,6 +44,8 @@ local defaults = {
   productive = {
     safe_mode = true,
     confirm_destructive = true, -- exige escribir el nombre/orden exacta para borrar/liberar/reasignar
+    allow_delete_objects = false, -- opt-in explícito para borrar objetos/subobjetos remotos
+    allow_delete_transports = false, -- opt-in explícito para borrar órdenes de transporte
   },
 }
 
