@@ -148,10 +148,18 @@ Mantener por ahora en `sapcli`:
 - Seguridad:
   - comandos CTS destructivos exigen conexión validada;
   - borrado de orden por ADT exige escribir el ID exacto cuando `productive.confirm_destructive=true`;
+  - objetos con nombre estándar/no cliente se abren como buffers read-only en `productive.safe_mode`;
+  - metadata DDIC sin editor de código se muestra como XML ADT read-only y `:SapPush`/`:SapDelete`
+    quedan bloqueados aunque el usuario fuerce `modifiable`;
+  - `:SapActivate`/`:SapPushActivate` exige confirmar el nombre del objeto cuando la activación usa
+    transporte o no puede demostrar que el objeto es `$TMP`;
+  - activaciones masivas por `adt.activate_bulk` también piden confirmación en `safe_mode`;
   - `adt_http.raw()` codifica query params para locks, `configUri`, `corrNr`, etc.;
   - activación ADT ya no marca éxito si el HTTP no es 2xx o si SAP devuelve una excepción.
 - `:SapDoctor` usa búsqueda global acotada (`*`, max 5) en vez de asumir que productivo trabaja con
   objetos `Z*`.
+- `:SapDoctor` clasifica señales típicas de autorización/login (`401`, `403`, `S_ADT`, `S_CTS`,
+  `S_DEVELOP`) y recomienda validar con `SU53`/`STAUTHTRACE` cuando SAP las devuelve.
 
 ## Validación 2026-06-27: roles/visibilidad/productivo
 
@@ -173,3 +181,12 @@ Mantener por ahora en `sapcli`:
   - generó quickfix con errores SAP.
 - Confirmación destructiva ADT:
   - `:SapDeleteTransport` no ejecuta `DELETE` si no se escribe el ID exacto.
+
+## Pendientes de validación SAP en vivo
+
+- Abrir un objeto estándar visible, por ejemplo `CL_ABAP*` o `SAPM*`, y confirmar que queda
+  `readonly`/`nomodifiable` con mensaje de solo lectura.
+- Ejecutar `:SapPushActivate` sobre un objeto transportado de pruebas y confirmar que pide escribir
+  el nombre exacto antes de activar.
+- Ejecutar `:SapDoctor` con un usuario sin permisos CTS/ADT suficientes y comprobar que el reporte
+  añade la sección `Permisos/autorizaciones detectados`.

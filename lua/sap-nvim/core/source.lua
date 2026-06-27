@@ -597,7 +597,7 @@ function M.push(bufnr, activate, callback)
     local verb = activate and "Guardando+activando " or "Guardando "
     notify(verb .. obj.name .. (corrnr and (" [" .. corrnr .. "]") or " [$TMP]") .. "...")
 
-    confirm_activation(obj, activate and corrnr or nil, function(confirmed)
+    local function after_confirm(confirmed)
       if not confirmed then
         notify("Operación cancelada.", vim.log.levels.INFO)
         if callback then callback(false, { "activation cancelled" }, {}) end
@@ -647,8 +647,14 @@ function M.push(bufnr, activate, callback)
         else
           if callback then callback(false, {}, qf or {}) end
         end
-      end)
-    end)
+      end, { confirmed = true })
+    end
+
+    if activate then
+      confirm_activation(obj, corrnr, after_confirm)
+    else
+      after_confirm(true)
+    end
   end)
 end
 
@@ -717,7 +723,7 @@ function M.activate_recursive()
       if ok then
         confirm_activation(vim.b[bufnr].sap_obj, nil, function(confirmed)
           if confirmed then
-            require("sap-nvim.core.adt").activate_related_current(bufnr)
+            require("sap-nvim.core.adt").activate_related_current(bufnr, { confirmed = true })
           else
             notify("Activación cancelada.", vim.log.levels.INFO)
           end

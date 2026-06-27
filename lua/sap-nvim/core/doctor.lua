@@ -35,8 +35,27 @@ local function mark(ok)
   return ok and "  ✅ " or "  ❌ "
 end
 
+local function auth_hint(lines)
+  local text = table.concat(lines or {}, "\n"):lower()
+  if text == "" then return nil end
+  if text:match("401") or text:match("unauthorized") or text:match("nicht autorisiert") or text:match("no autorizado") then
+    return "credenciales/login ADT rechazado"
+  end
+  if text:match("403") or text:match("forbidden") or text:match("not authorized") or text:match("no tiene autoriz") then
+    return "autorización SAP insuficiente para el endpoint"
+  end
+  if text:match("s_develop") or text:match("s_adt") or text:match("s_cts") or text:match("s_transport") then
+    return "revisar roles/autorizaciones ADT/CTS/S_DEVELOP"
+  end
+  if text:match("transport") and (text:match("authorization") or text:match("autoriz")) then
+    return "autorización CTS/transporte insuficiente"
+  end
+  return nil
+end
+
 function M.run()
   local results = { "Local:" }
+  local permission_signals = {}
 
   -- ── Local checks (no SAP contact) ──
   local local_checks = {
@@ -80,6 +99,14 @@ function M.run()
     i = i + 1
     local s = live[i]
     if not s then
+      if #permission_signals > 0 then
+        table.insert(results, "")
+        table.insert(results, "Permisos/autorizaciones detectados:")
+        for _, hint in ipairs(permission_signals) do
+          table.insert(results, "  ⚠ " .. hint)
+        end
+        table.insert(results, "  Validación SAP: SU53 tras el fallo; STAUTHTRACE para /sap/bc/adt/* si persiste.")
+      end
       table.insert(results, "")
       table.insert(results, "  q / <Esc> para cerrar.")
       vim.schedule(function() open_report(results) end)
@@ -96,6 +123,10 @@ function M.run()
       on_exit = function(_, code)
         local detail = out[1] and ("  → " .. out[1]) or ""
         table.insert(results, mark(code == 0) .. s[1] .. detail)
+        local hint = auth_hint(out)
+        if hint then
+          permission_signals[#permission_signals + 1] = s[1] .. ": " .. hint
+        end
         step()
       end,
     })

@@ -61,6 +61,38 @@ function M.adt_type(group)
 	return ADT_TYPE_BY_GROUP[group]
 end
 
+local function productive()
+	local ok, cfg = pcall(function()
+		return require("sap-nvim.core.config").productive()
+	end)
+	return ok and cfg or {}
+end
+
+local function confirm_activation_bulk(objects, opts, cb)
+	opts = opts or {}
+	local cfg = productive()
+	if opts.confirmed or not cfg.safe_mode then
+		return cb(true)
+	end
+	local count = #(objects or {})
+	if count == 0 then
+		return cb(false)
+	end
+	local label = count == 1 and ((objects[1].name or ""):upper()) or ("ACTIVAR " .. tostring(count))
+	local prompt = count == 1
+		and ("Activar " .. label .. " en SAP.")
+		or ("Activar " .. tostring(count) .. " objeto(s) en SAP.")
+	if cfg.confirm_destructive then
+		vim.ui.input({ prompt = prompt .. " Escribe '" .. label .. "' para confirmar: " }, function(input)
+			cb(input and vim.trim(input):upper() == label)
+		end)
+	else
+		vim.ui.select({ "No", "Sí" }, { prompt = prompt }, function(choice)
+			cb(choice and choice:match("^Sí") ~= nil)
+		end)
+	end
+end
+
 function M.setup(opts)
 	opts = opts or {}
 	M.connections = opts.connections or {}
@@ -570,115 +602,128 @@ function M.fetch_inactive_objects(callback)
 end
 
 -- 2. El motor que envía el bloque completo a compilar
-function M.activate_bulk(selected_objects, callback)
+function M.activate_bulk(selected_objects, callback, opts)
 	if not selected_objects or #selected_objects == 0 then
 		vim.notify("[sap-nvim] Nada que activar.", vim.log.levels.INFO)
 		return
 	end
 
-	local adt_http = require("sap-nvim.core.adt_http")
-	vim.notify(string.format("[sap-nvim] Activando %d objeto(s)...", #selected_objects), vim.log.levels.INFO)
+	local function run_activation()
+		local adt_http = require("sap-nvim.core.adt_http")
+		vim.notify(string.format("[sap-nvim] Activando %d objeto(s)...", #selected_objects), vim.log.levels.INFO)
 
-	local function payload_for(objects)
-		local xml_parts = {
-			'<?xml version="1.0" encoding="UTF-8"?><adtcore:objectReferences xmlns:adtcore="http://www.sap.com/adt/core">',
-		}
+		local function payload_for(objects)
+			local xml_parts = {
+				'<?xml version="1.0" encoding="UTF-8"?><adtcore:objectReferences xmlns:adtcore="http://www.sap.com/adt/core">',
+			}
 
-		for _, obj in ipairs(objects) do
-			table.insert(
-				xml_parts,
-				string.format(
-					'<adtcore:objectReference adtcore:uri="%s" adtcore:name="%s" adtcore:type="%s"/>',
-					xmlesc(obj.uri),
-					xmlesc(obj.name),
-					xmlesc(obj.type or M.adt_type(obj.group) or "")
+			for _, obj in ipairs(objects) do
+				table.insert(
+					xml_parts,
+					string.format(
+						'<adtcore:objectReference adtcore:uri="%s" adtcore:name="%s" adtcore:type="%s"/>',
+						xmlesc(obj.uri),
+						xmlesc(obj.name),
+						xmlesc(obj.type or M.adt_type(obj.group) or "")
+					)
 				)
+			end
+			table.insert(xml_parts, "</adtcore:objectReferences>")
+			return table.concat(xml_parts, "")
+		end
+
+		local function send(objects, preaudit)
+			local resp, headers, code = adt_http.raw({
+				method = "POST",
+				path = "/sap/bc/adt/activation",
+				query = { method = "activate", preauditRequested = preaudit and "true" or "false" },
+				accept = "application/xml",
+				content_type = "application/xml",
+				body = payload_for(objects),
+			})
+			return resp, headers, code
+		end
+
+		local resp, headers, code = send(selected_objects, true)
+		if
+			code >= 200
+			and code < 300
+			and resp
+			and (
+				resp:find("inactiveCtsObjects", 1, true)
+				or (headers or ""):find("application/vnd.sap.adt.inactivectsobjects", 1, true)
 			)
+		then
+			local preaudit_objects = vim.tbl_filter(function(obj)
+				return not obj.deleted
+			end, parse_inactive_objects_xml(resp))
+			if #preaudit_objects > 0 then
+				resp, headers, code = send(preaudit_objects, false)
+			end
 		end
-		table.insert(xml_parts, "</adtcore:objectReferences>")
-		return table.concat(xml_parts, "")
-	end
 
-	local function send(objects, preaudit)
-		local resp, headers, code = adt_http.raw({
-			method = "POST",
-			path = "/sap/bc/adt/activation",
-			query = { method = "activate", preauditRequested = preaudit and "true" or "false" },
-			accept = "application/xml",
-			content_type = "application/xml",
-			body = payload_for(objects),
-		})
-		return resp, headers, code
-	end
-
-	local resp, headers, code = send(selected_objects, true)
-	if
-		code >= 200
-		and code < 300
-		and resp
-		and (
-			resp:find("inactiveCtsObjects", 1, true)
-			or (headers or ""):find("application/vnd.sap.adt.inactivectsobjects", 1, true)
-		)
-	then
-		local preaudit_objects = vim.tbl_filter(function(obj)
-			return not obj.deleted
-		end, parse_inactive_objects_xml(resp))
-		if #preaudit_objects > 0 then
-			resp, headers, code = send(preaudit_objects, false)
+		local qf = M._parse_activation_response(resp, vim.api.nvim_buf_get_name(0))
+		if code < 200 or code >= 300 then
+			qf[#qf + 1] = {
+				filename = vim.api.nvim_buf_get_name(0),
+				lnum = 0,
+				col = 1,
+				text = "Activación ADT falló (HTTP " .. tostring(code) .. ").",
+				type = "E",
+			}
+		elseif resp and (resp:find("<exc:exception", 1, true) or resp:find("<exception", 1, true)) then
+			qf[#qf + 1] = {
+				filename = vim.api.nvim_buf_get_name(0),
+				lnum = 0,
+				col = 1,
+				text = resp:match("<message[^>]*>([^<]*)</message>") or "Excepción ADT al activar.",
+				type = "E",
+			}
 		end
-	end
+		local errors = vim.tbl_filter(function(e)
+			return e.type == "E"
+		end, qf)
+		if #qf == 0 and resp and resp:match("activationMessages") then
+			qf[1] = {
+				filename = vim.api.nvim_buf_get_name(0),
+				lnum = 0,
+				col = 1,
+				text = "SAP devolvió mensajes de activación, pero sap-nvim no pudo parsear el detalle.",
+				type = "E",
+			}
+			errors = qf
+		end
 
-	local qf = M._parse_activation_response(resp, vim.api.nvim_buf_get_name(0))
-	if code < 200 or code >= 300 then
-		qf[#qf + 1] = {
-			filename = vim.api.nvim_buf_get_name(0),
-			lnum = 0,
-			col = 1,
-			text = "Activación ADT falló (HTTP " .. tostring(code) .. ").",
-			type = "E",
-		}
-	elseif resp and (resp:find("<exc:exception", 1, true) or resp:find("<exception", 1, true)) then
-		qf[#qf + 1] = {
-			filename = vim.api.nvim_buf_get_name(0),
-			lnum = 0,
-			col = 1,
-			text = resp:match("<message[^>]*>([^<]*)</message>") or "Excepción ADT al activar.",
-			type = "E",
-		}
-	end
-	local errors = vim.tbl_filter(function(e)
-		return e.type == "E"
-	end, qf)
-	if #qf == 0 and resp and resp:match("activationMessages") then
-		qf[1] = {
-			filename = vim.api.nvim_buf_get_name(0),
-			lnum = 0,
-			col = 1,
-			text = "SAP devolvió mensajes de activación, pero sap-nvim no pudo parsear el detalle.",
-			type = "E",
-		}
-		errors = qf
-	end
-
-	if #qf > 0 then
-		vim.fn.setqflist({}, "r", { items = qf, title = "SAP activation" })
-		if #errors > 0 then
-			pcall(vim.cmd, "copen")
-			pcall(vim.cmd, "cfirst")
-			notify(#errors .. " error(es) al activar. Revisa quickfix.", vim.log.levels.ERROR)
+		if #qf > 0 then
+			vim.fn.setqflist({}, "r", { items = qf, title = "SAP activation" })
+			if #errors > 0 then
+				pcall(vim.cmd, "copen")
+				pcall(vim.cmd, "cfirst")
+				notify(#errors .. " error(es) al activar. Revisa quickfix.", vim.log.levels.ERROR)
+			else
+				notify("Activación completada con " .. #qf .. " warning(s). :copen para verlos.", vim.log.levels.WARN)
+			end
+		elseif resp then
+			notify("Activación completada con éxito.", vim.log.levels.INFO)
 		else
-			notify("Activación completada con " .. #qf .. " warning(s). :copen para verlos.", vim.log.levels.WARN)
+			notify("Error de conexión al activar.", vim.log.levels.WARN)
 		end
-	elseif resp then
-		notify("Activación completada con éxito.", vim.log.levels.INFO)
-	else
-		notify("Error de conexión al activar.", vim.log.levels.WARN)
+
+		if callback then
+			callback(resp, qf)
+		end
 	end
 
-	if callback then
-		callback(resp, qf)
-	end
+	confirm_activation_bulk(selected_objects, opts, function(confirmed)
+		if not confirmed then
+			vim.notify("[sap-nvim] Activación cancelada.", vim.log.levels.INFO)
+			if callback then
+				callback(nil, {})
+			end
+			return
+		end
+		run_activation()
+	end)
 end
 
 local function include_names_from_lines(lines, seen, ordered)
@@ -755,7 +800,7 @@ function M.related_object_names(bufnr)
 	return seen, ordered
 end
 
-function M.activate_related_current(bufnr)
+function M.activate_related_current(bufnr, opts)
 	bufnr = bufnr or vim.api.nvim_get_current_buf()
 	pcall(vim.cmd, "write")
 
@@ -808,7 +853,7 @@ function M.activate_related_current(bufnr)
 				end
 			end
 			notify("Activando raíz + relacionados: " .. table.concat(ordered, ", "))
-			M.activate_bulk(selected)
+			M.activate_bulk(selected, nil, opts)
 		end)
 	end)
 end
