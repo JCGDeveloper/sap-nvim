@@ -2,6 +2,7 @@
 -- Ejecutar transaccion / abrir WebGUI (como el "Web Browser GUI" de VSCode)
 
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 
 local function notify(msg, level)
 	vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
@@ -266,7 +267,7 @@ function M.run_class(name)
 		end
 		notify("Ejecutando clase " .. c .. " (if_oo_adt_classrun~main)...")
 		local out = {}
-		vim.fn.jobstart({ "sapcli", "class", "execute", c }, {
+		sapcli.jobstart({ "sapcli", "class", "execute", c }, {
 			on_stdout = function(_, d)
 				for _, l in ipairs(d) do
 					out[#out + 1] = l

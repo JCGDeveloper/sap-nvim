@@ -8,6 +8,7 @@
 -- (src/api/textelements.ts): texto plano con anotaciones @MaxLength: / @DDICReference:.
 
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 local adt_http = require("sap-nvim.core.adt_http")
 
 local function notify(msg, level)
@@ -230,7 +231,7 @@ function M.message_class(name)
   if not name or name == "" then return end
   name = name:upper()
   notify("Leyendo clase de mensajes " .. name .. "...")
-  local res = vim.fn.system({ "sapcli", "messageclass", "read", name, "--output", "HUMAN" })
+  local res = sapcli.system({ "sapcli", "messageclass", "read", name, "--output", "HUMAN" })
   if vim.v.shell_error ~= 0 or not res or res == "" or res:match("Exception") then
     notify("No se pudo leer la clase de mensajes " .. name, vim.log.levels.ERROR); return
   end

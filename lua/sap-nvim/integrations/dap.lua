@@ -820,6 +820,9 @@ end
 local function preview_aware_switchbuf(bufnr, line, column)
 	local ok_preview, preview = pcall(require, "sap-nvim.core.preview")
 	if ok_preview and preview.should_preserve_focus and preview.should_preserve_focus() then
+		if preview.focus_source_in_cockpit and preview.focus_source_in_cockpit(bufnr, line, column) then
+			return
+		end
 		return
 	end
 

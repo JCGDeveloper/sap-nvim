@@ -6,6 +6,7 @@
 -- global con `sapcli abap find` y lo abre con source.open.
 
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 
 local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
@@ -226,7 +227,7 @@ end
 local function goto_global_sapcli(word)
   notify("Buscando objeto '" .. word .. "' en SAP...")
   local rows = {}
-  vim.fn.jobstart({ "sapcli", "abap", "find", word }, {
+  sapcli.jobstart({ "sapcli", "abap", "find", word }, {
     on_stdout = function(_, data)
       for _, l in ipairs(data) do
         local t = vim.trim(l)

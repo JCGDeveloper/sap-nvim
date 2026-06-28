@@ -12,6 +12,12 @@ local stack_buf = nil
 local watch_win = nil
 local watch_buf = nil
 local code_tab = nil
+local code_debug_keys = {}
+local clear_code_debug_keys
+local set_debug_window_options
+local make_side_buffer
+local map_watch_tab_keys
+local map_code_debug_keys
 local keep_preview_until = 0
 local dap_focus_guard_installed = false
 local COCKPIT_TABS = { "Datos", "Locales", "Globales", "Watch", "Stack", "Breakpoints", "Log" }
@@ -45,6 +51,52 @@ local function notify(msg, level)
 	vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
 end
 
+local function layout_state_file()
+	return vim.fn.stdpath("state") .. "/sap-nvim/debug_layout.json"
+end
+
+local function save_layout()
+	local ok, json = pcall(vim.json.encode, {
+		desktop = cockpit.desktop,
+		active_watch_tab = cockpit.active_watch_tab,
+		watches = cockpit.watches,
+		watches2 = cockpit.watches2,
+	})
+	if not ok then
+		return
+	end
+	local path = layout_state_file()
+	pcall(vim.fn.mkdir, vim.fn.fnamemodify(path, ":h"), "p")
+	pcall(vim.fn.writefile, { json }, path)
+end
+
+local function load_layout()
+	local path = layout_state_file()
+	if vim.fn.filereadable(path) ~= 1 then
+		return
+	end
+	local ok_read, lines = pcall(vim.fn.readfile, path)
+	if not ok_read or not lines or not lines[1] then
+		return
+	end
+	local ok, data = pcall(vim.json.decode, table.concat(lines, "\n"))
+	if not ok or type(data) ~= "table" then
+		return
+	end
+	if type(data.desktop) == "string" then
+		cockpit.desktop = data.desktop
+	end
+	if type(data.active_watch_tab) == "string" then
+		cockpit.active_watch_tab = data.active_watch_tab
+	end
+	if type(data.watches) == "table" then
+		cockpit.watches = data.watches
+	end
+	if type(data.watches2) == "table" then
+		cockpit.watches2 = data.watches2
+	end
+end
+
 local function add_log(msg)
 	local line = os.date("%H:%M:%S") .. "  " .. tostring(msg)
 	cockpit.logs[#cockpit.logs + 1] = line
@@ -75,6 +127,9 @@ end
 
 local function close_preview_tab()
 	local tab = preview_tab
+	if clear_code_debug_keys then
+		clear_code_debug_keys()
+	end
 	preview_tab, preview_buf, preview_win = nil, nil, nil
 	code_win, code_buf = nil, nil
 	stack_win, stack_buf, watch_win, watch_buf = nil, nil, nil, nil
@@ -96,8 +151,46 @@ local function side_buf_valid(buf)
 	return buf and vim.api.nvim_buf_is_valid(buf)
 end
 
+local function win_shows(win, buf)
+	return win and vim.api.nvim_win_is_valid(win) and buf and vim.api.nvim_buf_is_valid(buf)
+		and vim.api.nvim_win_get_buf(win) == buf
+end
+
+local function restore_window_buffer(win, buf)
+	if not (win and vim.api.nvim_win_is_valid(win) and buf and vim.api.nvim_buf_is_valid(buf)) then
+		return false
+	end
+	if vim.api.nvim_win_get_buf(win) ~= buf then
+		pcall(vim.api.nvim_win_set_buf, win, buf)
+	end
+	set_debug_window_options(win)
+	return vim.api.nvim_win_get_buf(win) == buf
+end
+
+local function restore_or_make_panel(win, buf, name)
+	if not (win and vim.api.nvim_win_is_valid(win)) then
+		return buf, false
+	end
+	if not side_buf_valid(buf) then
+		buf = make_side_buffer(name)
+	end
+	restore_window_buffer(win, buf)
+	return buf, win_shows(win, buf)
+end
+
+local function close_duplicate_code_windows()
+	if not (preview_tab and tab_valid(preview_tab) and code_buf and vim.api.nvim_buf_is_valid(code_buf)) then
+		return
+	end
+	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(preview_tab)) do
+		if win ~= code_win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == code_buf then
+			pcall(vim.api.nvim_win_close, win, true)
+		end
+	end
+end
+
 local function preview_window()
-	if preview_win and vim.api.nvim_win_is_valid(preview_win) then
+	if win_shows(preview_win, preview_buf) then
 		return preview_win
 	end
 	if not preview_active() then
@@ -192,10 +285,34 @@ end
 function M.should_preserve_focus()
 	local buf = vim.api.nvim_get_current_buf()
 	local name = vim.api.nvim_buf_get_name(buf)
+	if preview_active() and vim.api.nvim_get_current_tabpage() == preview_tab then
+		return true
+	end
 	if vim.bo[buf].filetype == "sapdebugpreview" or name:match("^sap%-debug%-preview://") then
 		return true
 	end
 	return keep_preview_until > now_ms() and preview_active()
+end
+
+function M.focus_source_in_cockpit(bufnr, line, column)
+	if not (preview_active() and bufnr and vim.api.nvim_buf_is_valid(bufnr)) then
+		return false
+	end
+	pcall(vim.api.nvim_set_current_tabpage, preview_tab)
+	if not (code_win and vim.api.nvim_win_is_valid(code_win)) then
+		return false
+	end
+	pcall(vim.api.nvim_set_current_win, code_win)
+	if vim.api.nvim_win_get_buf(code_win) ~= bufnr then
+		pcall(vim.api.nvim_win_set_buf, code_win, bufnr)
+		code_buf = bufnr
+		map_code_debug_keys(code_buf)
+	end
+	local target_line = math.max(1, math.min(tonumber(line) or 1, vim.api.nvim_buf_line_count(bufnr)))
+	local target_col = math.max((tonumber(column) or 1) - 1, 0)
+	pcall(vim.api.nvim_win_set_cursor, code_win, { target_line, target_col })
+	set_debug_window_options(code_win)
+	return true
 end
 
 local select_tab
@@ -204,6 +321,9 @@ local open_debug_variable
 local refresh_stack_side
 local select_watch_tab
 local select_desktop
+local refresh_objects_desktop
+local short_value
+local var_value
 
 local function map_preview_keys(buf)
 	local function dap_call(fn)
@@ -283,7 +403,9 @@ local function map_preview_keys(buf)
 		end
 	end, vim.tbl_extend("force", opts, { desc = "Cockpit: refrescar" }))
 	vim.keymap.set("n", "o", function()
-		if M.open_selected_variable then
+		if buf == watch_buf and M.open_selected_right_variable then
+			M.open_selected_right_variable()
+		elseif M.open_selected_variable then
 			M.open_selected_variable()
 		end
 	end, vim.tbl_extend("force", opts, { desc = "Cockpit: abrir variable en Datos" }))
@@ -298,6 +420,11 @@ local function map_preview_keys(buf)
 			M.delete_watch_under_cursor()
 		end
 	end, vim.tbl_extend("force", opts, { desc = "Cockpit: borrar watch" }))
+	vim.keymap.set("n", "e", function()
+		if M.edit_watch_under_cursor and (cockpit.active == "Watch" or buf == watch_buf) then
+			M.edit_watch_under_cursor()
+		end
+	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: editar variable/watch" }))
 	vim.keymap.set("n", "i", function()
 		local tab = cockpit.active_watch_tab or "Variables 1"
 		if M.add_watch and buf == watch_buf and (tab == "Variables 1" or tab == "Variables 2") then
@@ -372,12 +499,114 @@ local function map_preview_keys(buf)
 	vim.keymap.set("n", "<leader>dg", M.jump_to_code, vim.tbl_extend("force", opts, { desc = "DAP ir al código" }))
 end
 
-local set_debug_window_options
-local make_side_buffer
-local map_watch_tab_keys
+local function dap_call_from_debugger(fn)
+	return function()
+		M.install_dap_focus_guard()
+		pin_preview_after_step()
+		local ok_sapdap, sapdap = pcall(require, "sap-nvim.integrations.dap")
+		if ok_sapdap and sapdap.step_from_preview then
+			sapdap.step_from_preview(fn)
+			return
+		end
+		local ok_dap, dap = pcall(require, "dap")
+		if ok_dap and dap[fn] then
+			dap[fn]()
+		end
+	end
+end
+
+clear_code_debug_keys = function()
+	if not (code_buf and vim.api.nvim_buf_is_valid(code_buf)) then
+		code_debug_keys = {}
+		return
+	end
+	for _, lhs in ipairs(code_debug_keys) do
+		pcall(vim.keymap.del, "n", lhs, { buffer = code_buf })
+	end
+	code_debug_keys = {}
+end
+
+map_code_debug_keys = function(buf)
+	if not buf or not vim.api.nvim_buf_is_valid(buf) then
+		return
+	end
+	clear_code_debug_keys()
+	local opts = { buffer = buf, nowait = true, silent = true }
+	local function set(lhs, rhs, desc)
+		vim.keymap.set("n", lhs, rhs, vim.tbl_extend("force", opts, { desc = desc }))
+		code_debug_keys[#code_debug_keys + 1] = lhs
+	end
+
+	set("o", function()
+		if M.show_alv then
+			M.show_alv(false, nil, { focus = true })
+		end
+	end, "SAP Debugger: visualizar variable bajo cursor")
+	set("O", function()
+		if select_desktop then
+			select_desktop("Objects", { focus = true })
+		end
+	end, "SAP Debugger: Objects")
+	set("S", function()
+		if select_desktop then
+			select_desktop("Structures", { focus = true })
+		end
+	end, "SAP Debugger: Structures")
+	set("T", function()
+		if select_desktop then
+			select_desktop("Tables", { focus = true })
+		end
+	end, "SAP Debugger: Tables")
+	set("D", function()
+		if select_desktop then
+			select_desktop("Detail", { focus = true })
+		end
+	end, "SAP Debugger: Detail")
+	set("E", function()
+		if select_desktop then
+			select_desktop("Data Explorer", { focus = true })
+		end
+	end, "SAP Debugger: Data Explorer")
+	set("L", function()
+		if select_watch_tab then
+			select_watch_tab("Locals", { focus = true })
+		end
+	end, "SAP Debugger: Locals")
+	set("G", function()
+		if select_watch_tab then
+			select_watch_tab("Globals", { focus = true })
+		end
+	end, "SAP Debugger: Globals")
+	set("<F5>", dap_call_from_debugger("step_into"), "SAP Debugger: Single Step")
+	set("<F6>", dap_call_from_debugger("step_over"), "SAP Debugger: Execute")
+	set("<F7>", dap_call_from_debugger("step_out"), "SAP Debugger: Return")
+	set("<F8>", dap_call_from_debugger("continue"), "SAP Debugger: Continue")
+	set("<leader>di", dap_call_from_debugger("step_into"), "DAP step into")
+	set("<leader>do", dap_call_from_debugger("step_over"), "DAP step over")
+	set("<leader>du", dap_call_from_debugger("step_out"), "DAP step out")
+	set("<leader>dc", dap_call_from_debugger("continue"), "DAP continuar")
+	set("<leader>dg", M.jump_to_code, "DAP ir al código")
+end
 
 local function ensure_preview_tab(focus)
+	if tab_valid(preview_tab) then
+		if not side_buf_valid(preview_buf) and preview_win and vim.api.nvim_win_is_valid(preview_win) then
+			preview_buf = make_side_buffer("sap-debug-preview://variables")
+		end
+		if not side_buf_valid(stack_buf) and stack_win and vim.api.nvim_win_is_valid(stack_win) then
+			stack_buf = make_side_buffer("sap-debug-preview://callstack")
+		end
+		if not side_buf_valid(watch_buf) and watch_win and vim.api.nvim_win_is_valid(watch_win) then
+			watch_buf = make_side_buffer("sap-debug-preview://watch")
+		end
+	end
 	if tab_valid(preview_tab) and preview_buf and vim.api.nvim_buf_is_valid(preview_buf) then
+		restore_window_buffer(code_win, code_buf)
+		preview_buf = select(1, restore_or_make_panel(preview_win, preview_buf, "sap-debug-preview://variables"))
+		stack_buf = select(1, restore_or_make_panel(stack_win, stack_buf, "sap-debug-preview://callstack"))
+		watch_buf = select(1, restore_or_make_panel(watch_win, watch_buf, "sap-debug-preview://watch"))
+		map_watch_tab_keys(watch_buf)
+		close_duplicate_code_windows()
 		if focus then
 			pcall(vim.api.nvim_set_current_tabpage, preview_tab)
 			preview_win = preview_window()
@@ -403,13 +632,14 @@ local function ensure_preview_tab(focus)
 		code_buf = vim.api.nvim_get_current_buf()
 	end
 	set_debug_window_options(code_win)
+	map_code_debug_keys(code_buf)
 
 	-- Columna derecha completa: arriba Call Stack, abajo Variables/Watch.
 	vim.cmd("rightbelow vertical split")
 	stack_win = vim.api.nvim_get_current_win()
 	stack_buf = make_side_buffer("sap-debug-preview://callstack")
 	vim.api.nvim_win_set_buf(stack_win, stack_buf)
-	local side_width = math.max(40, math.floor(vim.o.columns * 0.32))
+	local side_width = math.max(46, math.floor(vim.o.columns * 0.34))
 	pcall(vim.api.nvim_win_set_width, stack_win, side_width)
 	vim.wo[stack_win].winfixwidth = true
 	set_debug_window_options(stack_win)
@@ -420,6 +650,9 @@ local function ensure_preview_tab(focus)
 	map_watch_tab_keys(watch_buf)
 	vim.api.nvim_win_set_buf(watch_win, watch_buf)
 	pcall(vim.api.nvim_win_set_height, watch_win, math.max(10, math.floor(vim.o.lines * 0.30)))
+	pcall(vim.api.nvim_win_set_width, watch_win, side_width)
+	vim.wo[watch_win].winfixwidth = true
+	vim.wo[watch_win].winfixheight = true
 	set_debug_window_options(watch_win)
 
 	-- Panel inferior izquierdo: herramientas/pestañas (Datos, Locales, estructuras, tablas...).
@@ -429,6 +662,7 @@ local function ensure_preview_tab(focus)
 	preview_buf = make_side_buffer("sap-debug-preview://variables")
 	vim.api.nvim_win_set_buf(preview_win, preview_buf)
 	pcall(vim.api.nvim_win_set_height, preview_win, math.max(10, math.floor(vim.o.lines * 0.30)))
+	vim.wo[preview_win].winfixheight = true
 	set_debug_window_options(preview_win)
 	pcall(vim.api.nvim_set_current_win, code_win)
 
@@ -436,6 +670,9 @@ local function ensure_preview_tab(focus)
 		buffer = preview_buf,
 		once = true,
 		callback = function()
+			if clear_code_debug_keys then
+				clear_code_debug_keys()
+			end
 			preview_tab, preview_buf, preview_win = nil, nil, nil
 			code_win, code_buf = nil, nil
 			stack_win, stack_buf, watch_win, watch_buf = nil, nil, nil, nil
@@ -495,9 +732,20 @@ local function ensure_side_layout()
 	if not preview_active() then
 		return
 	end
-	local has_stack = stack_win and vim.api.nvim_win_is_valid(stack_win) and side_buf_valid(stack_buf)
-	local has_watch = watch_win and vim.api.nvim_win_is_valid(watch_win) and side_buf_valid(watch_buf)
+	preview_buf = select(1, restore_or_make_panel(preview_win, preview_buf, "sap-debug-preview://variables"))
+	restore_window_buffer(code_win, code_buf)
+	local has_stack, has_watch
+	stack_buf, has_stack = restore_or_make_panel(stack_win, stack_buf, "sap-debug-preview://callstack")
+	watch_buf, has_watch = restore_or_make_panel(watch_win, watch_buf, "sap-debug-preview://watch")
+	map_watch_tab_keys(watch_buf)
+	close_duplicate_code_windows()
 	if has_stack and has_watch then
+		local side_width = math.max(46, math.floor(vim.o.columns * 0.34))
+		pcall(vim.api.nvim_win_set_width, stack_win, side_width)
+		pcall(vim.api.nvim_win_set_width, watch_win, side_width)
+		vim.wo[stack_win].winfixwidth = true
+		vim.wo[watch_win].winfixwidth = true
+		vim.wo[watch_win].winfixheight = true
 		return
 	end
 
@@ -507,11 +755,11 @@ local function ensure_side_layout()
 		return
 	end
 	pcall(vim.api.nvim_set_current_win, base_win)
-	vim.cmd("rightbelow vertical split")
+	vim.cmd("botright vertical split")
 	stack_win = vim.api.nvim_get_current_win()
 	stack_buf = make_side_buffer("sap-debug-preview://callstack")
 	vim.api.nvim_win_set_buf(stack_win, stack_buf)
-	local side_width = math.max(38, math.floor(vim.o.columns * 0.32))
+	local side_width = math.max(46, math.floor(vim.o.columns * 0.34))
 	pcall(vim.api.nvim_win_set_width, stack_win, side_width)
 	vim.wo[stack_win].winfixwidth = true
 	set_debug_window_options(stack_win)
@@ -522,13 +770,19 @@ local function ensure_side_layout()
 	map_watch_tab_keys(watch_buf)
 	vim.api.nvim_win_set_buf(watch_win, watch_buf)
 	pcall(vim.api.nvim_win_set_height, watch_win, math.max(10, math.floor(vim.o.lines * 0.28)))
+	pcall(vim.api.nvim_win_set_width, watch_win, side_width)
+	vim.wo[watch_win].winfixwidth = true
+	vim.wo[watch_win].winfixheight = true
 	set_debug_window_options(watch_win)
 	if preview_win and vim.api.nvim_win_is_valid(preview_win) then
 		pcall(vim.api.nvim_set_current_win, preview_win)
+		restore_window_buffer(preview_win, preview_buf)
+		vim.wo[preview_win].winfixheight = true
 		set_debug_window_options(preview_win)
 	end
 	if code_win and vim.api.nvim_win_is_valid(code_win) then
 		set_debug_window_options(code_win)
+		map_code_debug_keys(vim.api.nvim_win_get_buf(code_win))
 	end
 	if cur and vim.api.nvim_win_is_valid(cur) then
 		pcall(vim.api.nvim_set_current_win, cur)
@@ -627,7 +881,7 @@ local function cockpit_lines()
 		fit_line("│ F8 Continue  F5 Single Step  F6 Execute  F7 Return  |  r Refresh  o Display  <Enter> Source"),
 		sapgui_rule("├─ " .. frame_summary() .. " "),
 		fit_line("│ Desktop      " .. sapgui_tabline(SAPGUI_DESKTOPS, active_desktop(), false)),
-		fit_line("│ Acceso       S Structures  T Tables  O Objects  D Detail  E Data Explorer  |  o visualizar selección"),
+		fit_line("│ Acceso       S Structures  T Tables  O Objects  D Detail  E Data Explorer  |  o variable  L/G locals/globals"),
 		fit_line("│ Herramientas " .. sapgui_tabline(COCKPIT_TABS, cockpit.active, true)),
 		sapgui_rule("├─ " .. (p.title or cockpit.active) .. " "),
 		"",
@@ -666,13 +920,24 @@ local function apply_cockpit_highlights()
 end
 
 local function side_title(title)
+	local width = 46
+	local win = (title == "Call Stack") and stack_win or watch_win
+	if win and vim.api.nvim_win_is_valid(win) then
+		width = math.max(24, vim.api.nvim_win_get_width(win) - 1)
+	end
+	local left = "┌─ " .. title .. " "
 	return {
-		sapgui_rule("┌─ " .. title .. " "),
+		left .. string.rep("─", math.max(0, width - #left)),
 	}
 end
 
 local function side_footer()
-	return sapgui_rule("└")
+	local width = 46
+	local win = watch_win or stack_win
+	if win and vim.api.nvim_win_is_valid(win) then
+		width = math.max(24, vim.api.nvim_win_get_width(win) - 1)
+	end
+	return "└" .. string.rep("─", math.max(0, width - 1))
 end
 
 local function set_panel_lines(buf, lines)
@@ -708,38 +973,18 @@ local function render_stack_panel()
 	local lines = side_title("Call Stack")
 	vim.list_extend(lines, p.lines or { "(sin stack disponible)" })
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = "Enter cambia de frame  ·  5 abre Stack"
+	lines[#lines + 1] = "Enter cambia frame"
+	lines[#lines + 1] = "5 abre Stack"
 	lines[#lines + 1] = side_footer()
 	set_panel_lines(stack_buf, lines)
 	apply_side_highlights(stack_buf)
 end
 
 local function watch_tab_lines()
-	local rows = {
-		{ "Variables 1", "Variables 2" },
-		{ "Locals", "Globals", "Auto" },
-		{ "Memory Analysis" },
-	}
 	local out = {}
-	local n = 0
-	for _, row in ipairs(rows) do
-		local parts = {}
-		for _, name in ipairs(row) do
-			for i, tab in ipairs(SAPGUI_WATCH_TABS) do
-				if tab == name then
-					n = i
-					break
-				end
-			end
-			local label = tostring(n) .. " " .. name
-			if cockpit.active_watch_tab == name then
-				label = "[" .. label .. "]"
-			else
-				label = " " .. label .. " "
-			end
-			parts[#parts + 1] = label
-		end
-		out[#out + 1] = table.concat(parts, "  ")
+	for i, name in ipairs(SAPGUI_WATCH_TABS) do
+		local marker = cockpit.active_watch_tab == name and "▶" or " "
+		out[#out + 1] = string.format("%s %d %s", marker, i, name)
 	end
 	return out
 end
@@ -751,6 +996,7 @@ local function render_watch_panel()
 	local tab = cockpit.active_watch_tab or "Variables 1"
 	local lines = side_title("Variables")
 	vim.list_extend(lines, watch_tab_lines())
+	lines[#lines + 1] = ""
 	if tab == "Variables 1" or tab == "Variables 2" then
 		lines[#lines + 1] = "Entrada  > pulsa a, i o Enter para escribir"
 		local p = pane(tab == "Variables 1" and "Watch" or "Variables 2")
@@ -800,7 +1046,8 @@ local function render_watch_panel()
 		lines[#lines + 1] = "(sin datos)"
 	end
 	lines[#lines + 1] = ""
-	lines[#lines + 1] = "1..6 o v1..v6 cambia pestaña  ·  a/i/Enter añade en Variables 1/2  ·  d borra"
+	lines[#lines + 1] = "1..6/v1..v6 cambia pestaña"
+	lines[#lines + 1] = "o abre  ·  a/i/Enter añade  ·  e edita  ·  d borra"
 	lines[#lines + 1] = side_footer()
 	set_panel_lines(watch_buf, lines)
 	apply_side_highlights(watch_buf)
@@ -923,6 +1170,7 @@ end
 select_desktop = function(name, opts)
 	opts = opts or {}
 	cockpit.desktop = name or "Standard"
+	save_layout()
 	if name == "Standard" then
 		render_cockpit({ focus = false, preserve_cursor = true })
 		if code_win and vim.api.nvim_win_is_valid(code_win) then
@@ -943,11 +1191,9 @@ select_desktop = function(name, opts)
 			"En una tabla abierta usa ]/[ para paginar.",
 		}, { pane = "Datos", focus = opts.focus, activate = true })
 	elseif name == "Objects" then
-		open_preview("Objects", {
-			"Selecciona una referencia de objeto en Locales, Globals o Variables y pulsa o.",
-			"Ejemplos: lo_container, go_alv, sender.",
-			"Si SAP expone atributos/métodos como hijos, se muestran en esta vista.",
-		}, { pane = "Datos", focus = opts.focus, activate = true })
+		if refresh_objects_desktop then
+			refresh_objects_desktop(opts)
+		end
 	elseif name == "Detail" then
 		open_preview("Detail", {
 			"Vista detallada del valor seleccionado.",
@@ -965,6 +1211,57 @@ select_desktop = function(name, opts)
 	end
 end
 M.select_desktop = select_desktop
+
+local function looks_like_object(v)
+	local name = tostring(v.name or ""):upper()
+	local typ = tostring(v.type or v.meta or ""):upper()
+	return v.meta == "object"
+		or typ:find("REF TO", 1, true) ~= nil
+		or typ:find("OBJECT", 1, true) ~= nil
+		or typ:find("CLASS", 1, true) ~= nil
+		or name:match("^[LG]O_") ~= nil
+end
+
+refresh_objects_desktop = function(opts)
+	opts = opts or {}
+	if not dbg.session then
+		open_preview("Objects", { "No hay sesión de debug activa." }, { pane = "Datos", focus = opts.focus, activate = true })
+		return
+	end
+	dbg.get_variables({ "@LOCALS", "@GLOBALS" }, function(vars)
+		local lines = {}
+		local actions = {}
+		local name_w, type_w = 8, 10
+		for _, v in ipairs(vars or {}) do
+			if looks_like_object(v) then
+				name_w = math.min(38, math.max(name_w, #(v.name or "?")))
+				type_w = math.min(42, math.max(type_w, #(v.type or v.meta or "")))
+			end
+		end
+		lines[#lines + 1] = string.format("%-" .. name_w .. "s │ %-" .. type_w .. "s │ %s", "OBJECT", "TYPE", "VALUE")
+		lines[#lines + 1] = string.rep("-", vim.fn.strdisplaywidth(lines[1]))
+		for _, v in ipairs(vars or {}) do
+			if looks_like_object(v) then
+				local idx = #lines + 1
+				lines[idx] = string.format(
+					"%-" .. name_w .. "s │ %-" .. type_w .. "s │ %s",
+					short_value(v.name or "?", name_w),
+					short_value(v.type or v.meta or "", type_w),
+					short_value(var_value(v), 120)
+				)
+				actions[idx] = { kind = "object", label = v.name, var = v }
+			end
+		end
+		if #lines == 2 then
+			lines[#lines + 1] = "No se encontraron referencias de objeto en Locales/Globals."
+			lines[#lines + 1] = "Añade una referencia en Variables 1/2 o abre Locals/Globals y pulsa o sobre lo_* / go_*."
+		else
+			lines[#lines + 1] = ""
+			lines[#lines + 1] = "Pulsa o sobre una referencia para abrir atributos/hijos si SAP los expone."
+		end
+		open_preview("Objects", lines, { pane = "Datos", focus = opts.focus, activate = true, actions = actions })
+	end)
+end
 
 local function normalize_preview_opts(opts)
 	if type(opts) == "table" then
@@ -1223,8 +1520,48 @@ local function current_pane_action()
 	return p.actions and p.actions[pane_line] or nil
 end
 
+local function current_right_pane_action()
+	if not (watch_win and vim.api.nvim_win_is_valid(watch_win)) then
+		return nil
+	end
+	local row = vim.api.nvim_win_get_cursor(watch_win)[1]
+	local tab = cockpit.active_watch_tab or "Variables 1"
+	local pane_name
+	local start_line
+	if tab == "Variables 1" then
+		pane_name = "Watch"
+		start_line = 10
+	elseif tab == "Variables 2" then
+		pane_name = "Variables 2"
+		start_line = 10
+	elseif tab == "Locals" then
+		pane_name = "Locales"
+		start_line = 9
+	elseif tab == "Globals" then
+		pane_name = "Globales"
+		start_line = 9
+	else
+		return nil
+	end
+	local pane_line = row - start_line + 1
+	if pane_line < 1 then
+		return nil
+	end
+	local p = pane(pane_name)
+	return p.actions and p.actions[pane_line] or nil
+end
+
 function M.open_selected_variable()
 	local action = current_pane_action()
+	if not action or not action.var then
+		notify("No hay variable expandible bajo el cursor.", vim.log.levels.WARN)
+		return
+	end
+	open_debug_variable(action.label, action.var, { focus = true })
+end
+
+function M.open_selected_right_variable()
+	local action = current_right_pane_action()
 	if not action or not action.var then
 		notify("No hay variable expandible bajo el cursor.", vim.log.levels.WARN)
 		return
@@ -1246,7 +1583,7 @@ function M.table_page(delta)
 	})
 end
 
-local function short_value(value, max_width)
+short_value = function(value, max_width)
 	value = tostring(value or "")
 	value = value:gsub("\r", " "):gsub("\n", " ")
 	max_width = max_width or 90
@@ -1256,7 +1593,7 @@ local function short_value(value, max_width)
 	return value
 end
 
-local function var_value(v)
+var_value = function(v)
 	if v.value and v.value ~= "" then
 		return v.value
 	end
@@ -1377,6 +1714,7 @@ end
 select_watch_tab = function(name, opts)
 	opts = opts or {}
 	cockpit.active_watch_tab = name or cockpit.active_watch_tab or "Variables 1"
+	save_layout()
 	if cockpit.active_watch_tab == "Variables 1" then
 		render_watch_list("Watch", cockpit.watches, { focus = false, activate = false })
 	elseif cockpit.active_watch_tab == "Variables 2" then
@@ -1455,6 +1793,27 @@ local function refresh_stack(opts)
 	end)
 end
 
+local function focus_stack_frame_code(frame)
+	if not frame then
+		return
+	end
+	M.jump_to_code()
+	if not (code_win and vim.api.nvim_win_is_valid(code_win)) then
+		return
+	end
+	local bufnr = vim.api.nvim_win_get_buf(code_win)
+	local bname = vim.api.nvim_buf_get_name(bufnr):upper()
+	local include = tostring(frame.include or frame.program or ""):upper()
+	if include ~= "" and bname ~= "" and not bname:find(include, 1, true) then
+		return
+	end
+	local line = tonumber(frame.line)
+	if line and line > 0 then
+		local max_line = math.max(1, vim.api.nvim_buf_line_count(bufnr))
+		pcall(vim.api.nvim_win_set_cursor, code_win, { math.min(line, max_line), 0 })
+	end
+end
+
 function M.select_stack_under_cursor()
 	if not dbg.session or not (stack_win and vim.api.nvim_win_is_valid(stack_win)) then
 		return
@@ -1471,10 +1830,18 @@ function M.select_stack_under_cursor()
 		dbg.goto_stack(frame.stackUri, function()
 			add_log("stack seleccionado: " .. (frame.include or frame.program or "?") .. ":" .. tostring(frame.line or "?"))
 			refresh_stack_side()
-			M.refresh_pane(cockpit.active, { focus = false, preserve_cursor = true })
+			if cockpit.desktop == "Objects" and refresh_objects_desktop then
+				refresh_objects_desktop({ focus = false })
+			elseif cockpit.active_watch_tab == "Locals" or cockpit.active_watch_tab == "Globals" then
+				select_watch_tab(cockpit.active_watch_tab, { focus = false })
+			else
+				render_cockpit({ focus = false, preserve_cursor = true })
+			end
+			focus_stack_frame_code(frame)
 		end)
 	else
 		render_stack_panel()
+		focus_stack_frame_code(frame)
 	end
 end
 
@@ -1576,6 +1943,7 @@ function M.add_watch(expr)
 		else
 			render_watch_list("Watch", cockpit.watches, { focus = false, activate = false })
 		end
+		save_layout()
 		render_watch_panel()
 		if watch_win and vim.api.nvim_win_is_valid(watch_win) then
 			pcall(vim.api.nvim_set_current_win, watch_win)
@@ -1608,12 +1976,48 @@ function M.delete_watch_under_cursor()
 	if removed then
 		add_log("watch borrado: " .. removed)
 	end
+	save_layout()
 	if cockpit.active_watch_tab == "Variables 2" then
 		render_watch_list("Variables 2", cockpit.watches2, { focus = false, activate = false })
 	else
 		render_watch_list("Watch", cockpit.watches, { focus = false, activate = false })
 	end
 	render_watch_panel()
+end
+
+function M.edit_watch_under_cursor()
+	local tab = cockpit.active_watch_tab or "Variables 1"
+	if tab ~= "Variables 1" and tab ~= "Variables 2" then
+		return
+	end
+	local target = tab == "Variables 2" and cockpit.watches2 or cockpit.watches
+	if #target == 0 then
+		return
+	end
+	local line = vim.api.nvim_get_current_line()
+	local idx = tonumber(line:match("^%s*(%d+)%s*│")) or 1
+	idx = math.max(1, math.min(idx, #target))
+	vim.ui.input({ prompt = tab .. " editar: ", default = target[idx] }, function(input)
+		if not input then
+			return
+		end
+		input = vim.trim(input)
+		if input == "" then
+			table.remove(target, idx)
+		else
+			target[idx] = input
+		end
+		save_layout()
+		if tab == "Variables 2" then
+			render_watch_list("Variables 2", cockpit.watches2, { focus = false, activate = false })
+		else
+			render_watch_list("Watch", cockpit.watches, { focus = false, activate = false })
+		end
+		render_watch_panel()
+		if watch_win and vim.api.nvim_win_is_valid(watch_win) then
+			pcall(vim.api.nvim_set_current_win, watch_win)
+		end
+	end)
 end
 
 -- 🔥 FIX ARQUITECTÓNICO: Resolvemos el ID oficial de SAP buscando en el Scope local y global primero
@@ -1701,6 +2105,7 @@ function M.refresh_active()
 end
 
 function M.setup()
+	load_layout()
 	vim.api.nvim_set_hl(0, "SapDebugGuiTitle", { fg = "#7aa2f7", bg = "NONE", bold = true })
 	vim.api.nvim_set_hl(0, "SapDebugGuiMenu", { fg = "#9aa5ce", bg = "NONE" })
 	vim.api.nvim_set_hl(0, "SapDebugGuiToolbar", { fg = "#9ece6a", bg = "NONE", bold = true })

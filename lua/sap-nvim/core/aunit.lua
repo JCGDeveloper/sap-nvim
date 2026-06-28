@@ -3,6 +3,7 @@
 -- Parses JUnit4 XML output from sapcli so you can jump to failing tests.
 
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 
 local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
@@ -81,7 +82,7 @@ function M.run_aunit()
   local xml_lines = {}
   local stderr    = {}
 
-  vim.fn.jobstart({ "sapcli", "aunit", "run", "class", obj_name, "--output", "junit4" }, {
+  sapcli.jobstart({ "sapcli", "aunit", "run", "class", obj_name, "--output", "junit4" }, {
     on_stdout = function(_, data)
       for _, l in ipairs(data) do
         if l ~= "" then table.insert(xml_lines, l) end

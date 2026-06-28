@@ -49,7 +49,7 @@ class AdtDaemon:
         self.host, self.port, self.is_https = self._parse_base(base)
         token = base64.b64encode(("%s:%s" % (user, password)).encode("utf-8"))
         self.authorization = "Basic " + token.decode("ascii")
-        self.ctx = ssl._create_unverified_context()
+        self.ctx = self._ssl_context()
 
         self.csrf = None
         self.cookies = None
@@ -57,6 +57,14 @@ class AdtDaemon:
         self.pool = []                        # conexiones libres
         self.pool_lock = threading.Lock()
         self.out_lock = threading.Lock()      # serializa SOLO la escritura a stdout
+
+    @staticmethod
+    def _ssl_context():
+        verify = os.environ.get("ADT_TLS_VERIFY", "0") != "0"
+        ca_file = os.environ.get("ADT_CA_FILE") or None
+        if not verify:
+            return ssl._create_unverified_context()
+        return ssl.create_default_context(cafile=ca_file)
 
     @staticmethod
     def _parse_base(base):
@@ -142,6 +150,12 @@ class AdtDaemon:
         resp = conn.getresponse()
         self._store_session(resp)
         resp.read()
+        if resp.status < 200 or resp.status >= 400:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return False
         with self.pool_lock:
             self.pool.append(conn)
         return True

@@ -1,5 +1,6 @@
 -- lua/sap-nvim/core/keymaps.lua
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 
 function M.setup(opts)
 	opts = opts or {}
@@ -21,7 +22,7 @@ function M.setup(opts)
 		vim.cmd("write")
 		vim.notify("[sap-nvim] Ejecutando tests de " .. obj .. "...")
 		local aunit_lines = {}
-		vim.fn.jobstart({ "sapcli", "aunit", "run", "class", obj }, {
+		sapcli.jobstart({ "sapcli", "aunit", "run", "class", obj }, {
 			on_stdout = function(_, data)
 				for _, line in ipairs(data) do
 					if line ~= "" then

@@ -86,6 +86,26 @@ local function parse_exception(body)
 	return unxml(msg), subtype
 end
 
+local function curl_cfg(c)
+	local esc = function(s)
+		return (tostring(s or "")):gsub("\\", "\\\\"):gsub('"', '\\"')
+	end
+	return 'user = "' .. esc(c.user .. ":" .. c.pass) .. '"\n'
+end
+
+local function curl_base_args()
+	local ok, cfg = pcall(require, "sap-nvim.core.config")
+	local sec = ok and cfg.security() or {}
+	local args = { "curl", "-s" }
+	if sec.verify_tls == false then
+		args[#args + 1] = "-k"
+	end
+	if sec.ca_file and sec.ca_file ~= "" then
+		vim.list_extend(args, { "--cacert", vim.fn.expand(sec.ca_file) })
+	end
+	return args
+end
+
 local function curl(opts, cb)
 	local s = M.session
 	local c = adt_http.creds()
@@ -105,11 +125,10 @@ local function curl(opts, cb)
 	end
 
 	local hdrfile = vim.fn.tempname()
-	local args = {
-		"curl",
-		"-sk",
-		"-u",
-		c.user .. ":" .. c.pass,
+	local args = curl_base_args()
+	vim.list_extend(args, {
+		"-K",
+		"-",
 		"-b",
 		s.jar,
 		"-c",
@@ -118,7 +137,7 @@ local function curl(opts, cb)
 		hdrfile,
 		"-H",
 		"X-sap-adt-sessiontype: stateful",
-	}
+	})
 	vim.list_extend(args, { "-X", opts.method or "GET" })
 	if opts.csrf_fetch then
 		vim.list_extend(args, { "-H", "X-CSRF-Token: Fetch" })
@@ -141,7 +160,7 @@ local function curl(opts, cb)
 	vim.list_extend(args, { url })
 
 	local out = {}
-	return vim.fn.jobstart(args, {
+	local job = vim.fn.jobstart(args, {
 		stdout_buffered = true,
 		on_stdout = function(_, d)
 			for _, l in ipairs(d) do
@@ -169,6 +188,11 @@ local function curl(opts, cb)
 			end
 		end,
 	})
+	if job and job > 0 then
+		pcall(vim.fn.chansend, job, curl_cfg(c))
+		pcall(vim.fn.chanclose, job, "stdin")
+	end
+	return job
 end
 
 function M.init_session(cb)

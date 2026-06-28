@@ -2,6 +2,7 @@
 -- Adaptador para navegación remota SAP con oil.nvim
 
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 
 function M.setup(opts)
   opts = opts or {}
@@ -26,7 +27,7 @@ function M.setup(opts)
 
       -- vim.fn.system con LISTA: invoca sapcli directamente (sin shell), así un nombre de
       -- paquete con metacaracteres no puede inyectar comandos.
-      local out = vim.fn.system({ "sapcli", "search", package })
+      local out = sapcli.system({ "sapcli", "search", package })
       if vim.v.shell_error ~= 0 then
         return {}, "sapcli falló al buscar " .. package
       end
@@ -43,7 +44,7 @@ function M.setup(opts)
     --- Leer objeto remoto
     read = function(_, url)
       local object = url.path:match("^/(.+)$") or ""
-      local content = vim.fn.system({ "sapcli", "cat", object })
+      local content = sapcli.system({ "sapcli", "cat", object })
       if vim.v.shell_error ~= 0 then
         return "", "Error leyendo " .. object
       end
@@ -59,7 +60,7 @@ function M.setup(opts)
         f:write(data)
         f:close()
       end
-      vim.fn.system({ "sapcli", "put", object, tmpfile })
+      sapcli.system({ "sapcli", "put", object, tmpfile })
       os.remove(tmpfile)
       return true
     end,

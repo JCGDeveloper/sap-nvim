@@ -7,6 +7,7 @@
 -- chain (sapcli → connection → objects → transports) works end to end.
 
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 
 local function open_report(lines)
   local buf = vim.api.nvim_create_buf(false, true)
@@ -62,7 +63,7 @@ function M.run()
     { "sapcli instalado",   function() return vim.fn.executable("sapcli") == 1 end },
     { "abaplint instalado", function() return vim.fn.executable("abaplint") == 1 end },
     { "current-context configurado", function()
-      local c = vim.fn.systemlist({ "sapcli", "config", "current-context" })
+      local c = sapcli.systemlist({ "sapcli", "config", "current-context" })
       return vim.v.shell_error == 0 and c[1] ~= nil and not c[1]:match("No configuration")
     end },
     { "~/.sapcli/config.yml protegido (0600 — clave en texto plano)", function()

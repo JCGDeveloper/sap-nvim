@@ -2,6 +2,7 @@
 -- SAP object search and package browser (like Ctrl+Shift+A in Eclipse)
 
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 local adt = require("sap-nvim.core.adt")
 local source = require("sap-nvim.core.source")
 
@@ -269,7 +270,7 @@ end
 local function package_info_sapcli(pkg)
   notify("Leyendo info del paquete (sapcli): " .. pkg)
   local stdout, stderr = {}, {}
-  vim.fn.jobstart({ "sapcli", "package", "stat", pkg }, {
+  sapcli.jobstart({ "sapcli", "package", "stat", pkg }, {
     on_stdout = function(_, data)
       for _, line in ipairs(data) do
         if line ~= "" then table.insert(stdout, line) end
@@ -297,7 +298,7 @@ end
 local function browse_package_sapcli(pkg)
   notify("Explorando paquete (sapcli): " .. pkg)
   local objects, stderr = {}, {}
-  vim.fn.jobstart({ "sapcli", "package", "list", "-l", pkg }, {
+  sapcli.jobstart({ "sapcli", "package", "list", "-l", pkg }, {
     on_stdout = function(_, data)
       for _, line in ipairs(data) do
         local t = vim.trim(line)

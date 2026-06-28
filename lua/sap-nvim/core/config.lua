@@ -40,6 +40,12 @@ local defaults = {
   format = {
     on_save = false,  -- formatear con el Pretty Printer de SAP al guardar (objetos remotos)
   },
+  -- Seguridad de transporte. Por compatibilidad con sistemas SAP internos/self-signed,
+  -- verify_tls arranca desactivado; para productivo debe activarse y, si aplica, ca_file.
+  security = {
+    verify_tls = false,
+    ca_file = nil,
+  },
   -- Seguridad para uso profesional/productivo.
   productive = {
     safe_mode = true,
@@ -58,6 +64,7 @@ function M.setup(opts)
     naming = opts.naming or {},
     data = opts.data or {},
     format = opts.format or {},
+    security = opts.security or {},
     productive = opts.productive or {},
   })
 end
@@ -66,6 +73,7 @@ function M.new() return M.values.new end
 function M.naming() return M.values.naming end
 function M.data() return M.values.data end
 function M.format() return M.values.format end
+function M.security() return M.values.security end
 function M.productive() return M.values.productive end
 
 return M

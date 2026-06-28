@@ -13,6 +13,7 @@
 local M = {}
 
 local secret = require("sap-nvim.core.secret")
+local config = require("sap-nvim.core.config")
 
 -- active_ctx: contexto elegido en runtime (login). passwords: contraseñas EN MEMORIA
 -- (nunca se escriben a disco), por contexto. La persistencia "estilo VSCode" (recordar entre
@@ -327,6 +328,18 @@ local function url_encode(v)
   end))
 end
 
+local function curl_base_args()
+  local sec = config.security()
+  local args = { "curl", "-s" }
+  if sec.verify_tls == false then
+    args[#args + 1] = "-k"
+  end
+  if sec.ca_file and sec.ca_file ~= "" then
+    vim.list_extend(args, { "--cacert", vim.fn.expand(sec.ca_file) })
+  end
+  return args
+end
+
 -- Prueba las credenciales actuales con UNA sola petición de discovery. cb(ok, http_code).
 -- Es el guardián anti-bloqueo: validar ANTES de habilitar nada hace que una contraseña errónea
 -- cueste UN intento, no la ráfaga (por tecla + sapcli) que dispara login/fails_to_user_lock.
@@ -338,10 +351,11 @@ function M.validate(cb)
     return
   end
   local out = {}
-  local args = {
-    "curl", "-sk", "-K", "-", "-o", "/dev/null", "-w", "%{http_code}",
+  local args = curl_base_args()
+  vim.list_extend(args, {
+    "-K", "-", "-o", "/dev/null", "-w", "%{http_code}",
     c.base .. "/sap/bc/adt/core/discovery?sap-client=" .. c.client,
-  }
+  })
   local job = vim.fn.jobstart(args, {
     stdout_buffered = true,
     on_stdout = function(_, data)
@@ -364,12 +378,14 @@ end
 local function ensure_token(c)
   if state.token then return state.token end
   local hdr = vim.fn.tempname()
-  vim.fn.system({
-    "curl", "-sk", "-K", "-",
+  local args = curl_base_args()
+  vim.list_extend(args, {
+    "-K", "-",
     "-c", cookie_file(), "-H", "X-CSRF-Token: Fetch",
     "-D", hdr, "-o", "/dev/null",
     c.base .. "/sap/bc/adt/core/discovery?sap-client=" .. c.client,
-  }, curl_cfg(c))
+  })
+  vim.fn.system(args, curl_cfg(c))
   local lines = vim.fn.readfile(hdr); pcall(os.remove, hdr)
   for _, l in ipairs(lines) do
     local t = l:match("^[Xx]%-[Cc][Ss][Rr][Ff]%-[Tt]oken:%s*(%S+)")
@@ -393,7 +409,8 @@ function M.request(opts)
     for k, v in pairs(opts.query) do url = url .. "&" .. url_encode(k) .. "=" .. url_encode(v) end
   end
 
-  local args = { "curl", "-sk", "-K", "-", "-b", cookie_file() }
+  local args = curl_base_args()
+  vim.list_extend(args, { "-K", "-", "-b", cookie_file() })
   if opts.accept then vim.list_extend(args, { "-H", "Accept: " .. opts.accept }) end
   if (opts.method or "GET"):upper() == "POST" then
     local token = ensure_token(c)
@@ -421,7 +438,8 @@ local function build_args(c, opts)
   if opts.query then
     for k, v in pairs(opts.query) do url = url .. "&" .. url_encode(k) .. "=" .. url_encode(v) end
   end
-  local args = { "curl", "-sk", "-K", "-", "-b", cookie_file() }
+  local args = curl_base_args()
+  vim.list_extend(args, { "-K", "-", "-b", cookie_file() })
   if opts.accept then vim.list_extend(args, { "-H", "Accept: " .. opts.accept }) end
   local bodyfile
   if (opts.method or "GET"):upper() == "POST" then
@@ -526,7 +544,8 @@ function M.raw(opts)
   end
 
   local method = (opts.method or "GET"):upper()
-  local args = { "curl", "-sk", "-K", "-", "-b", cookie_file(), "-c", cookie_file() }
+  local args = curl_base_args()
+  vim.list_extend(args, { "-K", "-", "-b", cookie_file(), "-c", cookie_file() })
   vim.list_extend(args, { "-X", method })
   if method ~= "GET" then
     local token = ensure_token(c)

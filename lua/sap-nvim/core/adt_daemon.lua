@@ -111,6 +111,7 @@ function M.ensure()
 	if not c then
 		return nil
 	end
+	local sec = require("sap-nvim.core.config").security()
 
 	-- `-u`: python SIN buffer en stdin/stdout. CLAVE: sin esto, el pipe se bufferiza y las
 	-- peticiones/respuestas no se entregan al instante -> el daemon "se queda pillado".
@@ -120,6 +121,8 @@ function M.ensure()
 			ADT_CLIENT = c.client or "",
 			ADT_USER = c.user,
 			ADT_PASS = c.pass,
+			ADT_TLS_VERIFY = sec.verify_tls == false and "0" or "1",
+			ADT_CA_FILE = sec.ca_file and vim.fn.expand(sec.ca_file) or "",
 		},
 		on_stdout = on_stdout,
 		-- Drenar stderr (descartar): si nadie lo lee y el daemon escribe ahi, el pipe

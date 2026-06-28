@@ -5,6 +5,7 @@ local M = {
 	connections = {},
 	current = nil,
 }
+local sapcli = require("sap-nvim.core.sapcli")
 
 local function notify(msg, level)
 	vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
@@ -260,7 +261,7 @@ function M.fetch_packages(pattern, callback)
 	local packages = {}
 	local stderr = {}
 
-	vim.fn.jobstart({ "sapcli", "package", "list", pattern }, {
+	sapcli.jobstart({ "sapcli", "package", "list", pattern }, {
 		on_stdout = function(_, data)
 			for _, line in ipairs(data) do
 				local pkg = vim.trim(line)
@@ -389,7 +390,7 @@ local function fetch_objects_sapcli(query, callback)
 	local results = {}
 	local stderr = {}
 
-	vim.fn.jobstart({ "sapcli", "abap", "find", query }, {
+	sapcli.jobstart({ "sapcli", "abap", "find", query }, {
 		on_stdout = function(_, data)
 			for _, line in ipairs(data) do
 				local t = vim.trim(line)
@@ -1076,7 +1077,7 @@ function M.run_atc()
 	local atc_type = objtype.atc_type(group)
 	vim.notify("[sap-nvim] Ejecutando ATC sobre " .. object_name .. " (" .. atc_type .. ")...")
 	local lines = {}
-	vim.fn.jobstart({ "sapcli", "atc", "run", atc_type, object_name }, {
+	sapcli.jobstart({ "sapcli", "atc", "run", atc_type, object_name }, {
 		on_stdout = function(_, data)
 			for _, l in ipairs(data) do
 				if l ~= "" then
@@ -1105,7 +1106,7 @@ function M.run_aunit()
 
 	vim.notify("[sap-nvim] Ejecutando AUnit sobre " .. object_name .. "...")
 	local lines = {}
-	vim.fn.jobstart({ "sapcli", "aunit", "run", "class", object_name, "--output", "junit4" }, {
+	sapcli.jobstart({ "sapcli", "aunit", "run", "class", object_name, "--output", "junit4" }, {
 		on_stdout = function(_, data)
 			for _, l in ipairs(data) do
 				if l ~= "" then
@@ -1138,7 +1139,7 @@ function M.search(query)
 		end)
 		return
 	end
-	vim.fn.jobstart({ "sapcli", "abap", "find", query }, {
+	sapcli.jobstart({ "sapcli", "abap", "find", query }, {
 		on_stdout = function(_, data)
 			if data then
 				local results = vim.iter(data)

@@ -2,6 +2,7 @@
 -- CTS transport order management: list, create, release
 
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 local adt = require("sap-nvim.core.adt")
 
 local function notify(msg, level)
@@ -102,7 +103,7 @@ function M.create_transport()
     local stdout = {}
     local stderr = {}
 
-    vim.fn.jobstart({ "sapcli", "cts", "create", "transport", desc }, {
+    sapcli.jobstart({ "sapcli", "cts", "create", "transport", desc }, {
       on_stdout = function(_, data)
         for _, line in ipairs(data) do
           if vim.trim(line) ~= "" then table.insert(stdout, line) end
@@ -157,7 +158,7 @@ function M.release_transport()
           if not confirm then return end
 
           notify("Liberando " .. id .. "...")
-          vim.fn.jobstart({ "sapcli", "cts", "release", id }, {
+          sapcli.jobstart({ "sapcli", "cts", "release", id }, {
             on_exit = function(_, code)
               vim.schedule(function()
                 if code == 0 then
@@ -209,7 +210,7 @@ function M.delete_transport()
           if not confirm then return end
 
           notify("Borrando " .. id .. "...")
-          vim.fn.jobstart({ "sapcli", "cts", "delete", "transport", id }, {
+          sapcli.jobstart({ "sapcli", "cts", "delete", "transport", id }, {
             on_exit = function(_, code)
               vim.schedule(function()
                 if code == 0 then
@@ -258,7 +259,7 @@ function M.reassign_transport()
             if not confirm then return end
 
             notify("Reasignando " .. id .. " a " .. owner .. "...")
-            vim.fn.jobstart({ "sapcli", "cts", "reassign", "transport", id, owner }, {
+            sapcli.jobstart({ "sapcli", "cts", "reassign", "transport", id, owner }, {
               on_exit = function(_, code)
                 vim.schedule(function()
                   if code == 0 then
@@ -288,7 +289,7 @@ function M.transport_contents()
   local function show_contents(id)
     notify("Leyendo contenido de " .. id .. "...")
     local stdout, stderr = {}, {}
-    vim.fn.jobstart({ "sapcli", "cts", "list", "transport", id, "-r" }, {
+    sapcli.jobstart({ "sapcli", "cts", "list", "transport", id, "-r" }, {
       on_stdout = function(_, data)
         for _, line in ipairs(data) do
           if line ~= "" then table.insert(stdout, line) end

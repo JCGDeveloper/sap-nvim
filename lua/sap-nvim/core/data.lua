@@ -3,6 +3,7 @@
 -- (`sapcli datapreview osql "SELECT ..." -o human`), renderizando una tabla alineada.
 
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 local adt = require("sap-nvim.core.adt")
 
 local function notify(msg, level)
@@ -116,7 +117,7 @@ function M.preview(sql, rows)
   -- IMPORTANTE: vim.fn.system() (síncrono), NO jobstart: `datapreview osql` SE CUELGA vía
   -- jobstart (proceso colgado para siempre), pero con system() responde bien. Bloquea
   -- brevemente, aceptable para una consulta on-demand con --rows limitado.
-  local raw = vim.fn.system({ "sapcli", "datapreview", "osql", sql, "--rows", tostring(rows), "-o", "json" })
+  local raw = sapcli.system({ "sapcli", "datapreview", "osql", sql, "--rows", tostring(rows), "-o", "json" })
   local ok, decoded = pcall(vim.json.decode, raw)
   if vim.v.shell_error ~= 0 or not ok or type(decoded) ~= "table" then
     -- Mostrar el motivo COMPLETO (la 1ª línea suele ser "Exception (ADTError): <detalle>").
@@ -204,7 +205,7 @@ local TYPE_TO_GROUP = {
 -- Lee y muestra la definición de `group`/`real_name`.
 local function read_and_show(group, real_name)
   local out = {}
-  vim.fn.jobstart({ "sapcli", group, "read", real_name }, {
+  sapcli.jobstart({ "sapcli", group, "read", real_name }, {
     on_stdout = function(_, data) for _, l in ipairs(data) do out[#out + 1] = l end end,
     on_exit = function(_, code)
       vim.schedule(function()
@@ -251,7 +252,7 @@ end
 local function read_definition_sapcli(name)
   notify("Resolviendo " .. name .. "...")
   local rows = {}
-  vim.fn.jobstart({ "sapcli", "abap", "find", name }, {
+  sapcli.jobstart({ "sapcli", "abap", "find", name }, {
     on_stdout = function(_, data)
       for _, l in ipairs(data) do
         if l:find("|") and not l:find("Object type") then
