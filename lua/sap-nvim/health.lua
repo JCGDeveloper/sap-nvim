@@ -100,15 +100,24 @@ function M.check()
       else
         warn("no current-context selected", { "Select one: sapcli config use-context <name>" })
       end
+      if content:match("\n%s*password:%s*%S+") then
+        warn("sapcli config contains plaintext password", {
+          "Recreate the connection with :SapSetup or remove password: from ~/.sapcli/config.yml.",
+          "Use :SapLogin to store the password in sap-nvim's secure store.",
+          "It is ignored unless setup({ security = { allow_plaintext_password = true } }) is set.",
+        })
+      else
+        ok("sapcli config: no plaintext password entry")
+      end
     end
   else
     warn("no sapcli config at ~/.sapcli/config.yml", {
       "Create a connection (single source of truth):",
       "  sapcli config set-connection dev --ashost HOST --port 44300 --client 100 --ssl",
-      "  sapcli config set-user me --user SAPUSER --password ****",
+      "  sapcli config set-user me --user SAPUSER",
       "  sapcli config set-context dev --connection dev --user me",
       "  sapcli config use-context dev",
-      "Then verify with a read-only call: sapcli abap systeminfo",
+      "Then validate credentials with :SapLogin or :SapSetup",
     })
   end
 end

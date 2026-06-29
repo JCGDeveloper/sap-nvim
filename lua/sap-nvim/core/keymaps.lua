@@ -5,6 +5,27 @@ local sapcli = require("sap-nvim.core.sapcli")
 function M.setup(opts)
 	opts = opts or {}
 
+	local function register_which_key_groups()
+		local ok, wk = pcall(require, "which-key")
+		if not ok or not wk then
+			return
+		end
+		if type(wk.add) == "function" then
+			wk.add({
+				{ "<leader>a", group = "SAP" },
+				{ "<leader>al", group = "SAP Help" },
+			})
+		elseif type(wk.register) == "function" then
+			wk.register({
+				a = {
+					name = "SAP",
+					l = { name = "SAP Help" },
+				},
+			}, { prefix = "<leader>" })
+		end
+	end
+	register_which_key_groups()
+
 	-- ====================================================================
 	-- REGISTRO DE COMANDOS (Para que existan desde el minuto 1)
 	-- ====================================================================
@@ -46,7 +67,7 @@ function M.setup(opts)
 	end, { desc = "ABAP: Ejecutar tests unitarios" })
 
 	vim.keymap.set("n", "<leader>aK", function()
-		require("sap-nvim.core.adt").run_atc()
+		require("sap-nvim.core.quality").run_atc("")
 	end, { desc = "ABAP: Ejecutar ATC" })
 
 	vim.keymap.set("n", "<leader>ah", function()
@@ -56,12 +77,15 @@ sap-nvim atajos:
   <leader>ah   Ayuda
   <leader>aF   Formatear (uppercase + indent)
   <leader>aT   Tests unitarios (AUnit)
-  <leader>aK   Quality check (ATC)
+  <leader>aK   Quality panel (ATC)
+  <leader>aqp  Quality panel (ATC + AUnit objeto)
+  <leader>aqh  Historial local de calidad
   <leader>ai   Objetos inactivos
   <leader>ad   Debuggear (vsp)
   <leader>db   Limpiar breakpoints del objeto/buffer actual (:SapDapClearBreakpoints)
   <leader>dB   Limpiar breakpoints raíz + includes relacionados (:SapDapClearBreakpointsRecursive)
   <leader>aR   Ejecutar programa/report en WebGUI (:SapRun)
+  <leader>e    Repository Explorer SAP del objeto/paquete actual (:SapRepositoryToggle)
 
   OBJETOS:
   <leader>aa   Activar SOLO objeto actual (:SapActivate)
@@ -81,11 +105,18 @@ sap-nvim atajos:
   (auto)       Completado al escribir clase/metodo + params al abrir '(' (blink)
   <C-x><C-o>   Completado manual (:SapComplete)
   K            Hover: firma + documentacion (2a K entra, hjkl scroll) (:SapHover)
+  <leader>aH   Panel lateral de documentacion oficial SAP (:SapHelpPanel)
+  <leader>a?   Popup de documentacion oficial SAP (:SapHelp)
+  <leader>a/   Buscar documentacion/objetos oficiales SAP (:SapHelpSearch)
+  <leader>al   Grupo SAP Help en which-key; panel: 1-4 secciones, o abre, m favorito, s busca, / filtra, c limpia
   gd           Ir a definicion (incluye clases/metodos del sistema, ADT)
   gy           Ir al TIPO del dato (:SapGotoType)
   gr           Referencias del simbolo → picker (:SapReferences)
   (auto)       Syntax check REAL de SAP al guardar (diagnosticos con contexto del sistema)
   <leader>ae   Lista navegable de errores de sintaxis SAP (estilo Problems de VSCode) (:SapCheck)
+  <leader>aq   Quick fixes ABAP/ADT/locales desde cursor o quickfix (:SapQuickfix)
+  <leader>aQ   Preview de quick fix local sin tocar el buffer (:SapQuickfixPreview)
+  <leader>ar   Refactors offline con preview (:SapRefactor)
   <leader>aF   Formatear con el Pretty Printer de SAP (objetos remotos)
 
   PLANTILLAS (<leader>aP ...):
@@ -102,6 +133,7 @@ sap-nvim atajos:
   PAQUETES / SISTEMA:
   <leader>afs  Buscar objeto en sistema (:SapSearch)
   <leader>afb  Explorar paquete (:SapBrowse)
+  <leader>afr  Repository Explorer persistente (:SapRepositoryToggle)
   <leader>ack  Checkout paquete completo (:SapCheckout)
 
   TRANSPORTES:
@@ -222,12 +254,27 @@ sap-nvim atajos:
 		{ "<leader>ao", "<cmd>SapOutline<cr>", "Outline del objeto" },
 		{ "<leader>ag", "<cmd>SapGotoDef<cr>", "Ir a definición" },
 		{ "<leader>aw", "<cmd>SapWhereUsed<cr>", "Where-used" },
+		{ "<leader>ar", "<cmd>SapRefactor<cr>", "Refactors offline con preview" },
 		{ "<leader>ai", "<cmd>SapInactive<cr>", "Objetos inactivos" },
 		{ "<leader>an", "<cmd>SapNew<cr>", "Nuevo objeto en SAP" },
 		{ "<leader>aT", "<cmd>SapAUnit<cr>", "Tests unitarios (AUnit)" },
+		{ "<leader>aK", "<cmd>SapAtcPanel<cr>", "Quality panel (ATC)" },
+		{ "<leader>aqp", "<cmd>SapQuality<cr>", "Quality panel" },
+		{ "<leader>aqh", "<cmd>SapQualityHistory<cr>", "Historial quality" },
+		{ "<leader>aH", "<cmd>SapHelpPanel<cr>", "Documentacion oficial SAP (panel)" },
+		{ "<leader>a?", "<cmd>SapHelp<cr>", "Documentacion oficial SAP (popup)" },
+		{ "<leader>a/", "<cmd>SapHelpSearch<cr>", "Buscar documentacion oficial SAP" },
+		{ "<leader>alh", "<cmd>SapHelp<cr>", "Help: popup oficial SAP" },
+		{ "<leader>alp", "<cmd>SapHelpPanel<cr>", "Help: panel oficial SAP" },
+		{ "<leader>alf", "<cmd>SapHelpPanelSearch<cr>", "Help: buscar en panel" },
+		{ "<leader>als", "<cmd>SapHelpSearch<cr>", "Help: buscar SAP/ADT" },
+		{ "<leader>alo", "<cmd>SapHelpOpen<cr>", "Help: abrir enlace oficial" },
+		{ "<leader>alb", "<cmd>SapHelpBrowser<cr>", "Help: diagnosticar navegador" },
+		{ "<leader>alr", "<cmd>SapHelpRoutes<cr>", "Help: validar busqueda ADT" },
 		{ "<leader>avt", "<cmd>SapTable<cr>", "Ver definición de tabla" },
 		{ "<leader>avd", "<cmd>SapTableData<cr>", "Ver datos de tabla" },
 		{ "<leader>avq", "<cmd>SapData<cr>", "Ejecutar OpenSQL" },
+		{ "<leader>e", "<cmd>SapRepositoryToggle<cr>", "Repository Explorer SAP" },
 	}
 
 	local cds_maps = {

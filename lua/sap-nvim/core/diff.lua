@@ -4,6 +4,7 @@
 
 local M = {}
 local adt = require("sap-nvim.core.adt")
+local sapcli = require("sap-nvim.core.sapcli")
 
 local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
@@ -89,7 +90,7 @@ function M.diff_with_system()
   local lines  = {}
   local stderr = {}
 
-  vim.fn.jobstart(reader(obj_name), {
+  sapcli.jobstart(reader(obj_name), {
     on_stdout = function(_, data)
       for _, line in ipairs(data) do
         -- jobstart always appends a trailing "" sentinel — skip it

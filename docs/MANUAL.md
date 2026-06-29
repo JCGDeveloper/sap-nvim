@@ -65,6 +65,10 @@ Al arrancar sin argumentos se abre el **dashboard** (pantalla de inicio). Teclas
 
   Para CDS, `<leader>cc` / dashboard `C` (ver §5).
 
+- **`<leader>e`** en buffers ABAP/CDS, o **`<leader>afr`** global (`:SapRepository`) — explorador persistente tipo Eclipse/VSCode. Muestra
+  roots de paquetes, favoritos, inactivos y transportes; Enter/`o` abre objetos con `source.open`,
+  `l`/Tab expande nodos, `r` refresca el nodo, `a` añade un root persistente y `f` guarda favorito.
+
 - **`␣␣`** (espacio-espacio) — saltar entre objetos SAP abiertos (estilo VSCode).
 - **`-`** (guion) — *volver*: recorre hacia atrás la navegación (gd/búsqueda/include) y, al
   agotarse, cae al **dashboard**. Dentro de un include creado, vuelve al programa de origen.
@@ -112,9 +116,19 @@ Al arrancar sin argumentos se abre el **dashboard** (pantalla de inicio). Teclas
 
 ## 6. Crear objetos en SAP
 
-- **`<leader>an`** (`:SapNew`) — crea programa, clase, interface, include, FM, **transacción**,
-  message class, paquete… **en el sistema** y lo abre. El campo **paquete autocompleta en vivo**
-  (picker que busca en el sistema según escribes, estilo VSCode).
+- **`<leader>an`** (`:SapNew`) — crea programa/include, clase, interface, FM/FUGR,
+  DDIC (tabla, estructura, dominio, elemento de datos, table type), CDS/RAP (DDLS, DDLX,
+  DCL, BDEF, SRVD), **transacción**, variante de report (si tu `sapcli` la expone),
+  message class y paquete **en el sistema**. Valida rutas ADT conocidas, exige paquete y
+  transporte para objetos transportables en modo productivo, escribe plantilla inicial donde
+  hay editor de fuente, y cae con mensaje seguro cuando el endpoint no existe. El campo
+  **paquete autocompleta en vivo** (picker que busca en el sistema según escribes, estilo VSCode).
+- **`:SapNewAdtPlan <tipo> <nombre> <paquete>`** — muestra ruta, MIME y XML calculado para
+  creación ADT **sin hacer POST**. Útil para validar en vivo builders DDIC/RAP antes de tocar
+  un sistema. DDIC sigue creando por la vía probada de `sapcli`; los builders ADT DDIC quedan
+  preparados para contraste controlado.
+- **`:SapNewValidateRoutes [filtro]`** — consulta `discovery` por GET y marca qué rutas de
+  creación ADT están publicadas en el sistema. No crea ni modifica objetos.
 - **`<leader>aci`** — crear el include bajo el cursor (Ctrl+1 de Eclipse) y abrirlo.
 - **Transacciones**: si tu sistema no expone el endpoint ADT de creación (IAM), el plugin ofrece
   crearla en **SE93** vía SAP GUI (la vía soportada). Ver §8.
@@ -145,7 +159,12 @@ Al ejecutar una transacción (`<leader>ax`, dashboard `x`) o un programa (`<lead
 
 - **`<leader>atl`** (`:SapTransports`) listar mías · **`<leader>atc`** (`:SapTransportCreate`)
   crear (no exige estar dentro de un objeto: usa el paquete) · **`<leader>atr`** liberar.
-- `:SapTransportContents` · `:SapTransportRelease` · `:SapTransportReassign`.
+- Cockpit: órdenes/tareas, owner, estado, target, paquetes, objetos, readiness, inactivos,
+  warnings por destino productivo/targets/paquetes mixtos y bloqueo por `safe_mode`.
+- `:SapTransportContents` · `:SapTransportReadiness` · `:SapTransportCompare` ·
+  `:SapTransportHistory` · `:SapTransportRelease` · `:SapTransportReassign`.
+- Acciones peligrosas: liberar exige checks + confirmación fuerte; borrar y reasignar quedan
+  bloqueados salvo opt-in explícito en `productive`.
 
 ---
 
@@ -160,8 +179,14 @@ Al ejecutar una transacción (`<leader>ax`, dashboard `x`) o un programa (`<lead
 
 ## 10. Tests y calidad
 
-- **`<leader>aT`** (`:SapAUnit`) — pruebas unitarias (AUnit) del objeto.
-- **`<leader>aK`** (`:SapATC` / `:SapCheck`) — chequeo de calidad ATC / Clean ABAP.
+- **`<leader>aT`** (`:SapAUnit`) — pruebas unitarias (AUnit) del objeto con fallos en quickfix.
+- **`<leader>aK`** (`:SapAtcPanel`) — panel ATC del objeto actual con quickfix/problems.
+- **`:SapQuality`** — panel profesional de calidad. Acepta `atc object <OBJ>`,
+  `atc package <PAQUETE>`, `atc transport <ORDEN>` y `aunit object <CLASE>` cuando `sapcli`/ADT
+  lo permiten. Guarda historial local en **`:SapQualityHistory`**.
+- El panel puede servir como helper de bloqueo para release/activate, pero solo reporta: no libera
+  transportes ni activa objetos. Configurable con `quality.release_activate_helper`,
+  `quality.block_release_on_errors` y `quality.block_activate_on_errors`.
 - **`<leader>ai`** (`:SapInactive`) — objetos inactivos.
 
 ---

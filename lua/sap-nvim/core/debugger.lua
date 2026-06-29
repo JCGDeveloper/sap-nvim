@@ -93,7 +93,7 @@ local function curl_cfg(c)
 	return 'user = "' .. esc(c.user .. ":" .. c.pass) .. '"\n'
 end
 
-local function curl_base_args()
+local function curl_base_args(opts)
 	local ok, cfg = pcall(require, "sap-nvim.core.config")
 	local sec = ok and cfg.security() or {}
 	local args = { "curl", "-s" }
@@ -102,6 +102,16 @@ local function curl_base_args()
 	end
 	if sec.ca_file and sec.ca_file ~= "" then
 		vim.list_extend(args, { "--cacert", vim.fn.expand(sec.ca_file) })
+	end
+	local connect_timeout = tonumber(sec.connect_timeout) or 10
+	if connect_timeout > 0 then
+		vim.list_extend(args, { "--connect-timeout", tostring(connect_timeout) })
+	end
+	if not (opts and opts.no_timeout) then
+		local request_timeout = tonumber(sec.request_timeout) or 45
+		if request_timeout > 0 then
+			vim.list_extend(args, { "--max-time", tostring(request_timeout) })
+		end
 	end
 	return args
 end
@@ -125,7 +135,7 @@ local function curl(opts, cb)
 	end
 
 	local hdrfile = vim.fn.tempname()
-	local args = curl_base_args()
+	local args = curl_base_args(opts)
 	vim.list_extend(args, {
 		"-K",
 		"-",
@@ -181,9 +191,13 @@ local function curl(opts, cb)
 				status = tonumber(st)
 			end
 			status = status or ("curl-exit-" .. exit_code)
+			local body = table.concat(out, "\n")
+			if status == 401 or adt_http.is_auth_error(body) then
+				adt_http.on_auth_failure()
+			end
 			if cb then
 				vim.schedule(function()
-					cb(table.concat(out, "\n"), status, headers)
+					cb(body, status, headers)
 				end)
 			end
 		end,
@@ -521,6 +535,7 @@ function M.listen(cb)
 	s.listener_job = curl({
 		method = "POST",
 		path = "/sap/bc/adt/debugger/listeners",
+		no_timeout = true,
 		query = {
 			debuggingMode = "user",
 			requestUser = s.user,
@@ -793,19 +808,45 @@ function M.step(action, cb)
 	)
 end
 
+function M.can_set_variable()
+	local ok_cfg, cfg = pcall(function()
+		return require("sap-nvim.core.config").productive()
+	end)
+	return ok_cfg and type(cfg) == "table" and cfg.allow_debug_set_variable == true
+end
+
 function M.set_variable(variableName, value, cb)
+	if not M.can_set_variable() then
+		if cb then
+			cb(false, "setVariable desactivado por seguridad (productive.allow_debug_set_variable=false)")
+		end
+		return
+	end
+	if not M.session then
+		if cb then
+			cb(false, "no hay sesión de debug activa")
+		end
+		return
+	end
+	variableName = vim.trim(tostring(variableName or ""))
+	if variableName == "" then
+		if cb then
+			cb(false, "variable vacía")
+		end
+		return
+	end
 	curl({
 		method = "POST",
 		path = "/sap/bc/adt/debugger",
 		query = { method = "setVariableValue", variableName = variableName },
-		body = value,
+		body = tostring(value or ""),
 		content_type = "text/plain",
 		accept = "application/xml",
 	}, function(body, status)
 		local msg = parse_exception(body)
 		if msg or not tostring(status):match("^2") then
 			if cb then
-				cb(false, msg)
+				cb(false, msg or ("ADT no soporta setVariableValue o lo rechazó (HTTP " .. tostring(status) .. ")"))
 			end
 			return
 		end
@@ -905,17 +946,35 @@ function M.terminate_all(cb)
 			end)
 		end
 	end
-	if M.session then
-		purge(M.session)
-	else
-		M.init_session(function(ok)
-			if ok then
-				purge(M.session)
-			elseif cb then
-				cb()
-			end
-		end)
+
+	local function run()
+		if M.session then
+			purge(M.session)
+		else
+			M.init_session(function(ok)
+				if ok then
+					purge(M.session)
+				elseif cb then
+					cb()
+				end
+			end)
+		end
 	end
+
+	local ok_cfg, cfg = pcall(function()
+		return require("sap-nvim.core.config").productive()
+	end)
+	if ok_cfg and cfg.confirm_destructive ~= false then
+		vim.ui.input({ prompt = "Cerrar sesiones/listeners de debug. Escribe DEBUG para confirmar: " }, function(input)
+			if vim.trim(input or "") ~= "DEBUG" then
+				if cb then cb() end
+				return
+			end
+			run()
+		end)
+		return
+	end
+	run()
 end
 
 function M.setup()

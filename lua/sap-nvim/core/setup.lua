@@ -8,7 +8,7 @@
 --
 -- Model (kubeconfig-style):
 --   connection  → host/port/client/ssl          (sapcli config set-connection)
---   user        → user alias + password          (sapcli config set-user)
+--   user        → user alias                     (sapcli config set-user)
 --   context     → connection + user reference     (sapcli config set-context)
 --   current-context → the active context          (sapcli config use-context)
 
@@ -60,6 +60,39 @@ end
 
 -- ─── Write config via sapcli ─────────────────────────────────────────────────
 
+local function validate_created_connection(name)
+  local ok_adt, adt = pcall(require, "sap-nvim.core.adt_http")
+  if not ok_adt then
+    notify("Conexión creada. No se pudo cargar ADT; ejecuta :SapLogin para validar.", vim.log.levels.WARN)
+    return
+  end
+  vim.schedule(function()
+    local password = vim.fn.inputsecret("Contraseña SAP para " .. name .. " (vacío = pedir luego): ")
+    if not password or password == "" then
+      notify("Conexión '" .. name .. "' creada sin contraseña en config.yml. Ejecuta :SapLogin para validar.")
+      return
+    end
+    adt.use_connection(name, password, { persist = false })
+    adt.validate(function(ok, code)
+      vim.schedule(function()
+        if ok then
+          adt.persist_password(name, password)
+          adt.mark_validated()
+          notify("✅ Conexión '" .. name .. "' creada, validada y contraseña guardada en almacén seguro.")
+        else
+          if code == 401 or code == 403 then
+            adt.on_auth_failure()
+          end
+          notify(
+            "Conexión '" .. name .. "' creada, pero SAP rechazó la validación (HTTP " .. tostring(code) .. "). Usa :SapLogin.",
+            vim.log.levels.ERROR
+          )
+        end
+      end)
+    end)
+  end)
+end
+
 -- Creates connection + user + context and activates it. `v` is the field table.
 local function create_connection(v)
   local name = v.name
@@ -82,10 +115,6 @@ local function create_connection(v)
 
   local user_ref = name .. "-user"
   local user = { "sapcli", "config", "set-user", user_ref, "--user", v.user or "" }
-  if v.password and v.password ~= "" then
-    table.insert(user, "--password")
-    table.insert(user, v.password)
-  end
 
   local ctx = {
     "sapcli", "config", "set-context", name,
@@ -102,12 +131,13 @@ local function create_connection(v)
 
   run({ "sapcli", "config", "use-context", name })
 
-  -- Harden the config file. It stores the password in plaintext, so on a shared
-  -- machine no other user must be able to read it. 0600 = owner read/write only.
+  -- Harden the config file. No escribimos la contraseña ahí, pero contiene usuario/host.
+  -- 0600 = owner read/write only.
   local cfg = vim.fn.expand("~/.sapcli/config.yml")
   pcall(vim.loop.fs_chmod, cfg, tonumber("600", 8))
 
-  notify("✅ Conexión '" .. name .. "' creada y activada (config 0600). Verificá con :SapDoctor")
+  notify("✅ Conexión '" .. name .. "' creada y activada (config 0600).")
+  validate_created_connection(name)
 end
 
 -- Deletes a context and its dedicated connection/user (best-effort).
@@ -121,26 +151,22 @@ end
 -- ─── Read-only connection test (LIVE — contacts the SAP system) ───────────────
 
 local function test_connection()
-  notify("Probando conexión (sapcli abap systeminfo)... [llamada de SOLO LECTURA]")
-  local lines = {}
-  vim.fn.jobstart({ "sapcli", "abap", "systeminfo" }, {
-    on_stdout = function(_, data)
-      for _, l in ipairs(data) do if l ~= "" then table.insert(lines, l) end end
-    end,
-    on_stderr = function(_, data)
-      for _, l in ipairs(data) do if vim.trim(l) ~= "" then table.insert(lines, l) end end
-    end,
-    on_exit = function(_, code)
-      vim.schedule(function()
-        if code == 0 then
-          notify("✅ Conexión OK:\n" .. table.concat(lines, "\n"))
-        else
-          notify("❌ Falló (code " .. code .. "):\n" .. table.concat(lines, "\n"),
-            vim.log.levels.ERROR)
-        end
-      end)
-    end,
-  })
+  notify("Probando conexión ADT... [llamada de SOLO LECTURA]")
+  local ok_adt, adt = pcall(require, "sap-nvim.core.adt_http")
+  if not ok_adt then
+    notify("No se pudo cargar el cliente ADT.", vim.log.levels.ERROR)
+    return
+  end
+  adt.validate(function(ok, code)
+    vim.schedule(function()
+      if ok then
+        adt.mark_validated()
+        notify("✅ Conexión ADT OK (HTTP " .. tostring(code) .. ").")
+      else
+        notify("❌ Error de conexión ADT (HTTP " .. tostring(code) .. ").", vim.log.levels.ERROR)
+      end
+    end)
+  end)
 end
 
 -- ─── UI: input dialog (edit fields in a scratch buffer, :wq to confirm) ───────
@@ -242,7 +268,6 @@ local function flow_new()
     { key = "port",     value = "44300" },
     { key = "client",   value = "100" },
     { key = "user",     value = "" },
-    { key = "password", value = "" },
     { key = "ssl",      value = "true" },
   }, create_connection)
 end

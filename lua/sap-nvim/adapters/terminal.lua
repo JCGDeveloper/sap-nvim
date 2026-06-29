@@ -23,9 +23,10 @@ Instalación de dependencias:
 
 Configurar conexión (fuente de verdad: ~/.sapcli/config.yml):
   sapcli config set-connection dev --ashost HOST --port 44300 --client 100 --ssl
-  sapcli config set-user me --user SAPUSER --password ****
+  sapcli config set-user me --user SAPUSER
   sapcli config set-context dev --connection dev --user me
   sapcli config use-context dev
+  :SapLogin
     ]], "info", { title = "sap-nvim" })
   end, { desc = "Ayuda de comandos sap-nvim" })
 end

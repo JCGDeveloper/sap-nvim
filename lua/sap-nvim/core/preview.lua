@@ -22,20 +22,48 @@ local keep_preview_until = 0
 local dap_focus_guard_installed = false
 local COCKPIT_TABS = { "Datos", "Locales", "Globales", "Watch", "Stack", "Breakpoints", "Log" }
 local SAPGUI_DESKTOPS =
-	{ "Desktop 1", "Desktop 2", "Desktop 3", "Standard", "Structures", "Tables", "Objects", "Detail", "Data Explorer" }
-local SAPGUI_WATCH_TABS = { "Variables 1", "Variables 2", "Locals", "Globals", "Auto", "Memory Analysis" }
+	{ "Desktop1", "Desktop2", "Desktop3", "Standard", "Estruct", "Tablas", "Objetos", "Vis.detallada", "Data Explorer" }
+local SAPGUI_WATCH_TABS = { "Variables1", "Variables2", "Locals", "Globals", "Auto", "Memory" }
+local DESKTOP_ALIASES = {
+	["Desktop 1"] = "Desktop1",
+	["Desktop 2"] = "Desktop2",
+	["Desktop 3"] = "Desktop3",
+	Structures = "Estruct",
+	Tables = "Tablas",
+	Objects = "Objetos",
+	Detail = "Vis.detallada",
+	["Detailed View"] = "Vis.detallada",
+}
+local WATCH_TAB_ALIASES = {
+	["Variables 1"] = "Variables1",
+	["Variables 2"] = "Variables2",
+	["Memory Analysis"] = "Memory",
+}
 local cockpit = {
 	active = "Datos",
 	desktop = "Standard",
 	watches = {},
 	watches2 = {},
-	active_watch_tab = "Variables 1",
+	active_watch_tab = "Variables1",
 	logs = {},
 	panes = {},
 	data_start_line = 9,
 	current_frame = nil,
 	stack_frames = {},
+	data_explorer = {
+		filter = "",
+		page = 0,
+		page_size = 20,
+	},
 }
+
+local function canonical_desktop(name)
+	return DESKTOP_ALIASES[name] or name
+end
+
+local function canonical_watch_tab(name)
+	return WATCH_TAB_ALIASES[name] or name
+end
 
 local function pane(name)
 	cockpit.panes[name] = cockpit.panes[name] or { title = name, lines = { "(sin datos)" }, actions = {} }
@@ -61,6 +89,7 @@ local function save_layout()
 		active_watch_tab = cockpit.active_watch_tab,
 		watches = cockpit.watches,
 		watches2 = cockpit.watches2,
+		data_explorer = cockpit.data_explorer,
 	})
 	if not ok then
 		return
@@ -84,16 +113,21 @@ local function load_layout()
 		return
 	end
 	if type(data.desktop) == "string" then
-		cockpit.desktop = data.desktop
+		cockpit.desktop = canonical_desktop(data.desktop)
 	end
 	if type(data.active_watch_tab) == "string" then
-		cockpit.active_watch_tab = data.active_watch_tab
+		cockpit.active_watch_tab = canonical_watch_tab(data.active_watch_tab)
 	end
 	if type(data.watches) == "table" then
 		cockpit.watches = data.watches
 	end
 	if type(data.watches2) == "table" then
 		cockpit.watches2 = data.watches2
+	end
+	if type(data.data_explorer) == "table" then
+		cockpit.data_explorer.filter = tostring(data.data_explorer.filter or "")
+		cockpit.data_explorer.page = tonumber(data.data_explorer.page) or 0
+		cockpit.data_explorer.page_size = tonumber(data.data_explorer.page_size) or cockpit.data_explorer.page_size
 	end
 end
 
@@ -291,6 +325,9 @@ function M.should_preserve_focus()
 	if vim.bo[buf].filetype == "sapdebugpreview" or name:match("^sap%-debug%-preview://") then
 		return true
 	end
+	if preview_active() and cockpit.active == "Datos" and canonical_desktop(cockpit.desktop) == "Data Explorer" then
+		return true
+	end
 	return keep_preview_until > now_ms() and preview_active()
 end
 
@@ -322,6 +359,8 @@ local refresh_stack_side
 local select_watch_tab
 local select_desktop
 local refresh_objects_desktop
+local refresh_data_explorer
+local refresh_last_preview
 local short_value
 local var_value
 
@@ -374,24 +413,24 @@ local function map_preview_keys(buf)
 	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: Globals" }))
 	vim.keymap.set("n", "S", function()
 		if select_desktop then
-			select_desktop("Structures", { focus = true })
+			select_desktop("Estruct", { focus = true })
 		end
-	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: Structures" }))
+	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: Estruct" }))
 	vim.keymap.set("n", "T", function()
 		if select_desktop then
-			select_desktop("Tables", { focus = true })
+			select_desktop("Tablas", { focus = true })
 		end
-	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: Tables" }))
+	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: Tablas" }))
 	vim.keymap.set("n", "O", function()
 		if select_desktop then
-			select_desktop("Objects", { focus = true })
+			select_desktop("Objetos", { focus = true })
 		end
-	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: Objects" }))
+	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: Objetos" }))
 	vim.keymap.set("n", "D", function()
 		if select_desktop then
-			select_desktop("Detail", { focus = true })
+			select_desktop("Vis.detallada", { focus = true })
 		end
-	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: Detail" }))
+	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: Vis.detallada" }))
 	vim.keymap.set("n", "E", function()
 		if select_desktop then
 			select_desktop("Data Explorer", { focus = true })
@@ -399,9 +438,19 @@ local function map_preview_keys(buf)
 	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: Data Explorer" }))
 	vim.keymap.set("n", "r", function()
 		if M.refresh_pane then
-			M.refresh_pane(cockpit.active, { focus = true, preserve_cursor = true })
+			M.refresh_pane(cockpit.active, { focus = false, preserve_cursor = true })
 		end
 	end, vim.tbl_extend("force", opts, { desc = "Cockpit: refrescar" }))
+	vim.keymap.set("n", "/", function()
+		if M.set_data_explorer_filter then
+			M.set_data_explorer_filter()
+		end
+	end, vim.tbl_extend("force", opts, { desc = "Data Explorer: filtrar" }))
+	vim.keymap.set("n", "f", function()
+		if M.set_data_explorer_filter then
+			M.set_data_explorer_filter()
+		end
+	end, vim.tbl_extend("force", opts, { desc = "Data Explorer: filtrar" }))
 	vim.keymap.set("n", "o", function()
 		if buf == watch_buf and M.open_selected_right_variable then
 			M.open_selected_right_variable()
@@ -409,9 +458,14 @@ local function map_preview_keys(buf)
 			M.open_selected_variable()
 		end
 	end, vim.tbl_extend("force", opts, { desc = "Cockpit: abrir variable en Datos" }))
+	vim.keymap.set("n", "=", function()
+		if M.set_selected_variable then
+			M.set_selected_variable(buf == watch_buf)
+		end
+	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: set variable" }))
 	vim.keymap.set("n", "a", function()
-		local tab = cockpit.active_watch_tab or "Variables 1"
-		if M.add_watch and (cockpit.active == "Watch" or (buf == watch_buf and (tab == "Variables 1" or tab == "Variables 2"))) then
+		local tab = cockpit.active_watch_tab or "Variables1"
+		if M.add_watch and (cockpit.active == "Watch" or (buf == watch_buf and (tab == "Variables1" or tab == "Variables2"))) then
 			M.add_watch()
 		end
 	end, vim.tbl_extend("force", opts, { desc = "Cockpit: añadir watch" }))
@@ -426,14 +480,14 @@ local function map_preview_keys(buf)
 		end
 	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: editar variable/watch" }))
 	vim.keymap.set("n", "i", function()
-		local tab = cockpit.active_watch_tab or "Variables 1"
-		if M.add_watch and buf == watch_buf and (tab == "Variables 1" or tab == "Variables 2") then
+		local tab = cockpit.active_watch_tab or "Variables1"
+		if M.add_watch and buf == watch_buf and (tab == "Variables1" or tab == "Variables2") then
 			M.add_watch()
 		end
 	end, vim.tbl_extend("force", opts, { desc = "SAP Debugger: escribir expresión" }))
 	vim.keymap.set("n", "<CR>", function()
-		local tab = cockpit.active_watch_tab or "Variables 1"
-		if buf == watch_buf and (tab == "Variables 1" or tab == "Variables 2") then
+		local tab = cockpit.active_watch_tab or "Variables1"
+		if buf == watch_buf and (tab == "Variables1" or tab == "Variables2") then
 			M.add_watch()
 		elseif buf == stack_buf and M.select_stack_under_cursor then
 			M.select_stack_under_cursor()
@@ -544,29 +598,34 @@ map_code_debug_keys = function(buf)
 	end, "SAP Debugger: visualizar variable bajo cursor")
 	set("O", function()
 		if select_desktop then
-			select_desktop("Objects", { focus = true })
+			select_desktop("Objetos", { focus = true })
 		end
-	end, "SAP Debugger: Objects")
+	end, "SAP Debugger: Objetos")
 	set("S", function()
 		if select_desktop then
-			select_desktop("Structures", { focus = true })
+			select_desktop("Estruct", { focus = true })
 		end
-	end, "SAP Debugger: Structures")
+	end, "SAP Debugger: Estruct")
 	set("T", function()
 		if select_desktop then
-			select_desktop("Tables", { focus = true })
+			select_desktop("Tablas", { focus = true })
 		end
-	end, "SAP Debugger: Tables")
+	end, "SAP Debugger: Tablas")
 	set("D", function()
 		if select_desktop then
-			select_desktop("Detail", { focus = true })
+			select_desktop("Vis.detallada", { focus = true })
 		end
-	end, "SAP Debugger: Detail")
+	end, "SAP Debugger: Vis.detallada")
 	set("E", function()
 		if select_desktop then
 			select_desktop("Data Explorer", { focus = true })
 		end
 	end, "SAP Debugger: Data Explorer")
+	set("=", function()
+		if M.set_variable_under_cursor then
+			M.set_variable_under_cursor()
+		end
+	end, "SAP Debugger: set variable bajo cursor")
 	set("L", function()
 		if select_watch_tab then
 			select_watch_tab("Locals", { focus = true })
@@ -803,20 +862,20 @@ end
 
 local function active_desktop()
 	if cockpit.desktop and cockpit.desktop ~= "" then
-		return cockpit.desktop
+		return canonical_desktop(cockpit.desktop)
 	end
 	local data_title = pane("Datos").title or ""
 	if data_title:match("^Estructura:") then
-		return "Structures"
+		return "Estruct"
 	end
 	if data_title:match("^Tabla:") then
-		return "Tables"
+		return "Tablas"
 	end
 	if cockpit.active == "Datos" and data_title ~= "" and data_title ~= "Datos" then
 		return "Data Explorer"
 	end
 	if cockpit.active == "Breakpoints" or cockpit.active == "Watch" then
-		return "Detail"
+		return "Vis.detallada"
 	end
 	return "Standard"
 end
@@ -881,7 +940,7 @@ local function cockpit_lines()
 		fit_line("│ F8 Continue  F5 Single Step  F6 Execute  F7 Return  |  r Refresh  o Display  <Enter> Source"),
 		sapgui_rule("├─ " .. frame_summary() .. " "),
 		fit_line("│ Desktop      " .. sapgui_tabline(SAPGUI_DESKTOPS, active_desktop(), false)),
-		fit_line("│ Acceso       S Structures  T Tables  O Objects  D Detail  E Data Explorer  |  o variable  L/G locals/globals"),
+		fit_line("│ Acceso       S Estruct  T Tablas  O Objetos  D Vis.detallada  E Data Explorer  |  o abre  = set  / filtro"),
 		fit_line("│ Herramientas " .. sapgui_tabline(COCKPIT_TABS, cockpit.active, true)),
 		sapgui_rule("├─ " .. (p.title or cockpit.active) .. " "),
 		"",
@@ -982,8 +1041,9 @@ end
 
 local function watch_tab_lines()
 	local out = {}
+	local active = canonical_watch_tab(cockpit.active_watch_tab or "Variables1")
 	for i, name in ipairs(SAPGUI_WATCH_TABS) do
-		local marker = cockpit.active_watch_tab == name and "▶" or " "
+		local marker = active == name and "▶" or " "
 		out[#out + 1] = string.format("%s %d %s", marker, i, name)
 	end
 	return out
@@ -993,14 +1053,14 @@ local function render_watch_panel()
 	if not side_buf_valid(watch_buf) then
 		return
 	end
-	local tab = cockpit.active_watch_tab or "Variables 1"
+	local tab = canonical_watch_tab(cockpit.active_watch_tab or "Variables1")
 	local lines = side_title("Variables")
 	vim.list_extend(lines, watch_tab_lines())
 	lines[#lines + 1] = ""
-	if tab == "Variables 1" or tab == "Variables 2" then
+	if tab == "Variables1" or tab == "Variables2" then
 		lines[#lines + 1] = "Entrada  > pulsa a, i o Enter para escribir"
-		local p = pane(tab == "Variables 1" and "Watch" or "Variables 2")
-		local exprs = tab == "Variables 1" and cockpit.watches or cockpit.watches2
+		local p = pane(tab == "Variables1" and "Watch" or "Variables2")
+		local exprs = tab == "Variables1" and cockpit.watches or cockpit.watches2
 		if #exprs == 0 then
 			lines[#lines + 1] = "(sin expresiones)"
 		else
@@ -1027,14 +1087,14 @@ local function render_watch_panel()
 			end
 			lines[#lines + 1] = line
 		end
-	elseif tab == "Memory Analysis" then
+	elseif tab == "Memory" then
 		local s = dbg.session or {}
 		lines[#lines + 1] = "Sesión"
 		lines[#lines + 1] = "Usuario        │ " .. tostring(s.user or "?")
 		lines[#lines + 1] = "Debug Session  │ " .. tostring(s.debugSessionId or "?")
 		lines[#lines + 1] = "Stack frames   │ " .. tostring(#(cockpit.stack_frames or {}))
-		lines[#lines + 1] = "Variables 1    │ " .. tostring(#cockpit.watches)
-		lines[#lines + 1] = "Variables 2    │ " .. tostring(#cockpit.watches2)
+		lines[#lines + 1] = "Variables1     │ " .. tostring(#cockpit.watches)
+		lines[#lines + 1] = "Variables2     │ " .. tostring(#cockpit.watches2)
 		lines[#lines + 1] = ""
 		lines[#lines + 1] = "Tablas abiertas"
 		if last_preview and last_preview.table then
@@ -1124,11 +1184,11 @@ local function open_preview(title, lines, opts)
 	p.lines = lines
 	if tab == "Datos" then
 		if title:match("^Estructura:") then
-			cockpit.desktop = "Structures"
+			cockpit.desktop = "Estruct"
 		elseif title:match("^Tabla:") then
-			cockpit.desktop = "Tables"
+			cockpit.desktop = "Tablas"
 		elseif title:match("^Variable:") then
-			cockpit.desktop = "Detail"
+			cockpit.desktop = "Vis.detallada"
 		end
 	end
 	if opts.actions then
@@ -1169,43 +1229,42 @@ end
 
 select_desktop = function(name, opts)
 	opts = opts or {}
-	cockpit.desktop = name or "Standard"
+	name = canonical_desktop(name or "Standard")
+	cockpit.desktop = name
 	save_layout()
 	if name == "Standard" then
 		render_cockpit({ focus = false, preserve_cursor = true })
-		if code_win and vim.api.nvim_win_is_valid(code_win) then
+		if opts.focus and code_win and vim.api.nvim_win_is_valid(code_win) then
 			pcall(vim.api.nvim_set_current_win, code_win)
 		end
 		return
 	end
-	if name == "Structures" then
-		open_preview("Structures", {
+	if name == "Estruct" then
+		open_preview("Estruct", {
 			"Selecciona una workarea/estructura en Locales, Globals o Variables y pulsa o.",
 			"Ejemplos: wa_alv, ls_cabecera, <fs_line>.",
 			"También puedes situarte sobre una variable en el código y usar <leader>dT.",
 		}, { pane = "Datos", focus = opts.focus, activate = true })
-	elseif name == "Tables" then
-		open_preview("Tables", {
+	elseif name == "Tablas" then
+		open_preview("Tablas", {
 			"Selecciona una tabla interna en Locales, Globals o Variables y pulsa o.",
 			"Ejemplos: lt_alv, gt_items, rv_table_bd.",
 			"En una tabla abierta usa ]/[ para paginar.",
 		}, { pane = "Datos", focus = opts.focus, activate = true })
-	elseif name == "Objects" then
+	elseif name == "Objetos" then
 		if refresh_objects_desktop then
 			refresh_objects_desktop(opts)
 		end
-	elseif name == "Detail" then
-		open_preview("Detail", {
+	elseif name == "Vis.detallada" then
+		open_preview("Vis.detallada", {
 			"Vista detallada del valor seleccionado.",
 			"Usa o sobre una variable, fila, campo o watch para abrir su detalle aquí.",
 			"Usa 5 para Stack, 6 para Breakpoints, 4 para Watch.",
 		}, { pane = "Datos", focus = opts.focus, activate = true })
 	elseif name == "Data Explorer" then
-		open_preview("Data Explorer", {
-			"Explorador de datos del debugger.",
-			"Abre una tabla/estructura con o; tablas grandes se paginan con ]/[.",
-			"Para consultas DDIC/SQL de solo lectura usa :SapData.",
-		}, { pane = "Datos", focus = opts.focus, activate = true })
+		if refresh_data_explorer then
+			refresh_data_explorer(opts)
+		end
 	else
 		render_cockpit({ focus = opts.focus, preserve_cursor = true })
 	end
@@ -1225,7 +1284,7 @@ end
 refresh_objects_desktop = function(opts)
 	opts = opts or {}
 	if not dbg.session then
-		open_preview("Objects", { "No hay sesión de debug activa." }, { pane = "Datos", focus = opts.focus, activate = true })
+		open_preview("Objetos", { "No hay sesión de debug activa." }, { pane = "Datos", focus = opts.focus, activate = true })
 		return
 	end
 	dbg.get_variables({ "@LOCALS", "@GLOBALS" }, function(vars)
@@ -1254,12 +1313,168 @@ refresh_objects_desktop = function(opts)
 		end
 		if #lines == 2 then
 			lines[#lines + 1] = "No se encontraron referencias de objeto en Locales/Globals."
-			lines[#lines + 1] = "Añade una referencia en Variables 1/2 o abre Locals/Globals y pulsa o sobre lo_* / go_*."
+			lines[#lines + 1] = "Añade una referencia en Variables1/2 o abre Locals/Globals y pulsa o sobre lo_* / go_*."
 		else
 			lines[#lines + 1] = ""
 			lines[#lines + 1] = "Pulsa o sobre una referencia para abrir atributos/hijos si SAP los expone."
 		end
-		open_preview("Objects", lines, { pane = "Datos", focus = opts.focus, activate = true, actions = actions })
+		open_preview("Objetos", lines, { pane = "Datos", focus = opts.focus, activate = true, actions = actions })
+	end)
+end
+
+local function data_explorer_matches(row, filter)
+	filter = vim.trim(tostring(filter or "")):lower()
+	if filter == "" then
+		return true
+	end
+	local haystack = table.concat({
+		row.source or "",
+		row.name or "",
+		row.type or "",
+		row.value or "",
+		row.kind or "",
+	}, "\n"):lower()
+	return haystack:find(filter, 1, true) ~= nil
+end
+
+local function data_explorer_add(rows, source, v)
+	if not v then
+		return
+	end
+	rows[#rows + 1] = {
+		source = source,
+		name = v.name or v.id or "?",
+		type = v.type or v.meta or "",
+		value = var_value(v),
+		kind = v.meta or (v.expandable and "structure" or "simple"),
+		var = v,
+	}
+end
+
+local function render_data_explorer_rows(rows, opts)
+	opts = opts or {}
+	local state = cockpit.data_explorer
+	local filtered = {}
+	for _, row in ipairs(rows or {}) do
+		if data_explorer_matches(row, state.filter) then
+			filtered[#filtered + 1] = row
+		end
+	end
+	table.sort(filtered, function(a, b)
+		if a.source == b.source then
+			return tostring(a.name) < tostring(b.name)
+		end
+		return tostring(a.source) < tostring(b.source)
+	end)
+
+	local page_size = math.max(1, tonumber(state.page_size) or 20)
+	local max_page = math.max(0, math.ceil(math.max(#filtered, 1) / page_size) - 1)
+	state.page = math.max(0, math.min(tonumber(state.page) or 0, max_page))
+	local offset = state.page * page_size
+	local last = math.min(#filtered, offset + page_size)
+	local pages = max_page + 1
+	local filter_label = vim.trim(tostring(state.filter or "")) ~= "" and (" · filtro: " .. state.filter) or ""
+	local title = string.format("Data Explorer (%d/%d · pág %d/%d%s)", #filtered, #rows, state.page + 1, pages, filter_label)
+
+	local lines = {
+		string.format("%-12s │ %-32s │ %-24s │ %s", "SOURCE", "NAME", "TYPE", "VALUE"),
+		string.rep("-", 90),
+	}
+	local actions = {}
+	if #filtered == 0 then
+		lines[#lines + 1] = vim.trim(tostring(state.filter or "")) ~= "" and "Sin resultados para el filtro actual."
+			or "(sin variables disponibles)"
+	else
+		for idx = offset + 1, last do
+			local row = filtered[idx]
+			local line_idx = #lines + 1
+			lines[line_idx] = string.format(
+				"%-12s │ %-32s │ %-24s │ %s",
+				short_value(row.source, 12),
+				short_value(row.name, 32),
+				short_value(row.type, 24),
+				short_value(row.value, 120)
+			)
+			actions[line_idx] = { kind = row.kind, label = row.name, var = row.var }
+		end
+	end
+	lines[#lines + 1] = ""
+	lines[#lines + 1] = "/ o f filtra · ]/[ pagina · o abre estructura/tabla/objeto · = set escalar"
+	save_layout()
+	open_preview(title, lines, {
+		pane = "Datos",
+		focus = opts.focus == true,
+		activate = opts.activate ~= false,
+		preserve_cursor = opts.preserve_cursor or opts.focus ~= true,
+		actions = actions,
+	})
+end
+
+refresh_data_explorer = function(opts)
+	opts = opts or {}
+	cockpit.desktop = "Data Explorer"
+	if not dbg.session then
+		open_preview("Data Explorer", {
+			"No hay sesión de debug activa.",
+			"Abre una sesión para explorar Locales, Globales y Variables1/2.",
+		}, {
+			pane = "Datos",
+			focus = opts.focus == true,
+			activate = opts.activate ~= false,
+			preserve_cursor = opts.preserve_cursor or opts.focus ~= true,
+		})
+		return
+	end
+
+	dbg.get_variables({ "@LOCALS", "@GLOBALS" }, function(vars)
+		local rows = {}
+		for _, v in ipairs(vars or {}) do
+			local src = "Scope"
+			local id = tostring(v.id or "")
+			if id:find("@GLOBALS", 1, true) then
+				src = "Globals"
+			elseif id:find("@LOCALS", 1, true) then
+				src = "Locals"
+			end
+			data_explorer_add(rows, src, v)
+		end
+
+		local exprs = {}
+		for _, expr in ipairs(cockpit.watches or {}) do
+			exprs[#exprs + 1] = { source = "Variables1", expr = expr }
+		end
+		for _, expr in ipairs(cockpit.watches2 or {}) do
+			exprs[#exprs + 1] = { source = "Variables2", expr = expr }
+		end
+		if #exprs == 0 then
+			render_data_explorer_rows(rows, opts)
+			return
+		end
+
+		local ids = {}
+		for _, item in ipairs(exprs) do
+			ids[#ids + 1] = tostring(item.expr or ""):upper()
+		end
+		dbg.get_vars_by_id(ids, function(watch_vars)
+			for i, item in ipairs(exprs) do
+				local v = watch_vars and watch_vars[i] or nil
+				if v then
+					if not v.name or v.name == "" then
+						v.name = item.expr
+					end
+					data_explorer_add(rows, item.source, v)
+				else
+					rows[#rows + 1] = {
+						source = item.source,
+						name = item.expr,
+						type = "",
+						value = "no evaluable o fuera de scope",
+						kind = "watch",
+					}
+				end
+			end
+			render_data_explorer_rows(rows, opts)
+		end)
 	end)
 end
 
@@ -1454,6 +1669,9 @@ open_debug_variable = function(label, var, opts)
 		return
 	end
 	label = tostring(label or var.name or var.id or "?"):upper()
+	local prev_page = (last_preview and last_preview.table and last_preview.name == label)
+			and last_preview.table.page
+		or 0
 	local preview_opts = {
 		focus = opts.focus ~= false,
 		pane = "Datos",
@@ -1466,23 +1684,26 @@ open_debug_variable = function(label, var, opts)
 			notify("No se pudo evaluar " .. label .. ".", vim.log.levels.WARN)
 			return
 		end
+		last_preview = {
+			mode = "variable",
+			name = label,
+			id = v.id or var.id,
+			kind = v.meta or (v.expandable and "structure" or "scalar"),
+			mine_only = false,
+		}
 		if v.meta == "table" then
 			if (v.table_lines or 0) == 0 then
 				open_preview("Tabla: " .. label .. " (vacía)", { "(0 filas)" }, preview_opts)
 				return
 			end
-			last_preview = {
+			last_preview.table = {
+				id = v.id,
 				name = label,
-				mine_only = false,
-				table = {
-					id = v.id,
-					name = label,
-					total = v.table_lines or 0,
-					filter_user = nil,
-					page = 0,
-				},
+				total = v.table_lines or 0,
+				filter_user = nil,
+				page = prev_page,
 			}
-			load_table_page(last_preview.table, 0, preview_opts)
+			load_table_page(last_preview.table, prev_page, preview_opts)
 		elseif v.meta == "structure" or v.expandable then
 			dbg.get_variables(v.id, function(fields)
 				render_struct(label, fields or {}, preview_opts)
@@ -1525,14 +1746,14 @@ local function current_right_pane_action()
 		return nil
 	end
 	local row = vim.api.nvim_win_get_cursor(watch_win)[1]
-	local tab = cockpit.active_watch_tab or "Variables 1"
+	local tab = canonical_watch_tab(cockpit.active_watch_tab or "Variables1")
 	local pane_name
 	local start_line
-	if tab == "Variables 1" then
+	if tab == "Variables1" then
 		pane_name = "Watch"
 		start_line = 10
-	elseif tab == "Variables 2" then
-		pane_name = "Variables 2"
+	elseif tab == "Variables2" then
+		pane_name = "Variables2"
 		start_line = 10
 	elseif tab == "Locals" then
 		pane_name = "Locales"
@@ -1569,8 +1790,76 @@ function M.open_selected_right_variable()
 	open_debug_variable(action.label, action.var, { focus = true })
 end
 
+local function selected_variable_action(from_right)
+	local action = from_right and current_right_pane_action() or current_pane_action()
+	if action and action.var then
+		return action
+	end
+	local name = vim.fn.expand("<cexpr>")
+	if name and name ~= "" then
+		name = name:upper()
+		return { label = name, var = { id = name, name = name, value = "" } }
+	end
+	return nil
+end
+
+function M.set_variable_value(name, value, opts)
+	opts = opts or {}
+	name = vim.trim(tostring(name or ""))
+	if name == "" then
+		notify("Variable vacía.", vim.log.levels.WARN)
+		return
+	end
+	local cur_win = vim.api.nvim_get_current_win()
+	dbg.set_variable(name, value, function(ok, err)
+		if ok then
+			add_log("variable modificada: " .. name)
+			notify("Variable modificada: " .. name, vim.log.levels.INFO)
+			M.refresh_active()
+		else
+			notify(tostring(err or "No se pudo modificar la variable."), vim.log.levels.WARN)
+		end
+		if opts.restore_focus ~= false and cur_win and vim.api.nvim_win_is_valid(cur_win) then
+			pcall(vim.api.nvim_set_current_win, cur_win)
+		end
+	end)
+end
+
+function M.set_selected_variable(from_right)
+	local action = selected_variable_action(from_right)
+	if not action or not action.var then
+		notify("No hay variable bajo el cursor.", vim.log.levels.WARN)
+		return
+	end
+	if dbg.can_set_variable and not dbg.can_set_variable() then
+		notify("Set variable desactivado por config productive.allow_debug_set_variable=false.", vim.log.levels.WARN)
+		return
+	end
+	local v = action.var
+	local id = v.id or action.label or v.name
+	local label = action.label or v.name or id
+	if not id or id == "" then
+		notify("No hay ID ADT para la variable seleccionada.", vim.log.levels.WARN)
+		return
+	end
+	vim.ui.input({ prompt = "Set " .. tostring(label) .. ": ", default = tostring(v.value or "") }, function(input)
+		if input == nil then
+			return
+		end
+		M.set_variable_value(id, input)
+	end)
+end
+
+function M.set_variable_under_cursor()
+	M.set_selected_variable(false)
+end
+
 -- Navegación de páginas: ]/> avanza, [/< retrocede. Sólo aplica sobre la tabla del panel Datos.
 function M.table_page(delta)
+	if cockpit.active == "Datos" and canonical_desktop(cockpit.desktop) == "Data Explorer" then
+		M.data_explorer_page(delta)
+		return
+	end
 	if cockpit.active ~= "Datos" or not (last_preview and last_preview.table) then
 		return
 	end
@@ -1581,6 +1870,32 @@ function M.table_page(delta)
 		activate = true,
 		preserve_cursor = false,
 	})
+end
+
+function M.data_explorer_page(delta)
+	cockpit.data_explorer.page = math.max(0, (tonumber(cockpit.data_explorer.page) or 0) + (tonumber(delta) or 0))
+	save_layout()
+	if refresh_data_explorer then
+		refresh_data_explorer({ focus = false, activate = true, preserve_cursor = true })
+	end
+end
+
+function M.set_data_explorer_filter(filter)
+	if filter ~= nil then
+		cockpit.data_explorer.filter = vim.trim(tostring(filter or ""))
+		cockpit.data_explorer.page = 0
+		save_layout()
+		if refresh_data_explorer then
+			refresh_data_explorer({ focus = false, activate = true, preserve_cursor = true })
+		end
+		return
+	end
+	vim.ui.input({ prompt = "Data Explorer filtro: ", default = cockpit.data_explorer.filter or "" }, function(input)
+		if input == nil then
+			return
+		end
+		M.set_data_explorer_filter(input)
+	end)
 end
 
 short_value = function(value, max_width)
@@ -1662,7 +1977,7 @@ local function render_watch_list(pane_name, exprs, opts)
 	if #exprs == 0 then
 		open_preview(pane_name, {
 			"No hay expresiones.",
-			"Pulsa a, i o Enter en Variables 1/2 para añadir una expresión.",
+			"Pulsa a, i o Enter en Variables1/2 para añadir una expresión.",
 		}, { pane = pane_name, focus = opts.focus, preserve_cursor = opts.preserve_cursor, activate = opts.activate })
 		return
 	end
@@ -1713,12 +2028,12 @@ end
 
 select_watch_tab = function(name, opts)
 	opts = opts or {}
-	cockpit.active_watch_tab = name or cockpit.active_watch_tab or "Variables 1"
+	cockpit.active_watch_tab = canonical_watch_tab(name or cockpit.active_watch_tab or "Variables1")
 	save_layout()
-	if cockpit.active_watch_tab == "Variables 1" then
+	if cockpit.active_watch_tab == "Variables1" then
 		render_watch_list("Watch", cockpit.watches, { focus = false, activate = false })
-	elseif cockpit.active_watch_tab == "Variables 2" then
-		render_watch_list("Variables 2", cockpit.watches2, { focus = false, activate = false })
+	elseif cockpit.active_watch_tab == "Variables2" then
+		render_watch_list("Variables2", cockpit.watches2, { focus = false, activate = false })
 	elseif cockpit.active_watch_tab == "Locals" then
 		refresh_scope("@LOCALS", "Locales", { focus = false, activate = false, preserve_cursor = true })
 	elseif cockpit.active_watch_tab == "Globals" then
@@ -1830,7 +2145,7 @@ function M.select_stack_under_cursor()
 		dbg.goto_stack(frame.stackUri, function()
 			add_log("stack seleccionado: " .. (frame.include or frame.program or "?") .. ":" .. tostring(frame.line or "?"))
 			refresh_stack_side()
-			if cockpit.desktop == "Objects" and refresh_objects_desktop then
+			if canonical_desktop(cockpit.desktop) == "Objetos" and refresh_objects_desktop then
 				refresh_objects_desktop({ focus = false })
 			elseif cockpit.active_watch_tab == "Locals" or cockpit.active_watch_tab == "Globals" then
 				select_watch_tab(cockpit.active_watch_tab, { focus = false })
@@ -1893,8 +2208,14 @@ function M.refresh_pane(name, opts)
 		cockpit.active = name
 	end
 	if name == "Datos" then
-		if last_preview and dbg.session then
-			M.show_alv(last_preview.mine_only, last_preview.name, {
+		if canonical_desktop(cockpit.desktop) == "Data Explorer" and refresh_data_explorer then
+			refresh_data_explorer({
+				focus = opts.focus,
+				activate = true,
+				preserve_cursor = opts.preserve_cursor,
+			})
+		elseif last_preview and dbg.session then
+			refresh_last_preview({
 				focus = opts.focus,
 				activate = true,
 				preserve_cursor = opts.preserve_cursor,
@@ -1926,20 +2247,49 @@ function M.refresh_pane(name, opts)
 	end
 end
 
-function M.open_cockpit()
-	M.refresh_pane(cockpit.active or "Datos", { focus = true })
-	if code_win and vim.api.nvim_win_is_valid(code_win) then
+function M.open_cockpit(opts)
+	opts = opts or {}
+	local focus = opts.focus ~= false
+	M.refresh_pane(cockpit.active or "Datos", { focus = focus, preserve_cursor = opts.preserve_cursor })
+	if focus and code_win and vim.api.nvim_win_is_valid(code_win) then
 		pcall(vim.api.nvim_set_current_win, code_win)
 	end
 end
 
+function M._debug_state()
+	return {
+		active = cockpit.active,
+		desktop = canonical_desktop(cockpit.desktop),
+		active_watch_tab = canonical_watch_tab(cockpit.active_watch_tab),
+		watches = vim.deepcopy(cockpit.watches),
+		watches2 = vim.deepcopy(cockpit.watches2),
+		data_explorer = vim.deepcopy(cockpit.data_explorer),
+		last_preview = vim.deepcopy(last_preview),
+		bufs = {
+			code = code_buf,
+			preview = preview_buf,
+			stack = stack_buf,
+			watch = watch_buf,
+		},
+		wins = {
+			code = code_win,
+			preview = preview_win,
+			stack = stack_win,
+			watch = watch_win,
+		},
+		desktop_tabs = vim.deepcopy(SAPGUI_DESKTOPS),
+		watch_tabs = vim.deepcopy(SAPGUI_WATCH_TABS),
+	}
+end
+
 function M.add_watch(expr)
 	if expr and expr ~= "" then
-		local target = cockpit.active_watch_tab == "Variables 2" and cockpit.watches2 or cockpit.watches
+		cockpit.active_watch_tab = canonical_watch_tab(cockpit.active_watch_tab or "Variables1")
+		local target = cockpit.active_watch_tab == "Variables2" and cockpit.watches2 or cockpit.watches
 		target[#target + 1] = vim.trim(expr)
-		add_log((cockpit.active_watch_tab or "Variables 1") .. ": variable añadida " .. vim.trim(expr))
-		if cockpit.active_watch_tab == "Variables 2" then
-			render_watch_list("Variables 2", cockpit.watches2, { focus = false, activate = false })
+		add_log((cockpit.active_watch_tab or "Variables1") .. ": variable añadida " .. vim.trim(expr))
+		if cockpit.active_watch_tab == "Variables2" then
+			render_watch_list("Variables2", cockpit.watches2, { focus = false, activate = false })
 		else
 			render_watch_list("Watch", cockpit.watches, { focus = false, activate = false })
 		end
@@ -1950,10 +2300,10 @@ function M.add_watch(expr)
 		end
 		return
 	end
-	local tab = cockpit.active_watch_tab or "Variables 1"
-	if tab ~= "Variables 1" and tab ~= "Variables 2" then
-		cockpit.active_watch_tab = "Variables 1"
-		tab = "Variables 1"
+	local tab = canonical_watch_tab(cockpit.active_watch_tab or "Variables1")
+	if tab ~= "Variables1" and tab ~= "Variables2" then
+		cockpit.active_watch_tab = "Variables1"
+		tab = "Variables1"
 	end
 	vim.ui.input({ prompt = tab .. " ABAP: " }, function(input)
 		if input and vim.trim(input) ~= "" then
@@ -1963,7 +2313,8 @@ function M.add_watch(expr)
 end
 
 function M.delete_watch_under_cursor()
-	local target = cockpit.active_watch_tab == "Variables 2" and cockpit.watches2 or cockpit.watches
+	cockpit.active_watch_tab = canonical_watch_tab(cockpit.active_watch_tab or "Variables1")
+	local target = cockpit.active_watch_tab == "Variables2" and cockpit.watches2 or cockpit.watches
 	if #target == 0 then
 		return
 	end
@@ -1977,8 +2328,8 @@ function M.delete_watch_under_cursor()
 		add_log("watch borrado: " .. removed)
 	end
 	save_layout()
-	if cockpit.active_watch_tab == "Variables 2" then
-		render_watch_list("Variables 2", cockpit.watches2, { focus = false, activate = false })
+	if cockpit.active_watch_tab == "Variables2" then
+		render_watch_list("Variables2", cockpit.watches2, { focus = false, activate = false })
 	else
 		render_watch_list("Watch", cockpit.watches, { focus = false, activate = false })
 	end
@@ -1986,11 +2337,11 @@ function M.delete_watch_under_cursor()
 end
 
 function M.edit_watch_under_cursor()
-	local tab = cockpit.active_watch_tab or "Variables 1"
-	if tab ~= "Variables 1" and tab ~= "Variables 2" then
+	local tab = canonical_watch_tab(cockpit.active_watch_tab or "Variables1")
+	if tab ~= "Variables1" and tab ~= "Variables2" then
 		return
 	end
-	local target = tab == "Variables 2" and cockpit.watches2 or cockpit.watches
+	local target = tab == "Variables2" and cockpit.watches2 or cockpit.watches
 	if #target == 0 then
 		return
 	end
@@ -2008,8 +2359,8 @@ function M.edit_watch_under_cursor()
 			target[idx] = input
 		end
 		save_layout()
-		if tab == "Variables 2" then
-			render_watch_list("Variables 2", cockpit.watches2, { focus = false, activate = false })
+		if tab == "Variables2" then
+			render_watch_list("Variables2", cockpit.watches2, { focus = false, activate = false })
 		else
 			render_watch_list("Watch", cockpit.watches, { focus = false, activate = false })
 		end
@@ -2043,7 +2394,7 @@ function M.show_alv(mine_only, name_override, opts)
 	local prev_page = (last_preview and last_preview.table and last_preview.table.name == name)
 			and last_preview.table.page
 		or 0
-	last_preview = { name = name, mine_only = mine_only == true }
+	last_preview = { mode = "name", name = name, mine_only = mine_only == true }
 	local filter_user = mine_only and dbg.session.user or nil
 
 	-- 1. Buscamos el ID real de la variable dentro del Scope
@@ -2068,6 +2419,8 @@ function M.show_alv(mine_only, name_override, opts)
 				return
 			end
 
+			last_preview.id = v.id
+			last_preview.kind = v.meta or (v.expandable and "structure" or "scalar")
 			if v.meta == "table" then
 				if (v.table_lines or 0) == 0 then
 					open_preview("Tabla: " .. name .. " (vacía)", { "(0 filas)" }, preview_opts)
@@ -2093,6 +2446,59 @@ function M.show_alv(mine_only, name_override, opts)
 	end)
 end
 
+refresh_last_preview = function(opts)
+	opts = opts or {}
+	if not last_preview then
+		open_preview("Datos", { "Selecciona una variable y usa :SapAlvPreview o <leader>dT." }, {
+			pane = "Datos",
+			focus = opts.focus,
+			preserve_cursor = opts.preserve_cursor,
+		})
+		return
+	end
+
+	local name = last_preview.name
+	local function fallback_by_name()
+		if name and name ~= "" then
+			M.show_alv(last_preview.mine_only, name, {
+				focus = opts.focus,
+				activate = opts.activate,
+				preserve_cursor = opts.preserve_cursor,
+			})
+			return true
+		end
+		return false
+	end
+
+	if last_preview.mode == "variable" and last_preview.id then
+		dbg.get_vars_by_id(last_preview.id, function(vars)
+			local v = vars and vars[1]
+			if v then
+				open_debug_variable(name, v, {
+					focus = opts.focus,
+					activate = opts.activate,
+					preserve_cursor = opts.preserve_cursor,
+				})
+			elseif not fallback_by_name() then
+				open_preview("Datos", { "La variable ya no está disponible en este punto de ejecución." }, {
+					pane = "Datos",
+					focus = opts.focus,
+					preserve_cursor = opts.preserve_cursor,
+				})
+			end
+		end)
+		return
+	end
+
+	if not fallback_by_name() then
+		open_preview("Datos", { "La variable ya no está disponible en este punto de ejecución." }, {
+			pane = "Datos",
+			focus = opts.focus,
+			preserve_cursor = opts.preserve_cursor,
+		})
+	end
+end
+
 function M.refresh_active()
 	if not dbg.session then
 		return
@@ -2100,7 +2506,7 @@ function M.refresh_active()
 	if preview_active() then
 		M.refresh_pane(cockpit.active, { focus = false, preserve_cursor = true })
 	elseif last_preview then
-		M.show_alv(last_preview.mine_only, last_preview.name, { focus = false, activate = false, preserve_cursor = true })
+		refresh_last_preview({ focus = false, activate = false, preserve_cursor = true })
 	end
 end
 
@@ -2128,6 +2534,32 @@ function M.setup()
 			M.select_watch_tab(name, { focus = true })
 		end
 	end, { nargs = "?", desc = "Cambiar subpestaña derecha del debugger SAP GUI" })
+	vim.api.nvim_create_user_command("SapDebugDataExplorer", function()
+		select_desktop("Data Explorer", { focus = true })
+	end, { desc = "Abrir Data Explorer del debugger SAP" })
+	vim.api.nvim_create_user_command("SapDebugDataFilter", function(args)
+		M.set_data_explorer_filter(args.args or "")
+	end, { nargs = "*", desc = "Filtrar Data Explorer del debugger SAP" })
+	vim.api.nvim_create_user_command("SapDebugSetVariable", function(args)
+		local raw = vim.trim(args.args or "")
+		local name, value = raw:match("^(%S+)%s+(.+)$")
+		if name and value ~= nil then
+			M.set_variable_value(name, value)
+			return
+		end
+		local default_name = raw ~= "" and raw or vim.fn.expand("<cexpr>")
+		vim.ui.input({ prompt = "Variable ADT: ", default = default_name }, function(input_name)
+			input_name = input_name and vim.trim(input_name) or ""
+			if input_name == "" then
+				return
+			end
+			vim.ui.input({ prompt = "Valor para " .. input_name .. ": " }, function(input_value)
+				if input_value ~= nil then
+					M.set_variable_value(input_name, input_value)
+				end
+			end)
+		end)
+	end, { nargs = "*", desc = "Set variable en debugger SAP (bloqueado por config por defecto)" })
 	vim.api.nvim_create_user_command("SapAlvPreview", function()
 		M.show_alv(false)
 	end, { desc = "Previsualizar variable (ALV)" })

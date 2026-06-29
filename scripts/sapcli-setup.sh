@@ -6,6 +6,7 @@
 # Uso: ./scripts/sapcli-setup.sh
 #   Crea/edita ~/.sapcli/config.yml con asistente interactivo.
 #   Soporta múltiples contextos (conexiones a distintos sistemas SAP).
+#   No guarda contraseñas; usa :SapSetup/:SapLogin desde Neovim para validarlas.
 #
 # ¿Nueva máquina? Copia este script, ejecútalo y configura en 2 minutos.
 #===============================================================================
@@ -160,7 +161,7 @@ case "$option" in
     prompt client        "* Cliente (MANDT)" "100"
     prompt port          "Puerto ADT" "443"
     prompt user          "* Usuario"
-    prompt_password pass "* Contraseña"
+    warn "La contraseña NO se guardará en texto plano. Usa :SapSetup o :SapLogin en Neovim."
     
     if confirm "¿Usar SSL?" "y"; then
       ssl="true"
@@ -197,7 +198,6 @@ $ctx_name:
   client: $client
   port: $port
   user: $user
-  password: $pass
   ssl: $ssl
 YAMLEOF
 

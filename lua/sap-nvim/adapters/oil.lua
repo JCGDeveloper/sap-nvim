@@ -53,6 +53,12 @@ function M.setup(opts)
 
     --- Escribir objeto remoto
     write = function(_, url, data)
+      local ok_cfg, cfg = pcall(function()
+        return require("sap-nvim.core.config").productive()
+      end)
+      if not (ok_cfg and cfg.allow_oil_write == true) then
+        return false, "sap:// oil es solo lectura por seguridad. Usa :SapPush/:SapPushActivate."
+      end
       local object = url.path:match("^/(.+)$") or ""
       local tmpfile = os.tmpname()
       local f = io.open(tmpfile, "w")

@@ -211,7 +211,8 @@ local function emit_stopped(reason)
 	})
 	pcall(function()
 		local preview = require("sap-nvim.core.preview")
-		preview.open_cockpit()
+		local focus = not (preview.should_preserve_focus and preview.should_preserve_focus())
+		preview.open_cockpit({ focus = focus, preserve_cursor = true })
 		preview.refresh_active()
 	end)
 end
@@ -239,7 +240,7 @@ function handlers.initialize(req)
 	respond(req, {
 		supportsConfigurationDoneRequest = true,
 		supportsTerminateRequest = true,
-		supportsSetVariable = true,
+		supportsSetVariable = dbg.can_set_variable and dbg.can_set_variable() or false,
 		supportsGotoTargetsRequest = true,
 		supportsStepInTargetsRequest = false,
 		supportsEvaluateForHovers = true, -- 🔥 ESTO ESTABA EN FALSE
@@ -504,14 +505,17 @@ function handlers.setVariable(req)
 	local a = req.arguments or {}
 	local ref, name, value = a.variablesReference, a.name, a.value
 	local id = (ref and state.varids[ref] and state.varids[ref][name]) or name
-	dbg.set_variable(id, value, function(ok)
+	dbg.set_variable(id, value, function(ok, err)
 		if ok then
 			respond(req, { value = value })
 		else
 			respond(req, {
 				error = {
 					id = 1,
-					format = "No se pudo cambiar '" .. tostring(name) .. "' (¿escalar/autorización?).",
+					format = "No se pudo cambiar '"
+						.. tostring(name)
+						.. "': "
+						.. tostring(err or "¿escalar/autorización?"),
 				},
 			}, false)
 		end

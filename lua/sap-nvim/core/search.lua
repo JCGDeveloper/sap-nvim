@@ -13,6 +13,7 @@
 
 local M = {}
 local adt_http = require("sap-nvim.core.adt_http")
+local index = require("sap-nvim.core.index")
 local source = require("sap-nvim.core.source")
 
 local DEBOUNCE_MS = 200
@@ -41,8 +42,8 @@ local TYPE_MAP = {
 	["DOMA/DO"] = { label = "Domain", group = "domain" },
 	["ENQU/EL"] = { label = "Lock Object", group = nil },
 	["MSAG/N"] = { label = "Message Class", group = "messageclass" },
-	["TRAN/T"] = { label = "Transaction", group = nil },
-	["DEVC/K"] = { label = "Package", group = nil },
+	["TRAN/T"] = { label = "Transaction", group = "transaction" },
+	["DEVC/K"] = { label = "Package", group = "package" },
 	-- CDS / RAP (se abren por ADT directo vía core/cds)
 	["DDLS/DF"] = { label = "CDS View", group = "ddls" },
 	["DDLX/EX"] = { label = "Metadata Ext.", group = "ddlx" },
@@ -108,6 +109,42 @@ local function desc_matches(desc, glob)
 	return (desc or ""):lower():find(glob_to_pat(glob)) ~= nil
 end
 
+local function index_status_label()
+	local st = index.status()
+	if st.counts.total == 0 then
+		return "vacio"
+	end
+	if st.stale then
+		return "obsoleto"
+	end
+	return tostring(st.counts.total) .. " cacheados"
+end
+
+local function indexed_rows(prompt, object_type, desc_filter, limit)
+	local query = prompt and prompt ~= "" and prompt or "*"
+	if query ~= "*" and query:sub(-1) ~= "*" then
+		query = query .. "*"
+	end
+	local rows = index.search_adt_rows(query, {
+		type = object_type,
+		kinds = { "object", "package" },
+		limit = limit or MAX_RESULTS,
+	})
+	if desc_filter and desc_filter ~= "" then
+		local filtered = {}
+		for _, r in ipairs(rows) do
+			if desc_matches(r.desc or r.description, desc_filter) then
+				filtered[#filtered + 1] = r
+			end
+		end
+		rows = filtered
+	end
+	for _, r in ipairs(rows) do
+		r.__prompt = prompt
+	end
+	return rows
+end
+
 local function url_encode(str)
 	if not str then
 		return ""
@@ -133,7 +170,13 @@ local function parse_body(body, prompt)
 		local desc = tag:match('adtcore:description="([^"]*)"')
 		if name and typ and not seen[name] then
 			seen[name] = true
-			results[#results + 1] = { name = unxml(name), adt_type = unxml(typ), desc = unxml(desc or ""), __prompt = prompt }
+			results[#results + 1] = {
+				name = unxml(name),
+				adt_type = unxml(typ),
+				uri = unxml(tag:match('adtcore:uri="([^"]*)"') or ""),
+				desc = unxml(desc or ""),
+				__prompt = prompt,
+			}
 		end
 	end
 	-- Parseador Antiguo (Atom Feed) por compatibilidad
@@ -145,7 +188,7 @@ local function parse_body(body, prompt)
 			if name and typ and not seen[name] then
 				seen[name] = true
 				results[#results + 1] =
-					{ name = unxml(name), adt_type = unxml(typ), desc = unxml(desc or ""), __prompt = prompt }
+					{ name = unxml(name), adt_type = unxml(typ), uri = "", desc = unxml(desc or ""), __prompt = prompt }
 			end
 		end
 	end
@@ -163,7 +206,7 @@ function M.open_picker(opts)
 	-- Login PEREZOSO (estilo VSCode): si no hay sesión validada, pedimos conexión + contraseña
 	-- (selector de máquina) y reintentamos. Si ya estás logueado, esto no se ejecuta y la
 	-- búsqueda va directa.
-	if not require("sap-nvim.core.adt_http").ready() then
+	if not require("sap-nvim.core.adt_http").ready() and not index.has_entries({}) then
 		require("sap-nvim.core.connection").ensure(function(success)
 			if success then
 				M.open_picker(opts)
@@ -205,7 +248,7 @@ function M.open_picker(opts)
 		if state.desc_filter and state.desc_filter ~= "" then
 			t = t .. "  ·  Descr: " .. state.desc_filter
 		end
-		return t .. "  ·  <C-f> tipo · <C-d> descr"
+		return t .. "  ·  Indice: " .. index_status_label() .. "  ·  <C-f> tipo · <C-d> descr"
 	end
 
 	local function entry_maker(entry)
@@ -271,12 +314,31 @@ function M.open_picker(opts)
 				-- Con filtro de descripción el servidor devuelve por nombre y refinamos en
 				-- cliente, así que pedimos MÁS candidatos para tener de dónde filtrar.
 				local max = has_desc and 200 or MAX_RESULTS
+				local local_results = indexed_rows(prompt, state.object_type, state.desc_filter, max)
+				if #local_results > 0 then
+					for _, r in ipairs(local_results) do
+						if process_result(entry_maker(r)) then
+							break
+						end
+					end
+					process_complete()
+					return
+				end
 				local req_path = "/sap/bc/adt/repository/informationsystem/search?query="
 					.. url_encode(query)
 					.. "&maxResults=" .. max
 					.. "&operation=quickSearch"
 				if state.object_type then
 					req_path = req_path .. "&objectType=" .. url_encode(state.object_type)
+				end
+
+				if not adt_http.is_available() then
+					local st = index.status()
+					local msg = st.counts.total > 0 and "Sin resultado en indice local; ADT no disponible."
+						or "Indice local vacio y ADT no disponible. Ejecuta :SapIndexBuild."
+					process_result(info(msg, "ERROR", prompt))
+					process_complete()
+					return
 				end
 
 				adt_http.request_async({
@@ -304,6 +366,9 @@ function M.open_picker(opts)
 								or "SAP no encontró objetos."
 							process_result(info(msg, "INFO", prompt))
 						else
+							pcall(function()
+								index.add_entries(results, { source = "search:" .. query, save = true })
+							end)
 							for _, r in ipairs(results) do
 								if process_result(entry_maker(r)) then
 									break
@@ -401,7 +466,10 @@ function M.open_picker(opts)
 					actions.close(prompt_bufnr)
 					local type_info = TYPE_MAP[selection.value.adt_type]
 					if type_info and type_info.group then
-						source.open(selection.value.name, type_info.group)
+						source.open(selection.value.name, type_info.group, {
+							uri = selection.value.uri,
+							package = selection.value.package,
+						})
 					else
 						notify("No se puede abrir este objeto (" .. selection.value.adt_type .. ")", vim.log.levels.WARN)
 					end

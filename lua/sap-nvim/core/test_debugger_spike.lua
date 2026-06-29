@@ -11,6 +11,7 @@
 
 local M = {}
 local adt_http = require("sap-nvim.core.adt_http")
+local config = require("sap-nvim.core.config")
 
 local S = { jar = nil, csrf = nil, terminalId = nil, ideId = nil, user = nil, listener_job = nil }
 
@@ -38,6 +39,37 @@ local function uuid()
   end)):upper()
 end
 
+local function curl_base_args(opts)
+  opts = opts or {}
+  local sec = config.security()
+  local args = { "curl", "-s" }
+  if sec.verify_tls == false then
+    args[#args + 1] = "-k"
+  end
+  if sec.ca_file and sec.ca_file ~= "" then
+    vim.list_extend(args, { "--cacert", vim.fn.expand(sec.ca_file) })
+  end
+  local connect_timeout = tonumber(sec.connect_timeout) or 10
+  if connect_timeout > 0 then
+    vim.list_extend(args, { "--connect-timeout", tostring(connect_timeout) })
+  end
+  if not opts.no_timeout then
+    local request_timeout = tonumber(sec.request_timeout) or 45
+    if request_timeout > 0 then
+      vim.list_extend(args, { "--max-time", tostring(request_timeout) })
+    end
+  end
+  return args
+end
+
+local function curl_cfg(c)
+  return table.concat({
+    "user = " .. string.format("%q", c.user .. ":" .. c.pass),
+    "silent",
+    "show-error",
+  }, "\n") .. "\n"
+end
+
 -- curl directo por jobstart. cb(body, http_status, headers). PARCHE 2: http_status = el
 -- ÚLTIMO `HTTP/x.x NNN` del header dump (no el exit code de bash); si curl falla, "curl-exit-N".
 local function curl(opts, cb)
@@ -49,7 +81,8 @@ local function curl(opts, cb)
   if opts.query then for k, v in pairs(opts.query) do url = url .. "&" .. k .. "=" .. tostring(v) end end
 
   local hdrfile = vim.fn.tempname()
-  local args = { "curl", "-sk", "-u", c.user .. ":" .. c.pass, "-b", S.jar, "-c", S.jar, "-D", hdrfile }
+  local args = curl_base_args(opts)
+  vim.list_extend(args, { "-K", "-", "-b", S.jar, "-c", S.jar, "-D", hdrfile })
   vim.list_extend(args, { "-X", opts.method or "GET" })
   if opts.stateful then vim.list_extend(args, { "-H", "X-sap-adt-sessiontype: stateful" }) end
   if opts.csrf_fetch then vim.list_extend(args, { "-H", "X-CSRF-Token: Fetch" })
@@ -80,6 +113,10 @@ local function curl(opts, cb)
       vim.schedule(function() cb(table.concat(out, "\n"), status, headers) end)
     end,
   })
+  if job and job > 0 then
+    pcall(vim.fn.chansend, job, curl_cfg(c))
+    pcall(vim.fn.chanclose, job, "stdin")
+  end
   return job
 end
 
@@ -221,7 +258,7 @@ local function step2_listen()
     method = "POST", path = "/sap/bc/adt/debugger/listeners",
     query = { debuggingMode = "user", requestUser = S.user, terminalId = S.terminalId,
               ideId = S.ideId, checkConflict = "true", isNotifiedOnConflict = "true" },
-    stateful = true,
+    stateful = true, no_timeout = true,
   }, function(body, status)
     S.listener_job = nil
     if not body or body == "" then

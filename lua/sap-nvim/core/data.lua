@@ -199,7 +199,7 @@ end
 
 -- Prefijo de tipo ADT (de `abap find`) -> grupo de sapcli para leer la definición.
 local TYPE_TO_GROUP = {
-  TABL = "table", DDLS = "ddl", STRU = "structure", DTEL = "dataelement", DOMA = "domain",
+  TABL = "table", DDLS = "ddl", STRU = "structure", TTYP = "tabletype", DTEL = "dataelement", DOMA = "domain",
 }
 
 -- Lee y muestra la definición de `group`/`real_name`.
@@ -220,11 +220,49 @@ local function read_and_show(group, real_name)
   })
 end
 
+local function uri_path(uri)
+  uri = tostring(uri or "")
+  if uri == "" then return nil end
+  local path = uri:match("^https?://[^/]+(/.*)$") or uri
+  return path ~= "" and path or nil
+end
+
+local function read_and_show_adt(group, real_name, uri)
+  local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+  if not (ok_http and adt_http.ready()) then
+    return read_and_show(group, real_name)
+  end
+  local path = uri_path(uri)
+  if not path then
+    return read_and_show(group, real_name)
+  end
+  local accept = "application/xml"
+  local ft = "xml"
+  if group == "ddl" then
+    if not path:match("/source/main$") then
+      path = path:gsub("/$", "") .. "/source/main"
+    end
+    accept = "text/plain"
+    ft = "abap"
+  end
+
+  local body, _, code = adt_http.raw({ method = "GET", path = path, accept = accept })
+  if not (code >= 200 and code < 300) or not body or body == "" or body:find("<exc:exception", 1, true) then
+    return read_and_show(group, real_name)
+  end
+  if ft == "xml" then
+    body = body:gsub("><", ">\n<")
+  end
+  local lines = vim.split(body:gsub("\r", ""), "\n", { plain = true })
+  show_scratch("sap-def://" .. real_name, ft, lines)
+end
+
 -- Tipo ADT completo (adtcore:type) -> grupo de sapcli para leer la definición.
 local ADT_TYPE_TO_GROUP = {
   ["TABL/DT"] = "table",
   ["TABL/DS"] = "structure",
   ["VIEW/DV"] = "table",
+  ["TTYP/TT"] = "tabletype",
   ["DDLS/DF"] = "ddl",
   ["DTEL/DE"] = "dataelement",
   ["DOMA/DO"] = "domain",
@@ -316,18 +354,18 @@ function M.read_definition(name)
     -- 1) coincidencia exacta de nombre.
     for _, r in ipairs(rows) do
       if r.name:upper() == name then
-        return read_and_show(r.group, real_read_name(r.group, r.name, r.uri))
+        return read_and_show_adt(r.group, real_read_name(r.group, r.name, r.uri), r.uri)
       end
     end
     -- 2) CDS: el nombre buscado era la entidad -> leer el primer DDL source (nombre real de la URI).
     for _, r in ipairs(rows) do
       if r.group == "ddl" then
-        return read_and_show("ddl", real_read_name("ddl", r.name, r.uri))
+        return read_and_show_adt("ddl", real_read_name("ddl", r.name, r.uri), r.uri)
       end
     end
     -- 3) primer objeto leíble.
     for _, r in ipairs(rows) do
-      return read_and_show(r.group, real_read_name(r.group, r.name, r.uri))
+      return read_and_show_adt(r.group, real_read_name(r.group, r.name, r.uri), r.uri)
     end
     notify("No se encontró definición para " .. name .. " (tabla/CDS/estructura/...).", vim.log.levels.WARN)
   end)

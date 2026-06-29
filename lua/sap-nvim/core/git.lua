@@ -8,6 +8,7 @@
 -- Toda llamada a SAP es async (vim.fn.jobstart + vim.schedule).
 
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 
 local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
@@ -60,7 +61,7 @@ local function run_gcts(args, on_done)
   end
 
   local stdout, stderr = {}, {}
-  vim.fn.jobstart(cmd, {
+  sapcli.jobstart(cmd, {
     on_stdout = function(_, data)
       for _, line in ipairs(data) do
         if line ~= "" then table.insert(stdout, line) end

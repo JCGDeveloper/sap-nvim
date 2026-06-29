@@ -31,6 +31,13 @@ local function unxml(s)
 		:gsub("&amp;", "&")
 end
 
+local function b64(s)
+	if vim.base64 and vim.base64.encode then
+		return vim.base64.encode(s or "")
+	end
+	return vim.fn.system({ "base64", "-w0" }, s or ""):gsub("%s+$", "")
+end
+
 local function xml_attr(attrs, name)
 	return attrs and (
 		attrs:match('[%w_:-]*' .. name .. '="([^"]*)"')
@@ -80,6 +87,8 @@ local GROUP_BY_ADT_TYPE = {
 	["DTEL/DE"] = "dataelement",
 	["DOMA/DO"] = "domain",
 	["MSAG/N"] = "messageclass",
+	["TRAN/T"] = "transaction",
+	["DEVC/K"] = "package",
 	["DDLS/DF"] = "ddls",
 	["DDLX/EX"] = "ddlx",
 	["DCLS/DL"] = "dcl",
@@ -106,6 +115,189 @@ function M.group_from_adt_type(adt_type)
 		return sub == "F" and "functiongroup" or "functionmodule"
 	end
 	return ({ CLAS = "class", INTF = "interface", FUGS = "functiongroup" })[prefix or ""]
+end
+
+local SOURCE_GROUPS = {
+	class = true,
+	interface = true,
+	program = true,
+	include = true,
+	functiongroup = true,
+	functionmodule = true,
+	ddl = true,
+	ddls = true,
+	ddlx = true,
+	dcl = true,
+	bdef = true,
+	srvd = true,
+}
+
+local DEPENDENCY_RANK = {
+	domain = 10,
+	dataelement = 20,
+	structure = 30,
+	table = 35,
+	tabletype = 38,
+	ddl = 45,
+	ddls = 45,
+	ddlx = 48,
+	dcl = 50,
+	bdef = 55,
+	srvd = 58,
+	include = 60,
+	functionmodule = 65,
+	functiongroup = 70,
+	interface = 75,
+	class = 80,
+	program = 90,
+}
+
+local function object_group(obj)
+	return obj and (obj.group or M.group_from_adt_type(obj.type or ""))
+end
+
+local function normalize_uri(uri)
+	uri = tostring(uri or "")
+	if uri == "" then
+		return nil
+	end
+	uri = uri:match("^https?://[^/]+(/.*)$") or uri
+	uri = uri:gsub("#.*$", ""):gsub("%?.*$", "")
+	uri = uri:gsub("/source/main$", "")
+	return uri:lower()
+end
+
+local function source_uri_for_object(obj)
+	local uri = normalize_uri(obj and obj.uri)
+	if not uri or not SOURCE_GROUPS[object_group(obj)] then
+		return nil
+	end
+	return uri .. "/source/main"
+end
+
+local function object_key(obj)
+	return normalize_uri(obj and obj.uri) or ((object_group(obj) or "?") .. "|" .. tostring(obj and obj.name or ""):upper())
+end
+
+local function object_label(obj)
+	if not obj then
+		return "SAP"
+	end
+	local name = tostring(obj.name or ""):upper()
+	local group = object_group(obj) or obj.type or "object"
+	if name == "" then
+		return group
+	end
+	return name .. " [" .. group .. "]"
+end
+
+local function infer_source_position(obj, message)
+	local lines = obj and obj.source_lines
+	if not lines or #lines == 0 then
+		return nil, nil
+	end
+	local candidates, seen = {}, {}
+	local function add(token)
+		token = tostring(token or "")
+		if #token < 2 then
+			return
+		end
+		local key = token:upper()
+		if not seen[key] then
+			seen[key] = true
+			candidates[#candidates + 1] = token
+		end
+	end
+	for token in tostring(message or ""):gmatch('"([^"]+)"') do
+		add(token)
+	end
+	for token in tostring(message or ""):gmatch("'([^']+)'") do
+		add(token)
+	end
+	for token in tostring(message or ""):gmatch("%f[%w_/]([ZY][%w_/%-]+)%f[^%w_/%-]") do
+		add(token)
+	end
+	for token in tostring(message or ""):gmatch("(/[^/]+/[%w_/%-]+)") do
+		add(token)
+	end
+	for _, token in ipairs(candidates) do
+		local needle = token:lower()
+		for i, line in ipairs(lines) do
+			local col = tostring(line or ""):lower():find(needle, 1, true)
+			if col then
+				return i, col
+			end
+		end
+	end
+	return nil, nil
+end
+
+local function object_filename(obj, fallback)
+	if obj and obj.filename and obj.filename ~= "" then
+		return obj.filename
+	end
+	local group = object_group(obj)
+	if obj and group and obj.name and obj.name ~= "" then
+		local ok_source, source = pcall(require, "sap-nvim.core.source")
+		local ok_objtype, objtype = pcall(require, "sap-nvim.core.objtype")
+		if ok_source and ok_objtype and objtype.gitfile then
+			local path = source.cache_dir() .. "/" .. objtype.gitfile(group, obj.name)
+			if vim.fn.filereadable(path) == 1 then
+				return path
+			end
+		end
+	end
+	return fallback or vim.api.nvim_buf_get_name(0)
+end
+
+local function activation_scope_label(objects, opts)
+	opts = opts or {}
+	local scope = opts.scope or (opts.recursive and "tree") or (opts.all and "all") or (#(objects or {}) == 1 and "single" or "bulk")
+	if scope == "single" then
+		return "SOLO objeto", (objects and objects[1] and object_label(objects[1])) or "objeto"
+	end
+	if scope == "tree" then
+		local root = opts.root_name or (objects and objects[1] and objects[1].name)
+		return "árbol raíz + relacionados", root and tostring(root):upper() or "árbol"
+	end
+	if scope == "all" then
+		return "todos los inactivos", tostring(#(objects or {})) .. " objeto(s)"
+	end
+	return "bloque seleccionado", tostring(#(objects or {})) .. " objeto(s)"
+end
+
+local function activation_block_message(adt_http)
+	if not adt_http then
+		return "ADT no disponible. Activación cancelada antes de tocar SAP."
+	end
+	if adt_http.ready and not adt_http.ready() then
+		local relogin = adt_http.needs_login and adt_http.needs_login()
+		if relogin then
+			return "Conexión SAP no validada o pausada tras 401. Activación cancelada; usa :SapRelogin antes de reintentar."
+		end
+		return "Conexión SAP no validada. Activación cancelada; usa :SapLogin antes de reintentar."
+	end
+	if adt_http.is_available and not adt_http.is_available() then
+		return "ADT no disponible (curl o sesión SAP). Activación cancelada antes de tocar SAP."
+	end
+	return nil
+end
+
+function M._activation_block_message(adt_http)
+	return activation_block_message(adt_http)
+end
+
+local function object_for_uri(uri, objects)
+	local normalized = normalize_uri(uri)
+	if not normalized then
+		return nil
+	end
+	for _, obj in ipairs(objects or {}) do
+		if normalize_uri(obj.uri) == normalized then
+			return obj
+		end
+	end
+	return nil
 end
 
 -- Codifica un valor para la query string de ADT, conservando el comodín `*`.
@@ -196,10 +388,16 @@ local function confirm_activation_bulk(objects, opts, cb)
 	if count == 0 then
 		return cb(false)
 	end
-	local label = count == 1 and ((objects[1].name or ""):upper()) or ("ACTIVAR " .. tostring(count))
-	local prompt = count == 1
-		and ("Activar " .. label .. " en SAP.")
-		or ("Activar " .. tostring(count) .. " objeto(s) en SAP.")
+	local scope_label, scope_target = activation_scope_label(objects, opts)
+	local label
+	if opts.scope == "tree" then
+		label = "ARBOL " .. tostring(scope_target or ""):upper()
+	elseif count == 1 then
+		label = ((objects[1].name or ""):upper())
+	else
+		label = "ACTIVAR " .. tostring(count)
+	end
+	local prompt = "Activar " .. scope_label .. " (" .. scope_target .. ") en SAP."
 	if cfg.confirm_destructive then
 		vim.ui.input({ prompt = prompt .. " Escribe '" .. label .. "' para confirmar: " }, function(input)
 			cb(input and vim.trim(input):upper() == label)
@@ -307,7 +505,7 @@ function M.fetch_transport_orders(callback)
 	local transports = {}
 	local stderr = {}
 
-	vim.fn.jobstart(args, {
+	sapcli.jobstart(args, {
 		on_stdout = function(_, data)
 			for _, line in ipairs(data) do
 				local t = vim.trim(line)
@@ -584,7 +782,47 @@ function M._parse_activation_errors(lines, filename, bufnr)
 	return ordered
 end
 
-function M._parse_activation_response(body, filename)
+local function add_ordered_qf(qf)
+	qf = qf or {}
+	local ordered, seen, buckets, modules = {}, {}, {}, {}
+	for i, e in ipairs(qf or {}) do
+		e._sap_order = e._sap_order or i
+		local module = e.module or e.text and e.text:match("^([^:]+):") or "SAP"
+		e.module = module
+		if not buckets[module] then
+			buckets[module] = {}
+			modules[#modules + 1] = module
+		end
+		buckets[module][#buckets[module] + 1] = e
+	end
+	for _, e in ipairs(qf) do
+		e._sap_order = nil
+	end
+	local function add(e)
+		local key = (e.filename or "") .. "|" .. (e.type or "") .. "|" .. (e.lnum or 0) .. "|" .. (e.text or "")
+		if not seen[key] then
+			seen[key] = true
+			ordered[#ordered + 1] = e
+		end
+	end
+	for _, module in ipairs(modules) do
+		for _, e in ipairs(buckets[module]) do
+			if e.type == "E" then
+				add(e)
+			end
+		end
+	end
+	for _, module in ipairs(modules) do
+		for _, e in ipairs(buckets[module]) do
+			if e.type ~= "E" then
+				add(e)
+			end
+		end
+	end
+	return ordered
+end
+
+function M._parse_activation_response(body, filename, objects)
 	local qf = {}
 	if not body or body == "" then
 		return qf
@@ -593,6 +831,7 @@ function M._parse_activation_response(body, filename)
 	local function add_from_attrs(attrs, text)
 		attrs = attrs or ""
 		local uri = attrs:match('[%w_:-]*uri="([^"]*)"') or attrs:match('href="([^"]*)"')
+		local obj = object_for_uri(uri, objects)
 		local typ = attrs:match('[%w_:-]*type="([^"]*)"')
 			or attrs:match('severity="([^"]*)"')
 			or attrs:match('kind="([^"]*)"')
@@ -607,12 +846,18 @@ function M._parse_activation_response(body, filename)
 		if up ~= "W" and up ~= "I" then
 			up = "E"
 		end
+		msg = unxml(msg)
+		if obj then
+			msg = object_label(obj) .. ": " .. msg
+		end
+		local inferred_line, inferred_col = infer_source_position(obj, msg)
 		qf[#qf + 1] = {
-			filename = filename,
-			lnum = tonumber(line) or 0,
-			col = tonumber(col) or 1,
-			text = unxml(msg),
+			filename = obj and object_filename(obj, filename) or filename,
+			lnum = tonumber(line) or inferred_line or 0,
+			col = tonumber(col) or inferred_col or 1,
+			text = msg,
 			type = up,
+			module = obj and object_label(obj) or "SAP",
 		}
 	end
 
@@ -635,26 +880,326 @@ function M._parse_activation_response(body, filename)
 		local href = xml_attr(attrs, "href")
 		local line = xml_attr(attrs, "line")
 		local typ = xml_attr(attrs, "type") or "E"
-		local obj = xml_attr(attrs, "objDescr")
-		local text = (obj and obj ~= "" and (unxml(obj) .. " - ") or "") .. unxml(msg or "Activation message")
+		local obj_descr = xml_attr(attrs, "objDescr")
+		local text = (obj_descr and obj_descr ~= "" and (unxml(obj_descr) .. " - ") or "") .. unxml(msg or "Activation message")
+		local target = object_for_uri(href, objects)
+		if target then
+			text = object_label(target) .. ": " .. text
+		end
+		local inferred_line, inferred_col = infer_source_position(target, text)
 		qf[#qf + 1] = {
-			filename = filename,
-			lnum = tonumber(line) or tonumber((href or ""):match("start=(%d+),")) or 0,
-			col = tonumber((href or ""):match("start=%d+,(%d+)")) or 1,
+			filename = target and object_filename(target, filename) or filename,
+			lnum = tonumber(line) or tonumber((href or ""):match("start=(%d+),")) or inferred_line or 0,
+			col = tonumber((href or ""):match("start=%d+,(%d+)")) or inferred_col or 1,
 			text = text,
 			type = typ:upper():sub(1, 1) == "W" and "W" or "E",
+			module = target and object_label(target) or "SAP",
 		}
 	end
 
-	local ordered, seen = {}, {}
-	for _, e in ipairs(qf) do
-		local key = (e.type or "") .. "|" .. (e.lnum or 0) .. "|" .. (e.text or "")
-		if not seen[key] then
-			seen[key] = true
-			ordered[#ordered + 1] = e
+	return add_ordered_qf(qf)
+end
+
+function M._dependency_names_from_lines(lines)
+	local found, ordered = {}, {}
+	local function add(name)
+		name = name and name:upper()
+		if not name or name == "" or found[name] then
+			return
+		end
+		if name:match("^[ZY][%w_/%-]*$") or name:match("^/[^/]+/[%w_/%-]+$") then
+			found[name] = true
+			ordered[#ordered + 1] = name
 		end
 	end
-	return ordered
+
+	for _, raw in ipairs(lines or {}) do
+		local line = tostring(raw or ""):gsub("\r", "")
+		if line:match("^%s*[%*]") then
+			goto continue
+		end
+		line = line:gsub('".*$', "")
+		for _, pat in ipairs({
+			"^%s*include%s+([%w_/]+)",
+			"[%s%(]include%s+([%w_/]+)",
+			"%f[%a]from%s+([%w_/]+)",
+			"%f[%a]join%s+([%w_/]+)",
+			"%f[%a]association%s+[^%n]-to%s+([%w_/]+)",
+			"%f[%a]composition%s+[^%n]-of%s+([%w_/]+)",
+			"%f[%a]redirected%s+to%s+([%w_/]+)",
+			"%f[%a]type%s+ref%s+to%s+([%w_/]+)",
+			"%f[%a]type%s+standard%s+table%s+of%s+([%w_/]+)",
+			"%f[%a]type%s+sorted%s+table%s+of%s+([%w_/]+)",
+			"%f[%a]type%s+hashed%s+table%s+of%s+([%w_/]+)",
+			"%f[%a]type%s+table%s+of%s+([%w_/]+)",
+			"%f[%a]type%s+([%w_/]+)",
+			"%f[%a]like%s+([%w_/]+)",
+		}) do
+			for name in line:lower():gmatch(pat) do
+				name = name:gsub("%-.*$", "")
+				add(name)
+			end
+		end
+		::continue::
+	end
+	return ordered, found
+end
+
+local function activation_sources(objects)
+	local by_key, by_name = {}, {}
+	local function attach(obj, lines, filename)
+		if not obj or not lines or #lines == 0 then
+			return
+		end
+		obj.source_lines = obj.source_lines or lines
+		obj.filename = obj.filename or filename
+		by_key[object_key(obj)] = lines
+		by_name[(obj.name or ""):upper()] = lines
+	end
+
+	for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+		if vim.api.nvim_buf_is_valid(bufnr) then
+			local meta = vim.b[bufnr].sap_obj
+			if meta and meta.name then
+				for _, obj in ipairs(objects or {}) do
+					local same_name = (obj.name or ""):upper() == (meta.name or ""):upper()
+					local same_group = not object_group(obj) or not meta.group or object_group(obj) == meta.group
+					local same_uri = normalize_uri(obj.uri) and normalize_uri(obj.uri) == normalize_uri(meta.uri)
+					if same_uri or (same_name and same_group) then
+						attach(obj, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), vim.api.nvim_buf_get_name(bufnr))
+					end
+				end
+			end
+		end
+	end
+
+	local ok_source, source = pcall(require, "sap-nvim.core.source")
+	local ok_objtype, objtype = pcall(require, "sap-nvim.core.objtype")
+	if ok_source and ok_objtype then
+		local dir = source.cache_dir()
+		for _, obj in ipairs(objects or {}) do
+			if not obj.source_lines and SOURCE_GROUPS[object_group(obj)] and obj.name and obj.name ~= "" then
+				local path = dir .. "/" .. objtype.gitfile(object_group(obj), obj.name)
+				if vim.fn.filereadable(path) == 1 then
+					attach(obj, vim.fn.readfile(path), path)
+				end
+			end
+		end
+	end
+
+	return by_key, by_name
+end
+
+function M._sort_activation_objects(objects)
+	objects = vim.deepcopy(objects or {})
+	if #objects <= 1 then
+		return objects
+	end
+	activation_sources(objects)
+
+	local key_to_obj, name_to_keys, index = {}, {}, {}
+	for i, obj in ipairs(objects) do
+		local key = object_key(obj)
+		key_to_obj[key] = obj
+		index[key] = i
+		local name = (obj.name or ""):upper()
+		if name ~= "" then
+			name_to_keys[name] = name_to_keys[name] or {}
+			name_to_keys[name][#name_to_keys[name] + 1] = key
+		end
+	end
+
+	local edges, indegree = {}, {}
+	for key in pairs(key_to_obj) do
+		edges[key] = {}
+		indegree[key] = 0
+	end
+	for _, obj in ipairs(objects) do
+		local dependent = object_key(obj)
+		local dep_names = M._dependency_names_from_lines(obj.source_lines or {})
+		for _, dep_name in ipairs(dep_names) do
+			for _, dependency in ipairs(name_to_keys[dep_name] or {}) do
+				if dependency ~= dependent and not edges[dependency][dependent] then
+					edges[dependency][dependent] = true
+					indegree[dependent] = indegree[dependent] + 1
+				end
+			end
+		end
+	end
+
+	local function rank(key)
+		local obj = key_to_obj[key]
+		return DEPENDENCY_RANK[object_group(obj) or ""] or 100
+	end
+
+	local ready, out, emitted = {}, {}, {}
+	for key, degree in pairs(indegree) do
+		if degree == 0 then
+			ready[#ready + 1] = key
+		end
+	end
+
+	while #ready > 0 do
+		table.sort(ready, function(a, b)
+			local ra, rb = rank(a), rank(b)
+			if ra ~= rb then
+				return ra < rb
+			end
+			return (index[a] or 0) < (index[b] or 0)
+		end)
+		local key = table.remove(ready, 1)
+		if not emitted[key] then
+			emitted[key] = true
+			out[#out + 1] = key_to_obj[key]
+			for dep in pairs(edges[key]) do
+				indegree[dep] = indegree[dep] - 1
+				if indegree[dep] == 0 then
+					ready[#ready + 1] = dep
+				end
+			end
+		end
+	end
+
+	if #out < #objects then
+		local rest = {}
+		for key in pairs(key_to_obj) do
+			if not emitted[key] then
+				rest[#rest + 1] = key
+			end
+		end
+		table.sort(rest, function(a, b)
+			local ra, rb = rank(a), rank(b)
+			if ra ~= rb then
+				return ra < rb
+			end
+			return (index[a] or 0) < (index[b] or 0)
+		end)
+		for _, key in ipairs(rest) do
+			out[#out + 1] = key_to_obj[key]
+		end
+	end
+
+	return out
+end
+
+function M._parse_checkrun_response(body, objects, opts)
+	opts = opts or {}
+	local qf = {}
+	if not body or body == "" then
+		return qf
+	end
+
+	local function add(attrs, inner)
+		attrs = attrs or ""
+		local uri = xml_attr(attrs, "uri") or xml_attr(attrs, "href")
+		local typ = xml_attr(attrs, "type") or xml_attr(attrs, "severity") or "E"
+		local text = xml_attr(attrs, "shortText")
+			or xml_attr(attrs, "message")
+			or (inner and (
+				inner:match("<[%w_:]*shortText[^>]*>(.-)</[%w_:]*shortText>")
+				or inner:match("<[%w_:]*message[^>]*>(.-)</[%w_:]*message>")
+			))
+			or "SAP check message"
+		local line, col = (uri or ""):match("start=(%d+),(%d+)")
+		local obj = object_for_uri(uri, objects)
+		local up = typ:upper():sub(1, 1)
+		if up ~= "W" and up ~= "I" then
+			up = "E"
+		end
+		text = unxml(text):gsub("<[^>]+>", " "):gsub("%s+", " ")
+		text = vim.trim(text)
+		local inferred_line, inferred_col = infer_source_position(obj, text)
+		qf[#qf + 1] = {
+			filename = obj and object_filename(obj, opts.filename) or (opts.filename or vim.api.nvim_buf_get_name(0)),
+			lnum = tonumber(line) or tonumber(xml_attr(attrs, "line")) or inferred_line or 0,
+			col = tonumber(col) or tonumber(xml_attr(attrs, "column")) or inferred_col or 1,
+			text = (obj and (object_label(obj) .. ": ") or "") .. text,
+			type = up,
+			module = obj and object_label(obj) or "SAP",
+		}
+	end
+
+	for attrs in body:gmatch("<[%w_:]*checkMessage%s+([^>]*)/?>") do
+		add(attrs)
+	end
+	for attrs, inner in body:gmatch("<[%w_:]*checkMessage%s+([^>]-)>(.-)</[%w_:]*checkMessage>") do
+		add(attrs, inner)
+	end
+
+	return add_ordered_qf(qf)
+end
+
+local function run_activation_check(objects, opts)
+	opts = opts or {}
+	local adt_http = require("sap-nvim.core.adt_http")
+	local blocked = activation_block_message(adt_http)
+	if blocked then
+		return {
+			{
+				filename = opts.filename or vim.api.nvim_buf_get_name(0),
+				lnum = 0,
+				col = 1,
+				text = blocked,
+				type = "E",
+				module = "SAP",
+			},
+		}, nil, 0
+	end
+	activation_sources(objects)
+
+	local root_program_uri = normalize_uri(opts.root_program_uri)
+	if not root_program_uri then
+		for _, obj in ipairs(objects or {}) do
+			if object_group(obj) == "program" then
+				root_program_uri = normalize_uri(obj.uri)
+				break
+			end
+		end
+	end
+
+	local xml_parts = {
+		'<?xml version="1.0" encoding="UTF-8"?><chkrun:checkObjectList xmlns:chkrun="http://www.sap.com/adt/checkrun" xmlns:adtcore="http://www.sap.com/adt/core">',
+	}
+	for _, obj in ipairs(objects or {}) do
+		local obj_uri = normalize_uri(obj.uri)
+		if obj_uri then
+			local check_uri = obj_uri
+			if object_group(obj) == "include" and root_program_uri then
+				check_uri = check_uri .. "?context=" .. root_program_uri
+			end
+			xml_parts[#xml_parts + 1] = '<chkrun:checkObject adtcore:uri="' .. xmlesc(check_uri) .. '" chkrun:version="inactive">'
+			local source_uri = source_uri_for_object(obj)
+			if source_uri and obj.source_lines then
+				xml_parts[#xml_parts + 1] = '<chkrun:artifacts><chkrun:artifact chkrun:contentType="text/plain; charset=utf-8" chkrun:uri="'
+					.. xmlesc(source_uri)
+					.. '"><chkrun:content>'
+					.. b64(table.concat(obj.source_lines, "\n"))
+					.. "</chkrun:content></chkrun:artifact></chkrun:artifacts>"
+			end
+			xml_parts[#xml_parts + 1] = "</chkrun:checkObject>"
+		end
+	end
+	xml_parts[#xml_parts + 1] = "</chkrun:checkObjectList>"
+
+	local body, _, code = adt_http.raw({
+		method = "POST",
+		path = "/sap/bc/adt/checkruns",
+		query = { reporters = "abapCheckRun" },
+		content_type = "application/vnd.sap.adt.checkobjects+xml",
+		body = table.concat(xml_parts, ""),
+	})
+	local qf = M._parse_checkrun_response(body, objects, { filename = opts.filename })
+	if code == 401 or (adt_http.is_auth_error and adt_http.is_auth_error(body)) then
+		qf[#qf + 1] = {
+			filename = opts.filename or vim.api.nvim_buf_get_name(0),
+			lnum = 0,
+			col = 1,
+			text = "Pre-check ADT rechazado por SAP (401/login). Conexión pausada; usa :SapRelogin.",
+			type = "E",
+			module = "SAP",
+		}
+	end
+	return add_ordered_qf(qf), body, code
 end
 
 local function parse_inactive_objects_xml(resp)
@@ -676,6 +1221,7 @@ local function parse_inactive_objects_xml(resp)
 					name = unxml(name),
 					uri = unxml(uri),
 					type = typ and unxml(typ) or "",
+					group = M.group_from_adt_type(typ),
 					parent_uri = unxml(xml_attr(ref_attrs, "parentUri") or ""),
 					user = unxml(xml_attr(obj_attrs, "user") or ""),
 					deleted = (xml_attr(obj_attrs, "deleted") == "true"),
@@ -690,7 +1236,12 @@ local function parse_inactive_objects_xml(resp)
 			local name = xml_attr(attrs, "name")
 			local typ = xml_attr(attrs, "type")
 			if uri and name and name:lower() ~= "inactive" then
-				objects[#objects + 1] = { name = unxml(name), uri = unxml(uri), type = typ and unxml(typ) or "" }
+				objects[#objects + 1] = {
+					name = unxml(name),
+					uri = unxml(uri),
+					type = typ and unxml(typ) or "",
+					group = M.group_from_adt_type(typ),
+				}
 			end
 		end
 	end
@@ -708,8 +1259,9 @@ end
 -- 1. Obtener objetos inactivos directamente desde la API nativa de SAP
 function M.fetch_inactive_objects(callback)
 	local adt_http = require("sap-nvim.core.adt_http")
-	if not adt_http.is_available() then
-		return callback(nil, "ADT no disponible")
+	local blocked = activation_block_message(adt_http)
+	if blocked then
+		return callback(nil, blocked)
 	end
 
 	local resp = adt_http.raw({
@@ -746,10 +1298,70 @@ function M.activate_bulk(selected_objects, callback, opts)
 		vim.notify("[sap-nvim] Nada que activar.", vim.log.levels.INFO)
 		return
 	end
+	opts = opts or {}
+	local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+	local blocked = activation_block_message(ok_http and adt_http or nil)
+	if blocked then
+		local qf = {
+			{
+				filename = vim.api.nvim_buf_get_name(0),
+				lnum = 0,
+				col = 1,
+				text = blocked,
+				type = "E",
+				module = "SAP",
+			},
+		}
+		vim.fn.setqflist({}, "r", { items = qf, title = "SAP activation: bloqueada" })
+		pcall(vim.cmd, "copen")
+		notify(blocked, vim.log.levels.ERROR)
+		if callback then
+			callback(nil, qf)
+		end
+		return
+	end
 
 	local function run_activation()
-		local adt_http = require("sap-nvim.core.adt_http")
-		vim.notify(string.format("[sap-nvim] Activando %d objeto(s)...", #selected_objects), vim.log.levels.INFO)
+		local ordered_objects = M._sort_activation_objects(selected_objects)
+		local scope_label, scope_target = activation_scope_label(ordered_objects, opts)
+
+		if opts.precheck ~= false then
+			vim.notify(
+				string.format("[sap-nvim] Pre-check SAP: %s (%s)...", scope_label, scope_target),
+				vim.log.levels.INFO
+			)
+			local qf, _, check_code = run_activation_check(ordered_objects, {
+				filename = vim.api.nvim_buf_get_name(0),
+				root_program_uri = opts.root_program_uri,
+			})
+			if (not check_code or check_code < 200 or check_code >= 300) and #qf == 0 then
+				qf[#qf + 1] = {
+					filename = vim.api.nvim_buf_get_name(0),
+					lnum = 0,
+					col = 1,
+					text = "Pre-check ADT falló (HTTP " .. tostring(check_code) .. ").",
+					type = "E",
+				}
+			end
+			local check_errors = vim.tbl_filter(function(e)
+				return e.type == "E"
+			end, qf)
+			if #qf > 0 then
+				vim.fn.setqflist({}, "r", { items = qf, title = "SAP pre-check" })
+				if #check_errors > 0 then
+					pcall(vim.cmd, "copen")
+					pcall(vim.cmd, "cfirst")
+					notify(#check_errors .. " error(es) en pre-check. Activación cancelada.", vim.log.levels.ERROR)
+					if callback then
+						callback(nil, qf)
+					end
+					return
+				end
+				notify("Pre-check con " .. #qf .. " warning(s); continuando activación.", vim.log.levels.WARN)
+			end
+		end
+
+		vim.notify(string.format("[sap-nvim] Activando %s (%s)...", scope_label, scope_target), vim.log.levels.INFO)
 
 		local function payload_for(objects)
 			local xml_parts = {
@@ -783,7 +1395,8 @@ function M.activate_bulk(selected_objects, callback, opts)
 			return resp, headers, code
 		end
 
-		local resp, headers, code = send(selected_objects, true)
+		local resp, headers, code = send(ordered_objects, true)
+		code = tonumber(code) or 0
 		if
 			code >= 200
 			and code < 300
@@ -797,11 +1410,24 @@ function M.activate_bulk(selected_objects, callback, opts)
 				return not obj.deleted
 			end, parse_inactive_objects_xml(resp))
 			if #preaudit_objects > 0 then
+				preaudit_objects = M._sort_activation_objects(preaudit_objects)
 				resp, headers, code = send(preaudit_objects, false)
+				code = tonumber(code) or 0
+				ordered_objects = preaudit_objects
 			end
 		end
 
-		local qf = M._parse_activation_response(resp, vim.api.nvim_buf_get_name(0))
+		local qf = M._parse_activation_response(resp, vim.api.nvim_buf_get_name(0), ordered_objects)
+		if code == 401 or (adt_http.is_auth_error and adt_http.is_auth_error(resp)) then
+			qf[#qf + 1] = {
+				filename = vim.api.nvim_buf_get_name(0),
+				lnum = 0,
+				col = 1,
+				text = "Activación ADT rechazada por SAP (401/login). Conexión pausada; usa :SapRelogin.",
+				type = "E",
+				module = "SAP",
+			}
+		end
 		if code < 200 or code >= 300 then
 			qf[#qf + 1] = {
 				filename = vim.api.nvim_buf_get_name(0),
@@ -834,7 +1460,8 @@ function M.activate_bulk(selected_objects, callback, opts)
 		end
 
 		if #qf > 0 then
-			vim.fn.setqflist({}, "r", { items = qf, title = "SAP activation" })
+			qf = add_ordered_qf(qf)
+			vim.fn.setqflist({}, "r", { items = qf, title = "SAP activation: " .. scope_label })
 			if #errors > 0 then
 				pcall(vim.cmd, "copen")
 				pcall(vim.cmd, "cfirst")
@@ -898,7 +1525,11 @@ function M.related_object_names(bufnr)
 		add_related_name(meta.name, seen, ordered)
 	end
 
-	include_names_from_lines(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), seen, ordered)
+	local current_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+	include_names_from_lines(current_lines, seen, ordered)
+	for _, name in ipairs(M._dependency_names_from_lines(current_lines)) do
+		add_related_name(name, seen, ordered)
+	end
 
 	local ok_source, source = pcall(require, "sap-nvim.core.source")
 	local ok_objtype, objtype = pcall(require, "sap-nvim.core.objtype")
@@ -929,7 +1560,11 @@ function M.related_object_names(bufnr)
 			for _, group in ipairs({ "program", "include" }) do
 				local p = dir .. "/" .. objtype.gitfile(group, name)
 				if vim.fn.filereadable(p) == 1 then
-					include_names_from_lines(vim.fn.readfile(p), seen, ordered)
+					local lines = vim.fn.readfile(p)
+					include_names_from_lines(lines, seen, ordered)
+					for _, dep in ipairs(M._dependency_names_from_lines(lines)) do
+						add_related_name(dep, seen, ordered)
+					end
 				end
 			end
 			i = i + 1
@@ -978,6 +1613,13 @@ function M.activate_related_current(bufnr, opts)
 			})
 		end
 	end
+	local root_program_uri = nil
+	if meta and meta.group == "program" then
+		root_program_uri = current_uri:gsub("/source/main$", "")
+	elseif meta and meta.group == "include" and ok_intel and intel.main_programs then
+		local main = (intel.main_programs(meta.name) or {})[1]
+		root_program_uri = main and main:gsub("/source/main$", "") or nil
+	end
 
 	M.fetch_inactive_objects(function(objects, err)
 		vim.schedule(function()
@@ -992,6 +1634,12 @@ function M.activate_related_current(bufnr, opts)
 				end
 			end
 			notify("Activando raíz + relacionados: " .. table.concat(ordered, ", "))
+			opts = opts or {}
+			opts.root_program_uri = opts.root_program_uri or root_program_uri
+			opts.root_name = opts.root_name
+				or (root_program_uri and program_name_from_uri(root_program_uri))
+				or (ordered[1] or (meta and meta.name))
+			opts.scope = opts.scope or "tree"
 			M.activate_bulk(selected, nil, opts)
 		end)
 	end)
@@ -1029,7 +1677,7 @@ function M.activate_current()
 		type = M.adt_type(group),
 	}
 
-	M.activate_bulk({ current_obj })
+	M.activate_bulk({ current_obj }, nil, { scope = "single" })
 end
 
 -- 4. EL GESTOR: Muestra el menú para elegir qué activar de todo el Workspace
@@ -1055,10 +1703,10 @@ function M.activate_ui()
 			end
 
 			if idx == 1 then
-				M.activate_bulk(objects)
+				M.activate_bulk(objects, nil, { scope = "all" })
 			else
 				local selected_obj = objects[idx - 1]
-				M.activate_bulk({ selected_obj })
+				M.activate_bulk({ selected_obj }, nil, { scope = "single" })
 			end
 		end)
 	end)

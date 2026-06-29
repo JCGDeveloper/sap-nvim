@@ -15,6 +15,11 @@ Fecha: 2026-06-26
   - `productive.safe_mode = true`;
   - `productive.confirm_destructive = true`;
   - borrar objetos, liberar transportes, borrar transportes y reasignar transportes exige escribir el nombre/ID exacto.
+- Endurecimiento final de perfiles:
+  - `profile = "dev" | "qa" | "prod"`;
+  - `prod` arranca en `read_only=true`, exige TLS verificado y bloquea create/write/release/delete/set-variable salvo opt-in explícito;
+  - `sapcli` y ADT directo comparten gates centrales para acciones sensibles;
+  - cada intento sensible permitido o bloqueado se registra en el audit log local JSONL.
 - Edición principal migrada a ADT directo:
   - `source.open` lee por `GET <obj>/source/main`;
   - `source.push` guarda por `LOCK -> PUT source/main -> UNLOCK`;
@@ -49,14 +54,16 @@ Prioridad media:
 Mantener por ahora en `sapcli`:
 
 - `sapcli config ...`: sigue siendo la fuente de configuración actual (`~/.sapcli/config.yml`), aunque la contraseña debe tratarse como riesgo.
-- `sapcli cts ...`: útil para crear/listar/liberar transportes. En productivo hay que mantener filtros de owner y confirmación explícita.
+- `sapcli cts release/reassign/contents`: útil hasta validar endpoints ADT y payloads en más releases SAP.
+  `:SapTransports`, `:SapTransportCreate` y `:SapTransportDelete` ya delegan en `core.cts`
+  por ADT directo, con usuario real de la sesión y confirmación fuerte para delete.
 - `sapcli aunit run` y `sapcli atc run`: útiles como runners de alto nivel. Migrar solo si ADT da una ventaja real en navegación de resultados.
 - `sapcli datapreview osql`: útil para tablas/queries. Para CDS preview ya hay ADT.
 - `sapcli gcts`: mantener, es integración específica.
 
 ## Riesgos productivos detectados
 
-- Contraseña en `~/.sapcli/config.yml`: mitigar con `chmod 600`, `:SapDoctor`, keyring/memoria y evitar depender de password en texto plano.
+- Contraseñas: `:SapSetup` ya no escribe password en `~/.sapcli/config.yml`; usa keyring/DPAPI tras validar. Si existe un config antiguo con `password:`, conviene limpiarlo. El plugin lo ignora salvo `security.allow_plaintext_password=true`.
 - Operaciones destructivas: `delete` y release/reassign/delete de transportes ya requieren confirmación fuerte por nombre/ID exacto. Siguiente mejora: quitar atajos destructivos o dejarlos detrás de `safe_mode`.
 - `sapcli` puede ocultar detalles reales en excepciones genéricas. Ejemplo resuelto: CDS fallaba con `ExceptionResourceCreationFailure`, pero el body real decía que el idioma `EN` no coincidía con `ES`.
 - Parsear stdout humano es frágil para quickfix/productivo. ADT XML/JSON estructurado es preferible.
@@ -64,12 +71,25 @@ Mantener por ahora en `sapcli`:
 
 ## Validaciones necesarias antes de productivo
 
-- `:SapDoctor` debe comprobar:
+- `:SapDoctor` comprueba:
+  - perfil activo (`dev`, `qa`, `prod`) y contexto visible `SID/mandante/usuario`;
   - conexión validada sin exponer password;
   - permisos `0600` de `~/.sapcli/config.yml`;
+  - ausencia de `password:` legacy en `~/.sapcli/config.yml`;
+  - `password:` legacy deshabilitado por defecto;
+  - `safe_mode`, confirmaciones destructivas y borrados remotos bloqueados por defecto;
+  - TLS verificado; con `productive.require_tls=true` se marca como requisito de productivo;
+  - create/write/release/delete/set-variable bloqueados por defecto en `prod`;
+  - auditoría local de acciones sensibles activa;
+  - permisos/errores típicos `401`/`403`/`S_ADT`/`S_CTS`.
+- `:SapLiveCheck` ejecuta pruebas vivas no destructivas:
   - endpoints ADT necesarios por discovery;
+  - búsqueda ADT por Information System;
+  - daemon ADT keep-alive;
   - activación inactiveobjects;
-  - creación/lectura/check de objeto temporal en `$TMP` solo si el usuario acepta prueba de escritura.
+  - lecturas `sapcli` vía wrapper validado.
+- Creación/lectura/check de objeto temporal en `$TMP` debe hacerse solo si el usuario acepta una
+  prueba de escritura explícita.
 - Modo productivo:
   - bloquear `delete` por defecto o exigir escribir el nombre exacto; ahora exige nombre exacto;
   - release/reassign/delete transport con owner filter y confirmación explícita; ahora exige ID exacto;
@@ -84,13 +104,11 @@ Mantener por ahora en `sapcli`:
 
 ## Próximo bloque de trabajo
 
-1. Añadir modo productivo en configuración, por ejemplo:
-   `require("sap-nvim").setup({ productive = { safe_mode = true } })`.
-2. Auditar cada llamada `sapcli` y clasificarla como:
+1. Auditar cada llamada `sapcli` restante y clasificarla como:
    `mantener`, `migrar a ADT`, `fallback`, `bloquear en productivo`.
-3. Validar escritura ADT también con un programa `$TMP` de pruebas antes de tocar reports reales.
-4. Añadir validaciones de seguridad en `:SapDoctor`.
-5. Endurecer debugger y preview de variables para que cada step refresque estado.
+2. Validar escritura ADT también con un programa `$TMP` de pruebas antes de tocar reports reales.
+3. Promover tests headless permanentes para debugger/cockpit y gate anti-401.
+4. Completar migraciones ADT donde el output textual de `sapcli` sea frágil.
 
 ## Pruebas realizadas
 

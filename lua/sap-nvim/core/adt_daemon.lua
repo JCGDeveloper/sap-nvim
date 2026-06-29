@@ -117,10 +117,6 @@ function M.ensure()
 	-- peticiones/respuestas no se entregan al instante -> el daemon "se queda pillado".
 	state.job = vim.fn.jobstart({ "python3", "-u", script_path() }, {
 		env = {
-			ADT_BASE = c.base,
-			ADT_CLIENT = c.client or "",
-			ADT_USER = c.user,
-			ADT_PASS = c.pass,
 			ADT_TLS_VERIFY = sec.verify_tls == false and "0" or "1",
 			ADT_CA_FILE = sec.ca_file and vim.fn.expand(sec.ca_file) or "",
 		},
@@ -133,6 +129,16 @@ function M.ensure()
 	if state.job <= 0 then
 		state.job = nil
 		return nil
+	end
+	local ok_auth, auth = pcall(vim.json.encode, {
+		type = "auth",
+		base = c.base,
+		client = c.client or "",
+		user = c.user,
+		password = c.pass,
+	})
+	if ok_auth then
+		vim.fn.chansend(state.job, auth .. "\n")
 	end
 	return state.job
 end

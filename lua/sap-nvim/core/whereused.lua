@@ -7,6 +7,7 @@
 
 local M = {}
 local adt = require("sap-nvim.core.adt")
+local sapcli = require("sap-nvim.core.sapcli")
 
 local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
@@ -22,6 +23,12 @@ local CMDS = {
   prog = function(name) return { "sapcli", "program",   "whereused", name } end,
   cls  = function(name) return { "sapcli", "class",     "whereused", name } end,
   intf = function(name) return { "sapcli", "interface", "whereused", name } end,
+}
+
+local GROUP_TO_EXT = {
+  program = "abap",
+  class = "cls",
+  interface = "intf",
 }
 
 local EXTENSIONS = { "abap", "cls", "intf", "func", "fugr", "tabl", "ddls", "bdef", "stru", "dtel" }
@@ -154,7 +161,7 @@ local function do_whereused_sapcli(obj_name, cmd)
   notify("Buscando referencias a " .. obj_name .. " (sapcli)...")
   local lines, stderr = {}, {}
 
-  vim.fn.jobstart(cmd, {
+  sapcli.jobstart(cmd, {
     on_stdout = function(_, data)
       for _, l in ipairs(data) do
         if l ~= "" then table.insert(lines, l) end
@@ -247,6 +254,30 @@ local function adt_whereused(obj_name, obj_uri, ext)
   try(1)
 end
 
+local function resolve_and_whereused_adt(obj_name)
+  notify("Resolviendo " .. obj_name .. " por ADT...")
+  adt.find_objects_async(obj_name, function(results, err)
+    vim.schedule(function()
+      if not results or #results == 0 then
+        notify("No se pudo resolver por ADT: " .. tostring(err or "sin resultados") .. ". Usando fallback sapcli...", vim.log.levels.WARN)
+        do_whereused_sapcli(obj_name, CMDS["abap"](obj_name))
+        return
+      end
+      local exact
+      for _, r in ipairs(results) do
+        if (r.name or ""):upper() == obj_name then
+          exact = r
+          break
+        end
+      end
+      local picked = exact or results[1]
+      local group = adt.group_from_adt_type(picked.type)
+      local ext = GROUP_TO_EXT[group] or "abap"
+      adt_whereused((picked.name or obj_name):upper(), picked.uri, ext)
+    end)
+  end)
+end
+
 function M.whereused()
   if not adt.is_configured() then
     notify("No hay conexion SAP. Usá :SapSetup primero.", vim.log.levels.WARN)
@@ -275,7 +306,7 @@ function M.whereused()
     end
   end
 
-  -- Sin objeto resoluble en el buffer: pedimos el nombre y vamos por sapcli (programa).
+  -- Sin objeto resoluble en el buffer: pedimos el nombre e intentamos ADT por búsqueda global.
   if obj_name == "" or (adt_ok and not obj_uri) then
     vim.ui.input({
       prompt = "Objeto ABAP para where-used: ",
@@ -283,7 +314,11 @@ function M.whereused()
     }, function(name)
       if not name or name == "" then return end
       name = name:upper()
-      do_whereused_sapcli(name, CMDS["abap"](name))
+      if adt_ok then
+        resolve_and_whereused_adt(name)
+      else
+        do_whereused_sapcli(name, CMDS["abap"](name))
+      end
     end)
     return
   end

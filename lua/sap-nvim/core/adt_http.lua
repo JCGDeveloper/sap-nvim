@@ -30,13 +30,18 @@ local state = {
 }
 
 -- Resuelve la contraseña de `ctx`: 1º la de ESTA sesión (memoria), 2º la del keyring
--- (recordada estilo VSCode), 3º la de config.yml (texto plano, último recurso).
+-- (recordada estilo VSCode). El fallback legacy `password:` en config.yml queda desactivado
+-- por defecto para productivo; solo se usa con security.allow_plaintext_password=true.
 local function resolve_pass(ctx, cfg_pass)
   local p = state.passwords[ctx]
   if p and p ~= "" then return p end
   p = secret.get(ctx)
   if p and p ~= "" then return p end
-  return cfg_pass
+  local sec = config.security()
+  if sec.allow_plaintext_password == true then
+    return cfg_pass
+  end
+  return nil
 end
 
 -- ── Parseo del config.yml de sapcli (YAML simple, sin librería) ──────────────
@@ -79,6 +84,7 @@ local function parse_connection(txt, ctx)
   local client = field_in_block(txt, conn, "client")
   local ssl = field_in_block(txt, conn, "ssl")
   local desc = field_in_block(txt, conn, "description")
+  local sysid = field_in_block(txt, conn, "sysid") or field_in_block(txt, conn, "sid")
   local pass = field_in_block(txt, user_key, "password")
   host = host:gsub("^https?://", "")
   local scheme = (ssl == "false") and "http" or "https"
@@ -87,6 +93,7 @@ local function parse_connection(txt, ctx)
     context = ctx,
     connection = conn,
     description = desc or ctx,
+    sysid = ((sysid or conn or ctx):upper():match("[A-Z0-9]+") or ctx):sub(1, 3),
     host = host,
     client = client or "",
     user = user,
@@ -115,6 +122,26 @@ end
 
 local function active_context(txt)
   return state.active_ctx or txt:match("current%-context:%s*([%w_%-]+)")
+end
+
+function M.context_info()
+  local c = state.creds
+  if not c then
+    local txt = read_config()
+    local ctx = txt and active_context(txt)
+    c = ctx and parse_connection(txt, ctx) or nil
+  end
+  if not c then return nil end
+  return {
+    context = c.context,
+    connection = c.connection,
+    description = c.description,
+    sysid = c.sysid or ((c.connection or c.context or "???"):upper():sub(1, 3)),
+    client = c.client or "",
+    user = c.user or "",
+    base = c.base,
+    host = c.host,
+  }
 end
 
 -- Lista de conexiones disponibles (para el selector de login).
@@ -266,19 +293,11 @@ function M.on_auth_failure()
   end)
 end
 
--- Exporta las credenciales al ENTORNO del proceso nvim para que `sapcli` (lanzado como hijo)
--- las herede por SAP_USER/SAP_PASSWORD (env tiene prioridad sobre config.yml en sapcli). Así
--- la MISMA contraseña alimenta curl (-K -), el daemon (ADT_PASS) y sapcli, sin texto plano en
--- disco y sin desincronización. Si no hay conexión usable, BORRA las vars (no dejar nada viejo).
+-- Limpia credenciales heredadas del entorno global de Neovim. sapcli recibe SAP_USER/
+-- SAP_PASSWORD solo en el proceso hijo mediante core.sapcli, no como estado global persistente.
 function M.export_env()
-  local c = (state.validated and not state.auth_locked) and M.creds() or nil
-  if c then
-    vim.env.SAP_USER = c.user
-    vim.env.SAP_PASSWORD = c.pass
-  else
-    vim.env.SAP_USER = nil
-    vim.env.SAP_PASSWORD = nil
-  end
+  vim.env.SAP_USER = nil
+  vim.env.SAP_PASSWORD = nil
 end
 
 -- ¿La conexión está LISTA para mandar credenciales a SAP? (validada, sin freno y con password)
@@ -287,7 +306,7 @@ function M.ready()
   return state.validated and not state.auth_locked and M.creds() ~= nil
 end
 
--- Marca la conexión como validada (SAP aceptó la auth) y propaga las credenciales al entorno.
+-- Marca la conexión como validada (SAP aceptó la auth). No deja secretos en vim.env.
 function M.mark_validated()
   state.validated = true
   M.export_env()
@@ -337,8 +356,159 @@ local function curl_base_args()
   if sec.ca_file and sec.ca_file ~= "" then
     vim.list_extend(args, { "--cacert", vim.fn.expand(sec.ca_file) })
   end
+  local connect_timeout = tonumber(sec.connect_timeout) or 10
+  if connect_timeout > 0 then
+    vim.list_extend(args, { "--connect-timeout", tostring(connect_timeout) })
+  end
+  local request_timeout = tonumber(sec.request_timeout) or 45
+  if request_timeout > 0 then
+    vim.list_extend(args, { "--max-time", tostring(request_timeout) })
+  end
   return args
 end
+
+local function prod_tls_reason(c)
+  local prod = config.productive()
+  if (config.profile_name and config.profile_name() or "dev") ~= "prod" or prod.require_tls == false then
+    return nil
+  end
+  local sec = config.security()
+  if c and c.base and c.base:match("^http://") then
+    return "Perfil prod requiere HTTPS; la conexión SAP está configurada con ssl=false."
+  end
+  if sec.verify_tls ~= true then
+    return "Perfil prod requiere TLS verificado: configura security.verify_tls=true o productive.require_tls=false."
+  end
+  if sec.ca_file and sec.ca_file ~= "" and vim.fn.filereadable(vim.fn.expand(sec.ca_file)) ~= 1 then
+    return "Perfil prod requiere CA legible: " .. vim.fn.expand(sec.ca_file)
+  end
+  return nil
+end
+
+local function audit(action, detail)
+  if config.audit then
+    pcall(config.audit, action, detail)
+  end
+end
+
+local function audit_context(c)
+  if not c then return {} end
+  return {
+    sysid = c.sysid,
+    client = c.client,
+    user = c.user,
+    context = c.context,
+  }
+end
+
+local function classify_sensitive(opts)
+  opts = opts or {}
+  local method = (opts.method or "GET"):upper()
+  if method == "GET" then return nil end
+  local path = tostring(opts.path or "")
+  local query = opts.query or {}
+  local q_action = tostring(query._action or query.method or ""):lower()
+  if q_action == "unlock" then return nil end
+  if q_action == "lock" then
+    return { kind = "write_object", target = path, allow = "allow_write_objects" }
+  end
+  if q_action == "setvariablevalue" then
+    return { kind = "set_variable", target = tostring(query.variableName or path), allow = "allow_debug_set_variable" }
+  end
+  if method == "DELETE" then
+    if path:find("/cts/", 1, true) or path:find("transport", 1, true) then
+      return { kind = "delete_transport", target = path, allow = "allow_delete_transports" }
+    end
+    return { kind = "delete_object", target = path, allow = "allow_delete_objects" }
+  end
+  if method == "PUT" then
+    if path:find("/source/main", 1, true) or path:find("/textelements/", 1, true) then
+      return { kind = "write_object", target = path, allow = "allow_write_objects" }
+    end
+    if path:find("/debugger", 1, true) then
+      return { kind = "write_debugger", target = path, allow = "allow_debug_set_variable" }
+    end
+    return nil
+  end
+  if method == "POST" then
+    if path == "/sap/bc/adt/packages"
+      or path:find("/sap/bc/adt/programs/programs$", 1, false)
+      or path:find("/sap/bc/adt/oo/classes$", 1, false)
+      or path:find("/sap/bc/adt/oo/interfaces$", 1, false)
+      or path:find("/sap/bc/adt/functions/groups$", 1, false)
+      or path:find("/sap/bc/adt/ddic/tables$", 1, false)
+      or path:find("/sap/bc/adt/ddic/structures$", 1, false)
+      or path:find("/sap/bc/adt/ddic/dataelements$", 1, false)
+      or path:find("/sap/bc/adt/ddic/domains$", 1, false)
+      or path:find("/sap/bc/adt/ddic/tabletypes$", 1, false)
+      or path:find("/sap/bc/adt/ddic/ddl/sources$", 1, false)
+      or path:find("/sap/bc/adt/ddic/ddlx/sources$", 1, false)
+      or path:find("/sap/bc/adt/acm/dcl/sources$", 1, false)
+      or path:find("/sap/bc/adt/bo/behaviordefinitions$", 1, false)
+      or path:find("/sap/bc/adt/ddic/srvd/sources$", 1, false) then
+      return { kind = "create_object", target = path, allow = "allow_create_objects" }
+    end
+    if path == "/sap/bc/adt/cts/transports" then
+      return { kind = "create_transport", target = path, allow = "allow_create_objects" }
+    end
+    if path:find("/sap/bc/adt/activation", 1, true) then
+      return { kind = "write_object", target = path, allow = "allow_write_objects" }
+    end
+    if path:find("/sap/bc/adt/debugger", 1, true) and not q_action:find("get", 1, true) then
+      return { kind = "write_debugger", target = q_action ~= "" and q_action or path, allow = "allow_debug_set_variable" }
+    end
+  end
+  return nil
+end
+
+local function confirm_exact(action)
+  local prod = config.productive()
+  if prod.confirm_destructive == false then
+    return true
+  end
+  local target = tostring(action.target or action.kind or "")
+  if target == "" then return false end
+  return vim.fn.input("sap-nvim PROD: escribe " .. target .. " para confirmar " .. action.kind .. ": ") == target
+end
+
+local function request_allowed(opts, c)
+  if opts and opts._sap_gate_checked then return true end
+  local tls_reason = prod_tls_reason(c)
+  if tls_reason then
+    audit("blocked", vim.tbl_extend("force", audit_context(c), { reason = "tls", action_kind = "adt_http", path = tostring(opts and opts.path or "") }))
+    return false, tls_reason
+  end
+  local action = classify_sensitive(opts)
+  if not action then return true end
+  local base = vim.tbl_extend("force", audit_context(c), {
+    action_kind = action.kind,
+    target = action.target,
+    method = opts.method or "GET",
+    path = opts.path or "",
+  })
+  if (config.profile_name and config.profile_name() or "dev") ~= "prod" then
+    audit("allowed", base)
+    return true
+  end
+  local prod = config.productive()
+  if prod.read_only == true then
+    audit("blocked", vim.tbl_extend("force", base, { reason = "read_only" }))
+    return false, "Perfil prod en solo lectura: bloqueado " .. action.kind
+  end
+  if prod[action.allow] ~= true then
+    audit("blocked", vim.tbl_extend("force", base, { reason = "opt_in" }))
+    return false, "Perfil prod bloquea " .. action.kind .. ". Habilita productive." .. action.allow .. "=true."
+  end
+  if not confirm_exact(action) then
+    audit("blocked", vim.tbl_extend("force", base, { reason = "confirm" }))
+    return false, "Confirmación cancelada para " .. action.kind
+  end
+  audit("allowed", base)
+  return true
+end
+
+M._classify_sensitive = classify_sensitive
+M._request_allowed = request_allowed
 
 -- Prueba las credenciales actuales con UNA sola petición de discovery. cb(ok, http_code).
 -- Es el guardián anti-bloqueo: validar ANTES de habilitar nada hace que una contraseña errónea
@@ -347,6 +517,15 @@ end
 function M.validate(cb)
   local c = M.creds()
   if not c then
+    cb(false, 0)
+    return
+  end
+  local tls_reason = prod_tls_reason(c)
+  if tls_reason then
+    audit("blocked", vim.tbl_extend("force", audit_context(c), { reason = "tls", action_kind = "validate" }))
+    vim.schedule(function()
+      vim.notify("[sap-nvim] " .. tls_reason, vim.log.levels.ERROR)
+    end)
     cb(false, 0)
     return
   end
@@ -401,6 +580,11 @@ function M.request(opts)
   if not M.ready() then return nil, "Conexión SAP no lista (sin validar / pausada)" end
   local c = M.creds()
   if not c then return nil, "Sin credenciales SAP (config.yml)" end
+  local allowed, why = request_allowed(opts, c)
+  if not allowed then
+    vim.notify("[sap-nvim] " .. tostring(why), vim.log.levels.ERROR)
+    return nil, why
+  end
 
   local url = c.base .. opts.path
   local sep = opts.path:find("?") and "&" or "?"
@@ -459,6 +643,14 @@ local function curl_request_async(opts, cb)
   if not M.ready() then cb(nil); return end
   local c = M.creds()
   if not c then cb(nil); return end
+  local allowed, why = request_allowed(opts, c)
+  if not allowed then
+    vim.schedule(function()
+      vim.notify("[sap-nvim] " .. tostring(why), vim.log.levels.ERROR)
+    end)
+    cb(nil)
+    return
+  end
   local args, bodyfile = build_args(c, opts)
   local out = {}
   local job = vim.fn.jobstart(args, {
@@ -502,6 +694,17 @@ end
 -- activo). Si ni arranca, se marca muerto y se usa curl. Nunca rompe el completado.
 function M.request_async(opts, cb)
   if not M.ready() then cb(nil); return end
+  local c = M.creds()
+  if not c then cb(nil); return end
+  local allowed, why = request_allowed(opts, c)
+  if not allowed then
+    vim.schedule(function()
+      vim.notify("[sap-nvim] " .. tostring(why), vim.log.levels.ERROR)
+    end)
+    cb(nil)
+    return
+  end
+  opts = vim.tbl_extend("force", {}, opts, { _sap_gate_checked = true })
   local d = daemon_mod()
   if not d then curl_request_async(opts, cb); return end
   if pcall(d.ensure) == false then daemon_dead = true; curl_request_async(opts, cb); return end
@@ -534,6 +737,11 @@ function M.raw(opts)
   if not M.ready() then return nil, nil, 0 end
   local c = M.creds()
   if not c then return nil, nil, 0 end
+  local allowed, why = request_allowed(opts, c)
+  if not allowed then
+    vim.notify("[sap-nvim] " .. tostring(why), vim.log.levels.ERROR)
+    return nil, nil, 0
+  end
   local url = c.base .. opts.path
   local sep = opts.path:find("?") and "&" or "?"
   url = url .. sep .. "sap-client=" .. url_encode(c.client)

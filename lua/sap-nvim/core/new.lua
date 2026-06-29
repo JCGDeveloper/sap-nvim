@@ -4,6 +4,7 @@
 -- comportamiento de escribir una plantilla local que nunca llegaba a SAP.
 
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 
 local function notify(msg, level)
 	vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
@@ -18,6 +19,17 @@ end
 
 local function safe_mode()
 	return productive().safe_mode ~= false
+end
+
+local function creation_block_reason()
+	local cfg = productive()
+	if cfg.read_only == true or cfg.readonly == true then
+		return "modo solo lectura activo"
+	end
+	if cfg.allow_create_objects == false then
+		return "productive.allow_create_objects=false"
+	end
+	return nil
 end
 
 local function is_customer_namespace(name)
@@ -64,6 +76,7 @@ end
 -- vive dentro de un grupo de funciones (firma `create GROUP NAME DESC`, sin paquete).
 local TYPES = {
 	{ key = "program", label = "Programa (REPORT)", group = "program" },
+	{ key = "include", label = "Include", group = "include" },
 	{ key = "class", label = "Clase", group = "class" },
 	{ key = "interface", label = "Interface", group = "interface" },
 	{ key = "function_group", label = "Function Group", group = "functiongroup" },
@@ -72,41 +85,194 @@ local TYPES = {
 	{ key = "structure", label = "Estructura", group = "structure" },
 	{ key = "data_element", label = "Data Element", group = "dataelement" },
 	{ key = "domain", label = "Dominio", group = "domain" },
+	{ key = "table_type", label = "Table Type", group = "tabletype" },
 	{ key = "cds_view", label = "CDS View (DDL)", group = "ddl", open_group = "ddls" },
+	{ key = "metadata_extension", label = "Metadata Extension (DDLX)", group = "ddlx" },
+	{ key = "dcl", label = "Access Control (DCL)", group = "dcl" },
+	{ key = "behavior_definition", label = "Behavior Definition (RAP)", group = "bdef" },
+	{ key = "service_definition", label = "Service Definition (RAP)", group = "srvd" },
 	{ key = "transaction", label = "Transacción", group = "transaction" },
+	{ key = "report_variant", label = "Variante de report", group = "program_variant", needs_program = true },
 	{ key = "message_class", label = "Message Class", group = "messageclass" },
 	{ key = "package", label = "Paquete (DEVC)", group = "package" },
 }
 
--- ─── Lanzar la creación en SAP y abrir ──────────────────────────────────────
+local SOURCE_GROUPS = {
+	program = true,
+	include = true,
+	class = true,
+	interface = true,
+	ddl = true,
+	ddls = true,
+	ddlx = true,
+	dcl = true,
+	bdef = true,
+	srvd = true,
+}
 
-local function cds_seed_source(name, desc)
-	return table.concat({
-		"@EndUserText.label: '" .. (desc or name):gsub("'", "''") .. "'",
-		"@AccessControl.authorizationCheck: #NOT_REQUIRED",
-		"define view entity " .. name,
-		"  as select from t000",
-		"{",
-		"  key mandt as Client",
-		"}",
-	}, "\n")
+local ADT_CREATE_PATHS = {
+	program = "/sap/bc/adt/programs/programs",
+	class = "/sap/bc/adt/oo/classes",
+	interface = "/sap/bc/adt/oo/interfaces",
+	function_group = "/sap/bc/adt/functions/groups",
+	table = "/sap/bc/adt/ddic/tables",
+	structure = "/sap/bc/adt/ddic/structures",
+	data_element = "/sap/bc/adt/ddic/dataelements",
+	domain = "/sap/bc/adt/ddic/domains",
+	table_type = "/sap/bc/adt/ddic/tabletypes",
+	cds_view = "/sap/bc/adt/ddic/ddl/sources",
+	metadata_extension = "/sap/bc/adt/ddic/ddlx/sources",
+	dcl = "/sap/bc/adt/acm/dcl/sources",
+	behavior_definition = "/sap/bc/adt/bo/behaviordefinitions",
+	service_definition = "/sap/bc/adt/ddic/srvd/sources",
+	package = "/sap/bc/adt/packages",
+}
+
+local function valid_adt_create_path(path)
+	if type(path) ~= "string" then
+		return false
+	end
+	for _, p in pairs(ADT_CREATE_PATHS) do
+		if path == p then
+			return true
+		end
+	end
+	return false
 end
 
-local function seed_cds_source(name, desc, corrnr, callback)
-	local ok_adt, adt_http = pcall(require, "sap-nvim.core.adt_http")
-	local c = ok_adt and adt_http.creds and adt_http.creds() or nil
-	if c then
-		vim.env.SAP_USER = c.user
-		vim.env.SAP_PASSWORD = c.pass
+local function type_by_key(key)
+	for _, spec in ipairs(TYPES) do
+		if spec.key == key or spec.group == key then
+			return spec
+		end
 	end
+	return nil
+end
 
-	local args = { "sapcli", "ddl", "write", name, "-" }
+-- ─── Lanzar la creación en SAP y abrir ──────────────────────────────────────
+
+local function abap_quote(s)
+	return tostring(s or ""):gsub("'", "''")
+end
+
+local function initial_source(spec, name, desc)
+	local group = spec and (spec.open_group or spec.group) or nil
+	name = (name or ""):upper()
+	desc = desc or name
+	if group == "program" then
+		return table.concat({
+			"REPORT " .. name .. ".",
+			"",
+			"* " .. desc,
+			"",
+			"START-OF-SELECTION.",
+			"  WRITE: / '" .. abap_quote(desc) .. "'.",
+		}, "\n")
+	elseif group == "include" then
+		return table.concat({
+			"*----------------------------------------------------------------------*",
+			"* Include " .. name,
+			"* " .. desc,
+			"*----------------------------------------------------------------------*",
+			"",
+		}, "\n")
+	elseif group == "class" then
+		return table.concat({
+			"CLASS " .. name .. " DEFINITION",
+			"  PUBLIC",
+			"  FINAL",
+			"  CREATE PUBLIC.",
+			"",
+			"  PUBLIC SECTION.",
+			"  PROTECTED SECTION.",
+			"  PRIVATE SECTION.",
+			"ENDCLASS.",
+			"",
+			"CLASS " .. name .. " IMPLEMENTATION.",
+			"ENDCLASS.",
+		}, "\n")
+	elseif group == "interface" then
+		return table.concat({
+			"INTERFACE " .. name .. " PUBLIC.",
+			"ENDINTERFACE.",
+		}, "\n")
+	elseif group == "ddls" or group == "ddl" then
+		return table.concat({
+			"@EndUserText.label: '" .. abap_quote(desc) .. "'",
+			"@AccessControl.authorizationCheck: #NOT_REQUIRED",
+			"define view entity " .. name,
+			"  as select from t000",
+			"{",
+			"  key mandt as Client",
+			"}",
+		}, "\n")
+	elseif group == "ddlx" then
+		return table.concat({
+			"@Metadata.layer: #CUSTOMER",
+			"annotate view " .. name .. " with",
+			"{",
+			"}",
+		}, "\n")
+	elseif group == "dcl" then
+		return table.concat({
+			"@EndUserText.label: '" .. abap_quote(desc) .. "'",
+			"@MappingRole: true",
+			"define role " .. name .. " {",
+			"  grant select on ZI_ENTITY",
+			"    where ( 1 ) = aspect pfcg_auth( Z_AUTH, FIELD, ACTVT = '03' );",
+			"}",
+		}, "\n")
+	elseif group == "bdef" then
+		return table.concat({
+			"managed implementation in class ZBP_" .. name:gsub("^Z[CI]_?", "") .. " unique;",
+			"strict ( 2 );",
+			"",
+			"define behavior for ZI_ENTITY alias Entity",
+			"  persistent table ztable",
+			"  lock master",
+			"{",
+			"  create;",
+			"  update;",
+			"  delete;",
+			"}",
+		}, "\n")
+	elseif group == "srvd" then
+		return table.concat({
+			"@EndUserText.label: '" .. abap_quote(desc) .. "'",
+			"define service " .. name .. " {",
+			"  expose ZI_ENTITY as Entity;",
+			"}",
+		}, "\n")
+	end
+	return nil
+end
+
+local function build_write_args(spec, name, corrnr)
+	local group = spec.open_group == "ddls" and "ddl" or spec.group
+	local args = { "sapcli", group, "write", name, "-" }
 	if corrnr and corrnr ~= "" then
 		vim.list_extend(args, { "--corrnr", corrnr })
 	end
-	local source = cds_seed_source(name, desc)
+	return args
+end
+
+local function seed_source(spec, name, desc, corrnr, callback)
+	if not SOURCE_GROUPS[spec.open_group or spec.group] then
+		if callback then
+			callback(false)
+		end
+		return
+	end
+	local source = initial_source(spec, name, desc)
+	if not source or source == "" then
+		if callback then
+			callback(false)
+		end
+		return
+	end
+	local args = build_write_args(spec, name, corrnr)
 	local out = {}
-	local job = vim.fn.jobstart(args, {
+	local job = sapcli.jobstart(args, {
 		on_stdout = function(_, data)
 			for _, l in ipairs(data) do
 				if vim.trim(l) ~= "" then
@@ -125,12 +291,14 @@ local function seed_cds_source(name, desc, corrnr, callback)
 			vim.schedule(function()
 				if code ~= 0 then
 					notify(
-						"CDS creada, pero no pude escribir la plantilla inicial: "
+						name .. " creado, pero no pude escribir la plantilla inicial: "
 							.. (out[1] or ("sapcli code " .. code)),
-						vim.log.levels.ERROR
+						vim.log.levels.WARN
 					)
 				end
-				callback(code == 0)
+				if callback then
+					callback(code == 0)
+				end
 			end)
 		end,
 	})
@@ -138,12 +306,34 @@ local function seed_cds_source(name, desc, corrnr, callback)
 		vim.fn.chansend(job, source)
 		vim.fn.chanclose(job, "stdin")
 	else
-		notify("CDS creada, pero no pude lanzar sapcli ddl write.", vim.log.levels.ERROR)
-		callback(false)
+		notify(name .. " creado, pero no pude lanzar sapcli write.", vim.log.levels.WARN)
+		if callback then
+			callback(false)
+		end
 	end
 end
 
+local function build_cds_adt_body(name, desc, lang, user, pkg)
+	return table.concat({
+		'<?xml version="1.0" encoding="UTF-8"?>',
+		'<ddl:ddlSource xmlns:ddl="http://www.sap.com/adt/ddic/ddlsources" xmlns:adtcore="http://www.sap.com/adt/core"',
+		' adtcore:type="DDLS/DF"',
+		' adtcore:description="' .. xml_escape(desc) .. '"',
+		' adtcore:language="' .. xml_escape(lang) .. '"',
+		' adtcore:name="' .. xml_escape(name) .. '"',
+		' adtcore:masterLanguage="' .. xml_escape(lang) .. '"',
+		' adtcore:responsible="' .. xml_escape(user) .. '">',
+		'<adtcore:packageRef adtcore:name="' .. xml_escape(pkg) .. '"/>',
+		"</ddl:ddlSource>",
+	}, "\n")
+end
+
 local function create_cds_adt(name, desc, pkg, corrnr)
+	local block = creation_block_reason()
+	if block then
+		notify("Creación bloqueada: " .. block .. ".", vim.log.levels.WARN)
+		return
+	end
 	local adt_http = require("sap-nvim.core.adt_http")
 	local connection = require("sap-nvim.core.connection")
 	if not adt_http.ready() then
@@ -160,18 +350,7 @@ local function create_cds_adt(name, desc, pkg, corrnr)
 	local cfg = require("sap-nvim.core.config").new()
 	local c = adt_http.creds()
 	local lang = ((cfg.language or vim.g.sap_nvim_language or "ES") .. ""):upper()
-	local body = table.concat({
-		'<?xml version="1.0" encoding="UTF-8"?>',
-		'<ddl:ddlSource xmlns:ddl="http://www.sap.com/adt/ddic/ddlsources" xmlns:adtcore="http://www.sap.com/adt/core"',
-		' adtcore:type="DDLS/DF"',
-		' adtcore:description="' .. xml_escape(desc) .. '"',
-		' adtcore:language="' .. xml_escape(lang) .. '"',
-		' adtcore:name="' .. xml_escape(name) .. '"',
-		' adtcore:masterLanguage="' .. xml_escape(lang) .. '"',
-		' adtcore:responsible="' .. xml_escape(c.user:upper()) .. '">',
-		'<adtcore:packageRef adtcore:name="' .. xml_escape(pkg) .. '"/>',
-		"</ddl:ddlSource>",
-	}, "\n")
+	local body = build_cds_adt_body(name, desc, lang, c.user:upper(), pkg)
 
 	local query = {}
 	if corrnr and corrnr ~= "" then
@@ -193,7 +372,7 @@ local function create_cds_adt(name, desc, pkg, corrnr)
 	end
 
 	notify(name .. " creado. Escribiendo plantilla CDS inicial...")
-	seed_cds_source(name, desc, corrnr, function()
+	seed_source(type_by_key("cds_view"), name, desc, corrnr, function()
 		require("sap-nvim.core.source").open(name, "ddls")
 	end)
 end
@@ -240,6 +419,24 @@ local function adt_create_body(root, ns, objtype, root_extra, desc, lang, name, 
 		children,
 		"</" .. root .. ">",
 	}, "\n")
+end
+
+local function package_ref(pkg)
+	return '<adtcore:packageRef adtcore:name="' .. xml_escape(pkg) .. '"/>'
+end
+
+local function adt_source_body(root, ns, objtype, desc, lang, name, user, pkg)
+	return adt_create_body(root, ns, objtype, "", desc, lang, name, user, package_ref(pkg))
+end
+
+local function ddic_create_body(root, ns, objtype, desc, lang, name, user, pkg, children)
+	local nodes = { package_ref(pkg) }
+	for _, child in ipairs(children or {}) do
+		if child and child ~= "" then
+			nodes[#nodes + 1] = child
+		end
+	end
+	return adt_create_body(root, ns, objtype, ' adtcore:version="inactive"', desc, lang, name, user, table.concat(nodes, "\n"))
 end
 
 -- Tabla de creación ADT por tipo (key = spec.key). path = basepath del POST,
@@ -323,15 +520,221 @@ local ADT_CREATE = {
 			)
 		end,
 	},
+	cds_view = {
+		path = "/sap/bc/adt/ddic/ddl/sources",
+		content_type = "application/vnd.sap.adt.ddlSource+xml; charset=utf-8",
+		build = build_cds_adt_body,
+	},
+	metadata_extension = {
+		path = "/sap/bc/adt/ddic/ddlx/sources",
+		content_type = "application/vnd.sap.adt.ddlxSource+xml; charset=utf-8",
+		fallback_sapcli = true,
+		build = function(name, desc, lang, user, pkg)
+			return adt_source_body(
+				"ddlx:ddlxSource",
+				'xmlns:ddlx="http://www.sap.com/adt/ddic/ddlx/sources"',
+				"DDLX/EX",
+				desc,
+				lang,
+				name,
+				user,
+				pkg
+			)
+		end,
+	},
+	dcl = {
+		path = "/sap/bc/adt/acm/dcl/sources",
+		content_type = "application/vnd.sap.adt.acm.dcl.source+xml; charset=utf-8",
+		fallback_sapcli = true,
+		build = function(name, desc, lang, user, pkg)
+			return adt_source_body(
+				"dcl:dclSource",
+				'xmlns:dcl="http://www.sap.com/adt/acm/dcl"',
+				"DCLS/DL",
+				desc,
+				lang,
+				name,
+				user,
+				pkg
+			)
+		end,
+	},
+	behavior_definition = {
+		path = "/sap/bc/adt/bo/behaviordefinitions",
+		content_type = "application/vnd.sap.adt.behaviordefinitions.v1+xml; charset=utf-8",
+		fallback_sapcli = true,
+		build = function(name, desc, lang, user, pkg)
+			return adt_source_body(
+				"bdef:behaviorDefinition",
+				'xmlns:bdef="http://www.sap.com/adt/bo/behaviordefinitions"',
+				"BDEF/BDO",
+				desc,
+				lang,
+				name,
+				user,
+				pkg
+			)
+		end,
+	},
+	service_definition = {
+		path = "/sap/bc/adt/ddic/srvd/sources",
+		content_type = "application/vnd.sap.adt.srvd.source.v1+xml; charset=utf-8",
+		fallback_sapcli = true,
+		build = function(name, desc, lang, user, pkg)
+			return adt_source_body(
+				"srvd:serviceDefinition",
+				'xmlns:srvd="http://www.sap.com/adt/ddic/srvd"',
+				"SRVD/SRV",
+				desc,
+				lang,
+				name,
+				user,
+				pkg
+			)
+		end,
+	},
 }
+
+-- Builders DDIC puros para validación viva. No se usan como camino por defecto todavía:
+-- sapcli sigue siendo la vía probada para crear DDIC, y estos payloads permiten comparar
+-- rutas/XML contra un sistema real sin hacer POST accidental.
+local DDIC_CREATE = {
+	domain = {
+		path = "/sap/bc/adt/ddic/domains",
+		content_type = "application/vnd.sap.adt.ddic.domains.v1+xml; charset=utf-8",
+		build = function(name, desc, lang, user, pkg, opts)
+			opts = opts or {}
+			local datatype = (opts.datatype or "CHAR"):upper()
+			local length = tostring(opts.length or 10)
+			return ddic_create_body(
+				"ddic:domain",
+				'xmlns:ddic="http://www.sap.com/adt/ddic/domains"',
+				"DOMA/DO",
+				desc,
+				lang,
+				name,
+				user,
+				pkg,
+				{
+					'<ddic:technicalSettings ddic:dataType="' .. xml_escape(datatype) .. '" ddic:length="' .. xml_escape(length) .. '"/>',
+				}
+			)
+		end,
+	},
+	data_element = {
+		path = "/sap/bc/adt/ddic/dataelements",
+		content_type = "application/vnd.sap.adt.ddic.dataelements.v1+xml; charset=utf-8",
+		build = function(name, desc, lang, user, pkg, opts)
+			opts = opts or {}
+			local domain = (opts.domain or opts.reference or "ZDUMMY_CHAR10"):upper()
+			return ddic_create_body(
+				"ddic:dataElement",
+				'xmlns:ddic="http://www.sap.com/adt/ddic/dataelements"',
+				"DTEL/DE",
+				desc,
+				lang,
+				name,
+				user,
+				pkg,
+				{
+					'<ddic:domainRef adtcore:name="' .. xml_escape(domain) .. '"/>',
+					'<ddic:fieldLabels ddic:short="' .. xml_escape(desc) .. '" ddic:medium="' .. xml_escape(desc) .. '" ddic:long="' .. xml_escape(desc) .. '"/>',
+				}
+			)
+		end,
+	},
+	table_type = {
+		path = "/sap/bc/adt/ddic/tabletypes",
+		content_type = "application/vnd.sap.adt.ddic.tabletypes.v1+xml; charset=utf-8",
+		build = function(name, desc, lang, user, pkg, opts)
+			opts = opts or {}
+			local rowtype = (opts.rowtype or opts.line_type or "SFLIGHT"):upper()
+			return ddic_create_body(
+				"ddic:tableType",
+				'xmlns:ddic="http://www.sap.com/adt/ddic/tabletypes"',
+				"TTYP/TT",
+				desc,
+				lang,
+				name,
+				user,
+				pkg,
+				{
+					'<ddic:rowTypeRef adtcore:name="' .. xml_escape(rowtype) .. '"/>',
+					'<ddic:accessMode ddic:kind="standard"/>',
+				}
+			)
+		end,
+	},
+	table = {
+		path = "/sap/bc/adt/ddic/tables",
+		content_type = "application/vnd.sap.adt.ddic.tables.v1+xml; charset=utf-8",
+		build = function(name, desc, lang, user, pkg, opts)
+			opts = opts or {}
+			local key_field = (opts.key_field or "MANDT"):upper()
+			local key_type = (opts.key_type or "MANDT"):upper()
+			return ddic_create_body(
+				"ddic:table",
+				'xmlns:ddic="http://www.sap.com/adt/ddic/tables"',
+				"TABL/DT",
+				desc,
+				lang,
+				name,
+				user,
+				pkg,
+				{
+					'<ddic:fields><ddic:field ddic:name="' .. xml_escape(key_field) .. '" ddic:key="true" ddic:notNull="true"><ddic:typeRef adtcore:name="' .. xml_escape(key_type) .. '"/></ddic:field></ddic:fields>',
+				}
+			)
+		end,
+	},
+	structure = {
+		path = "/sap/bc/adt/ddic/structures",
+		content_type = "application/vnd.sap.adt.ddic.structures.v1+xml; charset=utf-8",
+		build = function(name, desc, lang, user, pkg, opts)
+			opts = opts or {}
+			local field = (opts.field or "DUMMY"):upper()
+			local elem = (opts.element or "CHAR10"):upper()
+			return ddic_create_body(
+				"ddic:structure",
+				'xmlns:ddic="http://www.sap.com/adt/ddic/structures"',
+				"TABL/DS",
+				desc,
+				lang,
+				name,
+				user,
+				pkg,
+				{
+					'<ddic:fields><ddic:field ddic:name="' .. xml_escape(field) .. '"><ddic:typeRef adtcore:name="' .. xml_escape(elem) .. '"/></ddic:field></ddic:fields>',
+				}
+			)
+		end,
+	},
+}
+
+local do_create
+local run_create_sapcli
 
 -- Abre/siembra el objeto recién creado (igual para la ruta ADT y la sapcli). CDS lleva su
 -- plantilla inicial (seed); el resto se abre directamente con source.open.
 local function open_after_create(spec, name, desc, corrnr)
-	if spec.open_group == "ddls" then
-		notify(name .. " creado. Escribiendo plantilla CDS inicial...")
-		seed_cds_source(name, desc, corrnr, function()
-			require("sap-nvim.core.source").open(name, spec.open_group)
+	if spec.group == "messageclass" then
+		notify(name .. " (SE91) creada. Abriendo gestor de mensajes...")
+		local ok, message = pcall(require, "sap-nvim.core.message")
+		if ok and message.manage then
+			message.manage(name)
+		else
+			vim.cmd("SapMessageClass " .. name)
+		end
+		return
+	end
+	if spec.group == "program_variant" then
+		notify(name .. " (variante) creada.")
+		return
+	end
+	if SOURCE_GROUPS[spec.open_group or spec.group] then
+		notify(name .. " creado. Escribiendo plantilla inicial...")
+		seed_source(spec, name, desc, corrnr, function()
+			require("sap-nvim.core.source").open(name, spec.open_group or spec.group)
 		end)
 	else
 		notify(name .. " creado. Abriendo para editar...")
@@ -343,6 +746,11 @@ end
 -- Mismo patrón que create_cds_adt: exige conexión validada (ready) o la pide; POST con
 -- CSRF/cookies vía adt_http.raw; el idioma viene de config.
 local function create_object_adt(spec, name, desc, pkg, corrnr)
+	local block = creation_block_reason()
+	if block then
+		notify("Creación bloqueada: " .. block .. ".", vim.log.levels.WARN)
+		return
+	end
 	local adt_http = require("sap-nvim.core.adt_http")
 	local connection = require("sap-nvim.core.connection")
 	if not adt_http.ready() then
@@ -357,6 +765,10 @@ local function create_object_adt(spec, name, desc, pkg, corrnr)
 	end
 
 	local meta = ADT_CREATE[spec.key]
+	if not meta or not valid_adt_create_path(meta.path) then
+		notify("Ruta ADT de creación no validada para " .. spec.label .. "; usando fallback sapcli.", vim.log.levels.WARN)
+		return do_create(spec, name, desc, pkg, corrnr)
+	end
 	local cfg = require("sap-nvim.core.config").new()
 	local c = adt_http.creds()
 	local lang = ((cfg.language or vim.g.sap_nvim_language or "ES") .. ""):upper()
@@ -377,6 +789,17 @@ local function create_object_adt(spec, name, desc, pkg, corrnr)
 		accept = "application/*",
 	})
 	if code < 200 or code >= 300 then
+		if meta.fallback_sapcli and run_create_sapcli then
+			notify(
+				"ADT no pudo crear "
+					.. name
+					.. " ("
+					.. adt_error_message(resp, code)
+					.. "). Reintentando con sapcli...",
+				vim.log.levels.WARN
+			)
+			return run_create_sapcli(spec, name, desc, pkg, corrnr)
+		end
 		notify("No se pudo crear " .. name .. ": " .. adt_error_message(resp, code), vim.log.levels.ERROR)
 		return
 	end
@@ -384,29 +807,33 @@ local function create_object_adt(spec, name, desc, pkg, corrnr)
 	open_after_create(spec, name, desc, corrnr)
 end
 
-local function do_create(spec, name, desc, pkg, corrnr, fgroup)
-	-- Tipos con creación por ADT directo (programa/clase/interface/function group): evitan el
-	-- idioma EN hardcodeado de sapcli. Los module functions (needs_group) y DDIC (tabla,
-	-- estructura, data element, dominio, message class) NO tienen endpoint ADT de creación
-	-- fiable aquí, así que siguen por sapcli.
-	if not spec.needs_group and ADT_CREATE[spec.key] then
-		create_object_adt(spec, name, desc, pkg, corrnr)
-		return
-	end
-
+local function build_create_args(spec, name, desc, pkg, corrnr, fgroup, opts)
+	opts = opts or {}
 	local args = { "sapcli", spec.group, "create" }
 	if spec.needs_group then
-		vim.list_extend(args, { fgroup, name, desc }) -- functionmodule: GROUP NAME DESC
+		vim.list_extend(args, { fgroup, name, desc })
+	elseif spec.group == "program_variant" then
+		args = { "sapcli", "program", "variant", "create", opts.program, name, desc }
 	else
-		vim.list_extend(args, { name, desc, pkg }) -- resto: NAME DESC PACKAGE
+		vim.list_extend(args, { name, desc, pkg })
 	end
 	if corrnr and corrnr ~= "" then
 		vim.list_extend(args, { "--corrnr", corrnr })
 	end
+	return args
+end
+
+run_create_sapcli = function(spec, name, desc, pkg, corrnr, fgroup)
+	local block = creation_block_reason()
+	if block then
+		notify("Creación bloqueada: " .. block .. ".", vim.log.levels.WARN)
+		return
+	end
+	local args = build_create_args(spec, name, desc, pkg, corrnr, fgroup)
 
 	notify("Creando " .. spec.label .. " " .. name .. " en " .. (spec.needs_group and fgroup or pkg) .. "...")
 	local err = {}
-	vim.fn.jobstart(args, {
+	sapcli.jobstart(args, {
 		on_stderr = function(_, data)
 			for _, l in ipairs(data) do
 				if vim.trim(l) ~= "" then
@@ -426,16 +853,28 @@ local function do_create(spec, name, desc, pkg, corrnr, fgroup)
 	})
 end
 
+do_create = function(spec, name, desc, pkg, corrnr, fgroup)
+	local block = creation_block_reason()
+	if block then
+		notify("Creación bloqueada: " .. block .. ".", vim.log.levels.WARN)
+		return
+	end
+	-- Tipos con creación por ADT directo: evitan el idioma EN hardcodeado de sapcli.
+	-- DDIC clásico sigue por sapcli; sus builders ADT se exponen como plan validable.
+	if not spec.needs_group and ADT_CREATE[spec.key] then
+		create_object_adt(spec, name, desc, pkg, corrnr)
+		return
+	end
+	return run_create_sapcli(spec, name, desc, pkg, corrnr, fgroup)
+end
+
 -- ─── Creadores específicos: transacción y paquete ──────────────────────────
 -- Estos objetos tienen firmas sapcli propias y NO son código editable, así que
 -- no llaman a source.open (a diferencia del do_create genérico).
 
 -- Crea una transacción (firma: transaction create NAME DESC PKG -t TYPE [--report-name PROG] [--corrnr T]).
-local function create_transaction(name, desc, pkg, corrnr, ttype, prog)
+local function build_transaction_args(name, desc, pkg, corrnr, ttype, prog)
 	-- Seguridad §7: aviso si el nombre no parece de cliente (Z/Y o namespace /).
-	if not name:match("^[ZY]") and not name:match("^/") then
-		notify("Aviso: '" .. name .. "' no empieza por Z/Y; SAP puede rechazarlo.", vim.log.levels.WARN)
-	end
 	local args = { "sapcli", "transaction", "create", name, desc, pkg, "-t", ttype }
 	if prog and prog ~= "" then
 		vim.list_extend(args, { "--report-name", prog })
@@ -449,10 +888,24 @@ local function create_transaction(name, desc, pkg, corrnr, ttype, prog)
 	if corrnr and corrnr ~= "" then
 		vim.list_extend(args, { "--corrnr", corrnr })
 	end
+	return args
+end
+
+local function create_transaction(name, desc, pkg, corrnr, ttype, prog)
+	local block = creation_block_reason()
+	if block then
+		notify("Creación bloqueada: " .. block .. ".", vim.log.levels.WARN)
+		return
+	end
+	-- Seguridad §7: aviso si el nombre no parece de cliente (Z/Y o namespace /).
+	if not name:match("^[ZY]") and not name:match("^/") then
+		notify("Aviso: '" .. name .. "' no empieza por Z/Y; SAP puede rechazarlo.", vim.log.levels.WARN)
+	end
+	local args = build_transaction_args(name, desc, pkg, corrnr, ttype, prog)
 
 	notify("Creando transacción " .. name .. " en " .. pkg .. "...")
 	local out, err = {}, {}
-	vim.fn.jobstart(args, {
+	sapcli.jobstart(args, {
 		on_stdout = function(_, data)
 			for _, l in ipairs(data) do
 				if vim.trim(l) ~= "" then
@@ -496,6 +949,59 @@ local function create_transaction(name, desc, pkg, corrnr, ttype, prog)
 	})
 end
 
+-- Crea una variante de report/programa cuando sapcli expone ese subcomando. Es un
+-- best-effort: algunos sistemas/versions no tienen API ADT para variantes; en ese caso
+-- el error guía al usuario hacia SE38/SA38 sin intentar escrituras alternativas.
+local function create_report_variant(name, desc, corrnr, program)
+	local block = creation_block_reason()
+	if block then
+		notify("Creación bloqueada: " .. block .. ".", vim.log.levels.WARN)
+		return
+	end
+	if not program or program == "" then
+		notify("La variante necesita un programa/report destino.", vim.log.levels.WARN)
+		return
+	end
+	local spec = type_by_key("report_variant")
+	local args = build_create_args(spec, name, desc, nil, corrnr, nil, { program = program:upper() })
+
+	notify("Creando variante " .. name .. " para " .. program:upper() .. "...")
+	local out, err = {}, {}
+	sapcli.jobstart(args, {
+		on_stdout = function(_, data)
+			for _, l in ipairs(data) do
+				if vim.trim(l) ~= "" then
+					out[#out + 1] = vim.trim(l)
+				end
+			end
+		end,
+		on_stderr = function(_, data)
+			for _, l in ipairs(data) do
+				if vim.trim(l) ~= "" then
+					err[#err + 1] = vim.trim(l)
+				end
+			end
+		end,
+		on_exit = function(_, code)
+			vim.schedule(function()
+				if code ~= 0 then
+					local msg = (#err > 0 and table.concat(err, " | "))
+						or (#out > 0 and table.concat(out, " | "))
+						or ("code " .. code)
+					notify(
+						"No se pudo crear la variante por sapcli: "
+							.. msg
+							.. ". Si tu sistema no expone variantes por ADT, usa SE38/SA38.",
+						vim.log.levels.ERROR
+					)
+					return
+				end
+				open_after_create(spec, name, desc, corrnr)
+			end)
+		end,
+	})
+end
+
 -- Tras crear un paquete: no es código (no source.open). Ofrecemos explorarlo.
 local function package_explore_prompt(name)
 	notify(name .. " (paquete) creado.")
@@ -512,6 +1018,11 @@ end
 -- [--corrnr T]). FALLBACK: solo se usa si ADT no pudo crearlo (ver create_package_adt).
 -- OJO: sapcli fija el idioma a EN (sap/cli/package.py); por eso preferimos ADT.
 local function create_package(name, desc, super, corrnr)
+	local block = creation_block_reason()
+	if block then
+		notify("Creación bloqueada: " .. block .. ".", vim.log.levels.WARN)
+		return
+	end
 	-- Seguridad §7: aviso si el nombre no parece de cliente (Z/Y o namespace /).
 	if not name:match("^[ZY]") and not name:match("^/") then
 		notify("Aviso: '" .. name .. "' no empieza por Z/Y; SAP puede rechazarlo.", vim.log.levels.WARN)
@@ -526,7 +1037,7 @@ local function create_package(name, desc, super, corrnr)
 
 	notify("Creando paquete " .. name .. "...")
 	local err = {}
-	vim.fn.jobstart(args, {
+	sapcli.jobstart(args, {
 		on_stderr = function(_, data)
 			for _, l in ipairs(data) do
 				if vim.trim(l) ~= "" then
@@ -553,7 +1064,42 @@ end
 -- que `sapcli package create`, para no cambiar el comportamiento más allá del idioma.
 -- NOTA: el XML de paquete es el de mayor riesgo de validar en vivo (mejor esfuerzo); el
 -- fallback a sapcli garantiza que la creación siga funcionando si SAP rechaza el payload.
+local function build_package_adt_body(name, desc, super, lang, user)
+	local superref = (super and super ~= "")
+			and ('<pak:superPackage adtcore:name="' .. xml_escape(super:upper()) .. '"/>')
+		or "<pak:superPackage/>"
+	return adt_create_body(
+		"pak:package",
+		'xmlns:pak="http://www.sap.com/adt/packages"',
+		"DEVC/K",
+		' adtcore:version="active"',
+		desc,
+		lang,
+		name,
+		user,
+		table.concat({
+			'<adtcore:packageRef adtcore:name="' .. xml_escape(name) .. '"/>',
+			'<pak:attributes pak:packageType="development"/>',
+			superref,
+			"<pak:applicationComponent/>",
+			"<pak:transport>",
+			'<pak:softwareComponent pak:name="LOCAL"/>',
+			"<pak:transportLayer/>",
+			"</pak:transport>",
+			"<pak:translation/>",
+			"<pak:useAccesses/>",
+			"<pak:packageInterfaces/>",
+			"<pak:subPackages/>",
+		}, "\n")
+	)
+end
+
 local function create_package_adt(name, desc, super, corrnr)
+	local block = creation_block_reason()
+	if block then
+		notify("Creación bloqueada: " .. block .. ".", vim.log.levels.WARN)
+		return
+	end
 	-- Seguridad §7: aviso si el nombre no parece de cliente (Z/Y o namespace /).
 	if not name:match("^[ZY]") and not name:match("^/") then
 		notify("Aviso: '" .. name .. "' no empieza por Z/Y; SAP puede rechazarlo.", vim.log.levels.WARN)
@@ -575,33 +1121,7 @@ local function create_package_adt(name, desc, super, corrnr)
 	local cfg = require("sap-nvim.core.config").new()
 	local c = adt_http.creds()
 	local lang = ((cfg.language or vim.g.sap_nvim_language or "ES") .. ""):upper()
-	local superref = (super and super ~= "")
-			and ('<pak:superPackage adtcore:name="' .. xml_escape(super:upper()) .. '"/>')
-		or "<pak:superPackage/>"
-	local body = adt_create_body(
-		"pak:package",
-		'xmlns:pak="http://www.sap.com/adt/packages"',
-		"DEVC/K",
-		' adtcore:version="active"',
-		desc,
-		lang,
-		name,
-		c.user:upper(),
-		table.concat({
-			'<adtcore:packageRef adtcore:name="' .. xml_escape(name) .. '"/>',
-			'<pak:attributes pak:packageType="development"/>',
-			superref,
-			"<pak:applicationComponent/>",
-			"<pak:transport>",
-			'<pak:softwareComponent pak:name="LOCAL"/>',
-			"<pak:transportLayer/>",
-			"</pak:transport>",
-			"<pak:translation/>",
-			"<pak:useAccesses/>",
-			"<pak:packageInterfaces/>",
-			"<pak:subPackages/>",
-		}, "\n")
-	)
+	local body = build_package_adt_body(name, desc, super, lang, c.user:upper())
 
 	local query = {}
 	if corrnr and corrnr ~= "" then
@@ -669,6 +1189,135 @@ end
 function M.package_complete(arglead)
 	return package_search_sync(arglead or "")
 end
+
+local function all_create_metas()
+	local out = {}
+	for key, meta in pairs(ADT_CREATE) do
+		out[#out + 1] = vim.tbl_extend("force", { key = key, mode = "adt" }, meta)
+	end
+	for key, meta in pairs(DDIC_CREATE) do
+		out[#out + 1] = vim.tbl_extend("force", { key = key, mode = "ddic-plan" }, meta)
+	end
+	table.sort(out, function(a, b)
+		return a.key < b.key
+	end)
+	return out
+end
+
+local function build_adt_plan(kind, name, desc, pkg, opts)
+	opts = opts or {}
+	local spec = type_by_key(kind)
+	if not spec then
+		return nil, "Tipo no soportado: " .. tostring(kind)
+	end
+	local key = spec.key
+	local meta = ADT_CREATE[key] or DDIC_CREATE[key]
+	if not meta then
+		return nil, "Sin builder ADT para " .. spec.label .. " (usa sapcli)."
+	end
+	name = (name and name ~= "" and name or "ZDEMO"):upper()
+	desc = desc and desc ~= "" and desc or name
+	pkg = (pkg and pkg ~= "" and pkg or "$TMP"):upper()
+	local lang = ((opts.lang or "ES") .. ""):upper()
+	local user = ((opts.user or "DEVELOPER") .. ""):upper()
+	return {
+		key = key,
+		label = spec.label,
+		name = name,
+		desc = desc,
+		pkg = pkg,
+		lang = lang,
+		user = user,
+		path = meta.path,
+		content_type = meta.content_type,
+		body = meta.build(name, desc, lang, user, pkg, opts),
+		default_path = ADT_CREATE[key] ~= nil,
+	}
+end
+
+local function show_adt_plan(args)
+	local parts = {}
+	for p in tostring(args or ""):gmatch("%S+") do
+		parts[#parts + 1] = p
+	end
+	local plan, err = build_adt_plan(parts[1] or "cds_view", parts[2], parts[2], parts[3])
+	if not plan then
+		notify(err, vim.log.levels.WARN)
+		return
+	end
+	local lines = {
+		"== sap-nvim ADT create plan (sin POST) ==",
+		"type        : " .. plan.key .. " (" .. plan.label .. ")",
+		"name        : " .. plan.name,
+		"package     : " .. plan.pkg,
+		"language    : " .. plan.lang,
+		"method      : POST",
+		"path        : " .. plan.path,
+		"content-type: " .. plan.content_type,
+		"default     : " .. (plan.default_path and "sí" or "no, validación DDIC offline"),
+		"",
+		plan.body,
+	}
+	local buf = vim.api.nvim_create_buf(false, true)
+	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+	vim.bo[buf].bufhidden = "wipe"
+	vim.bo[buf].filetype = "xml"
+	vim.cmd("botright split")
+	vim.api.nvim_win_set_buf(0, buf)
+end
+
+local function validate_create_routes(filter)
+	local adt_http = require("sap-nvim.core.adt_http")
+	if not adt_http.is_available() then
+		notify("ADT no disponible (config.yml).", vim.log.levels.WARN)
+		return
+	end
+	filter = (filter and filter ~= "" and filter:lower()) or nil
+	notify("Validando rutas ADT de creación por discovery (GET, sin crear objetos)...")
+	adt_http.request_async(
+		{ method = "GET", path = "/sap/bc/adt/discovery", accept = "application/atomsvc+xml" },
+		function(body)
+			vim.schedule(function()
+				local lines = { "== sap-nvim ADT create routes (discovery, sin POST) ==" }
+				for _, meta in ipairs(all_create_metas()) do
+					if not filter or meta.key:lower():find(filter, 1, true) or meta.path:lower():find(filter, 1, true) then
+						local ok = body and body:find(meta.path, 1, true) ~= nil
+						lines[#lines + 1] = string.format("%-20s %-10s %-7s %s", meta.key, meta.mode, ok and "OK" or "MISSING", meta.path)
+					end
+				end
+				if #lines == 1 then
+					lines[#lines + 1] = "(sin coincidencias)"
+				end
+				local buf = vim.api.nvim_create_buf(false, true)
+				vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+				vim.bo[buf].bufhidden = "wipe"
+				vim.bo[buf].filetype = "text"
+				vim.cmd("botright split")
+				vim.api.nvim_win_set_buf(0, buf)
+			end)
+		end
+	)
+end
+
+M._test = {
+	types = TYPES,
+	type_by_key = type_by_key,
+	creation_block_reason = creation_block_reason,
+	xml_escape = xml_escape,
+	adt_create_body = adt_create_body,
+	adt_create = ADT_CREATE,
+	ddic_create = DDIC_CREATE,
+	adt_create_paths = ADT_CREATE_PATHS,
+	valid_adt_create_path = valid_adt_create_path,
+	initial_source = initial_source,
+	build_cds_adt_body = build_cds_adt_body,
+	build_adt_plan = build_adt_plan,
+	all_create_metas = all_create_metas,
+	build_write_args = build_write_args,
+	build_create_args = build_create_args,
+	build_transaction_args = build_transaction_args,
+	build_package_adt_body = build_package_adt_body,
+}
 
 -- Picker EN VIVO (snacks): según escribes, busca paquetes en el sistema (estilo VSCode).
 -- Devuelve true si lo abrió; false si no hay snacks (para caer al input con Tab).
@@ -782,6 +1431,11 @@ end
 -- ─── Flujo principal ────────────────────────────────────────────────────────
 
 function M.new_object()
+	local block = creation_block_reason()
+	if block then
+		notify("Creación bloqueada: " .. block .. ".", vim.log.levels.WARN)
+		return
+	end
 	if not require("sap-nvim.core.adt").is_configured() then
 		notify("No hay conexión SAP. Usa :SapSetup primero.", vim.log.levels.WARN)
 		return
@@ -874,6 +1528,18 @@ function M.new_object()
 					return
 				end
 
+				if spec.group == "program_variant" then
+					vim.ui.input({ prompt = "Programa/report destino: ", default = cfg.report or "Z" }, function(program)
+						if not program or program == "" then
+							return
+						end
+						ask_transport(function(corrnr)
+							create_report_variant(name, desc, corrnr, program)
+						end)
+					end)
+					return
+				end
+
 				ask_package(function(pkg)
 					local function create_with(corrnr)
 						if spec.open_group == "ddls" then
@@ -899,6 +1565,18 @@ function M.setup()
 	vim.api.nvim_create_user_command("SapNew", function()
 		M.new_object()
 	end, { desc = "sap-nvim: Crear objeto ABAP en el sistema y abrirlo" })
+	vim.api.nvim_create_user_command("SapNewAdtPlan", function(a)
+		show_adt_plan(a.args)
+	end, {
+		nargs = "*",
+		desc = "sap-nvim: mostrar payload/ruta ADT calculada sin crear objetos",
+	})
+	vim.api.nvim_create_user_command("SapNewValidateRoutes", function(a)
+		validate_create_routes(a.args)
+	end, {
+		nargs = "?",
+		desc = "sap-nvim: validar rutas ADT de creación vía discovery (solo GET)",
+	})
 	vim.keymap.set("n", "<leader>an", function()
 		M.new_object()
 	end, { desc = "ABAP: Nuevo objeto (crear en SAP)" })

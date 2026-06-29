@@ -20,10 +20,9 @@ local function parse_junit4(xml)
     _ = block
   end
 
-  for block in xml:gmatch("<testcase(.-)>(.-)</testcase>") do
-    local attrs  = block:match("^([^>]*)")  or ""
-    local body   = block:match(">(.*)")     or block
-
+  for attrs, body in xml:gmatch("<testcase([^>]*)>(.-)</testcase>") do
+    attrs = attrs or ""
+    body = body or ""
     local classname = attrs:match('classname="([^"]*)"') or ""
     local testname  = attrs:match('name="([^"]*)"')      or ""
 
@@ -52,6 +51,8 @@ local function parse_junit4(xml)
 
   return failures
 end
+
+M._parse_junit4 = parse_junit4
 
 -- Find the local .cls file for a class name
 local function find_local_cls(classname)

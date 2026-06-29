@@ -10,6 +10,10 @@ return {
   dir = vim.fn.expand("~/sap-nvim"),   -- desarrollo local
   config = function()
     require("sap-nvim").setup({
+      -- Perfil operativo. Dev es el default para no romper entornos personales.
+      -- En prod el plugin arranca en solo lectura, exige TLS verificado y bloquea
+      -- create/write/release/delete/set-variable salvo opt-in explícito.
+      profile = "dev", -- "dev" | "qa" | "prod"
 
       -- Defaults del asistente de creación (:SapNew). Antes salía "Z" en todo;
       -- ahora cada campo es configurable por proyecto.
@@ -34,6 +38,27 @@ return {
         gref    = "go_",   -- referencia global
         const   = "c_",    -- constante
       },
+
+      -- Recomendado para productivo: verificar TLS con la CA corporativa.
+      security = {
+        verify_tls = true,
+        ca_file = "/ruta/a/ca-corporativa.pem", -- nil si el certificado ya confía en el sistema
+      },
+
+      productive = {
+        safe_mode = true,
+        require_tls = true,
+        read_only = true, -- default efectivo del perfil prod
+        confirm_destructive = true,
+        audit_sensitive_actions = true,
+        audit_file = nil, -- stdpath("state")/sap-nvim/audit.log
+        allow_create_objects = false,
+        allow_write_objects = false,
+        allow_release_transports = false,
+        allow_delete_objects = false,
+        allow_delete_transports = false,
+        allow_debug_set_variable = false,
+      },
     })
   end,
 }
@@ -56,3 +81,19 @@ Con eso, el snippet `loop` se expande como
   resuelve transporte y lo elimina del sistema (`sapcli <group> delete`).
 
 Todos los valores tienen default razonable; `setup()` sin argumentos sigue funcionando.
+
+## Perfiles y productivo
+
+- `profile = "dev"`: mantiene el comportamiento de desarrollo personal; no fuerza TLS ni modo
+  solo lectura global.
+- `profile = "qa"`: activa `safe_mode` y exige TLS verificado, pero permite create/write salvo
+  que lo cierres con `productive`.
+- `profile = "prod"`: arranca en `read_only`, exige `security.verify_tls=true` y bloquea
+  create/write/release/delete/debug set-variable por defecto.
+
+Para ejecutar una acción sensible en `prod`, desactiva `read_only`, activa el opt-in concreto
+(`allow_write_objects`, `allow_create_objects`, `allow_release_transports`, etc.) y deja
+`confirm_destructive=true` para exigir escribir el objeto/orden exacta.
+
+Las acciones sensibles permitidas o bloqueadas se auditan localmente en
+`stdpath("state")/sap-nvim/audit.log` en formato JSONL. El log no incluye contraseñas.

@@ -7,6 +7,38 @@ con quickfix, runner de tests, gestión de transportes, explorador de objetos, s
 > 📖 **[Manual de usuario completo → `docs/MANUAL.md`](docs/MANUAL.md)** — instalación, todas las
 > funciones, atajos y la capa de IA (agentes que programan en SAP).
 
+## Ayuda SAP oficial
+
+Comandos de solo lectura para documentacion dentro de Neovim:
+
+```vim
+:SapHelp             " popup sobre el simbolo bajo cursor
+:SapHelpPanel        " panel lateral con enlaces oficiales y coincidencias ADT
+:SapHelpSearch BAPI_USER_GET_DETAIL
+:SapHelpOpen CL_ABAP_TYPEDESCR
+:SapHelpRoutes       " valida la ruta ADT quickSearch si hay login activo
+:SapHelpBrowser      " diagnostica el lanzador de navegador (WSL/Windows/Linux/macOS)
+```
+
+Por defecto intenta ADT `quickSearch` cuando la conexion esta validada y, sin hacer scraping,
+compone URLs oficiales configurables:
+
+```lua
+require("sap-nvim").setup({
+  docs = {
+    help_url = "https://help.sap.com/docs/search?q={query}",
+    api_hub_url = "https://api.sap.com/search?searchterm={query}",
+  },
+})
+```
+
+Atajos en buffers ABAP/CDS: `<leader>aH` abre el panel, `<leader>a?` el popup y `<leader>a/`
+la busqueda. En which-key tambien quedan agrupados bajo `<leader>al`: `h` popup, `p` panel,
+`f` buscar desde/en el panel, `s` busqueda global, `o` abrir enlace oficial, `b` diagnosticar
+navegador y `r` validar la busqueda ADT. El panel busca en todos los tipos ADT; usa `s` para
+buscar otra consulta ADT, `/` para filtrar resultados visibles, `c` para limpiar filtro, `o`/`1` para SAP Help, `2`
+para API Hub si existe, `<CR>` sobre una URL, y `q` para cerrar.
+
 ---
 
 ## Requisitos
@@ -187,7 +219,6 @@ Elegí la **1** y completá los campos (`:wq` para guardar, `:cq` para cancelar)
 | `port` | **Puerto HTTPS del ICM** (no el sysnr) | `44300` |
 | `client` | Mandante SAP | `100` |
 | `user` | Tu usuario de diálogo | `JCGOMEZ` |
-| `password` | Tu contraseña | — |
 | `ssl` | `true` para HTTPS | `true` |
 
 > **El `port` es el puerto HTTPS del ICM** (típicamente `44300`, `8000` o `443`) — **no** el
@@ -198,14 +229,15 @@ Por debajo, esto ejecuta:
 
 ```sh
 sapcli config set-connection dev --ashost HOST --port 44300 --client 100 --ssl
-sapcli config set-user dev-user --user JCGOMEZ --password ****
+sapcli config set-user dev-user --user JCGOMEZ
 sapcli config set-context dev --connection dev --user dev-user
 sapcli config use-context dev
 ```
 
-> **Nota de seguridad:** la contraseña se guarda en texto plano en `~/.sapcli/config.yml`. Usá
-> un usuario de desarrollo personal en un sistema que no sea productivo. Restringí el archivo
-> (`chmod 600 ~/.sapcli/config.yml`).
+> **Nota de seguridad:** `:SapSetup` no escribe la contraseña en `~/.sapcli/config.yml`.
+> La pide con `inputsecret()`, la valida con ADT y la guarda en el almacén seguro del plugin
+> (keyring/DPAPI cuando está disponible). Restringí igualmente el archivo de config
+> (`chmod 600 ~/.sapcli/config.yml`) porque contiene host, mandante y usuario.
 
 ### 3. Validar todo — `:SapDoctor`
 
@@ -226,6 +258,32 @@ En vivo (contactan el sistema SAP — SOLO LECTURA):
 Nunca escribe, activa ni bloquea nada. Si una prueba en vivo falla, se muestra la primera línea
 del error. **El primer login fallido puede bloquear tu usuario SAP tras unos intentos — si
 falla, pará y revisá las credenciales antes de reintentar.**
+
+Para una prueba viva más completa, ejecuta `:SapLiveCheck`: valida ADT directo, búsqueda por
+Information System, daemon keep-alive y `sapcli` wrapper con operaciones de solo lectura. Es la
+prueba recomendada antes de usar el plugin en un sistema productivo o con permisos reales.
+
+### 4. Pruebas locales sin SAP
+
+Para validar cambios del plugin sin tocar ningún sistema SAP:
+
+```bash
+test/run_offline.sh
+```
+
+Ese runner compila los módulos Lua/Python y ejecuta tests offline de completion, seguridad de
+`sapcli`, password legacy y debugger/cockpit con respuestas ADT sintéticas.
+
+Para considerar una conexión lista para productivo, `:SapDoctor` espera TLS verificado:
+
+```lua
+require("sap-nvim").setup({
+  security = {
+    verify_tls = true,
+    ca_file = "/ruta/a/ca-corporativa.pem", -- opcional si el sistema ya confía en la CA
+  },
+})
+```
 
 ---
 
@@ -280,28 +338,32 @@ Una vez que `curl`/`nc` llegan al host, `:SapSetup` → `:SapDoctor` funcionan i
 ## Seguridad (máquinas compartidas)
 
 Pensado para entornos donde varias personas comparten el sistema SAP (o la máquina). El diseño
-es **conservador por defecto**: no podés romper ni perder nada del sistema con este plugin.
+es **conservador por defecto**: las escrituras pasan por login validado, transporte/lock cuando
+aplica y confirmaciones explícitas para acciones peligrosas.
 
-### Lo que el plugin NO puede hacer (auditado en el código)
+### Riesgos y barreras actuales
 
 | Riesgo | Estado | Por qué |
 |--------|--------|---------|
-| Sobrescribir código de otro | **Imposible** | No existe ningún `sapcli write`/`checkin`. Editás archivos locales; el source remoto nunca se pisa. |
-| Borrar objetos | **Imposible** | No hay ningún comando `delete` en el código. |
-| Liberar transportes ajenos | **No** | La lista se filtra por `--owner` (solo los tuyos) y la liberación exige confirmar explícitamente. |
-| Dejar el sistema roto tras un error | **No** | Cada operación es una llamada `sapcli` atómica. Si falla, el objeto queda inactivo (igual que Eclipse) — reversible y solo tuyo. |
-| Locks colgados | **Riesgo mínimo** | sapcli toma y libera el lock dentro de la misma llamada; los locks ADT expiran por sesión. |
+| Sobrescribir código estándar/ajeno | **Bloqueado por defecto** | `safe_mode` marca estándar como solo lectura y las escrituras remotas exigen conexión validada + transporte cuando aplica. |
+| Borrar objetos | **Bloqueado por defecto** | `productive.allow_delete_objects=false`; si lo activás, exige nombre exacto y solo objetos propios Z/Y/namespace. |
+| Liberar/borrar transportes por error | **Confirmación fuerte** | Release/delete/reassign exigen ID exacto; borrar transportes requiere `productive.allow_delete_transports=true`. |
+| Martillear logins fallidos | **Freno anti-401** | Si SAP devuelve 401, se pausa ADT/daemon/`sapcli` hasta `:SapRelogin`. |
+| Locks colgados | **Riesgo bajo** | Las rutas ADT hacen lock/write/unlock y limpian en error; los locks ADT expiran por sesión. |
 
 Lo peor que puede pasar es que una activación falle y tu objeto quede inactivo. Es reversible y
 no afecta el trabajo de los demás.
 
 ### Protección de credenciales
 
-La contraseña se guarda en **texto plano** en `~/.sapcli/config.yml`. En una máquina compartida,
-si otra persona lee ese archivo puede hacerse pasar por vos. El plugin lo mitiga:
+`:SapSetup` ya no guarda contraseñas en texto plano en `~/.sapcli/config.yml`; usa el almacén
+seguro del plugin tras validar la contraseña contra ADT. Si tenés un `config.yml` antiguo con
+`password: ...`, bórrala o recrea la conexión con `:SapSetup`; por defecto el plugin ya no la usa.
 
 - **`:SapSetup` aplica `chmod 600`** al archivo al crear la conexión (solo el dueño lo lee).
 - **`:SapDoctor` chequea los permisos** y marca ❌ si el grupo u otros tienen acceso de lectura.
+- **Compatibilidad legacy:** solo si configuras `security.allow_plaintext_password=true` se acepta
+  `password:` desde `~/.sapcli/config.yml`.
 
 Si tenés un `config.yml` previo, aseguralo a mano:
 
@@ -367,7 +429,13 @@ Notificación resumen: `3 test(s) failed in ZCL_FOO. See quickfix.`
 ### ATC — chequeo de calidad
 
 `<leader>aK` corre el ABAP Test Cockpit vía `sapcli atc run <tipo> <name>` (el tipo se deriva de
-la extensión del archivo).
+la extensión del archivo), carga los hallazgos parseables en quickfix y abre `:SapAtcPanel`.
+
+`:SapQuality` abre el panel profesional de calidad. Soporta `:SapQuality atc object <OBJ>`,
+`:SapQuality atc package <PAQUETE>`, `:SapQuality atc transport <ORDEN>` cuando el wrapper
+`sapcli` expone los datos necesarios, y `:SapQuality aunit object <CLASE>`. Cada ejecución queda
+en `:SapQualityHistory`. El panel solo reporta helpers de bloqueo para release/activate; no libera
+transportes ni activa objetos.
 
 ---
 
@@ -537,7 +605,10 @@ kubeconfig de sapcli vía `sapcli config` (única fuente de verdad). Ver
 [Primeros pasos](#primeros-pasos--conectar-a-un-sistema-sap).
 
 `:SapDoctor` / `<leader>asd` — escalera de validación de solo lectura (conectividad, búsqueda de
-objetos, transportes).
+objetos, transportes) y estado de seguridad/productivo.
+
+`:SapLiveCheck` — pruebas vivas no destructivas contra SAP: ADT discovery/search, daemon y
+lecturas `sapcli`.
 
 `:SapStatus` / `<leader>asi` — muestra la conexión activa: sistema, mandante, usuario.
 
@@ -613,6 +684,13 @@ Después autenticá una sola vez: `:Copilot auth` (usa tu login de GitHub de la 
 | `<leader>ai` | `:SapInactive` | Objetos inactivos — abrir o activar de a uno |
 | `<leader>an` | `:SapNew` | Nuevo objeto ABAP con pickers de paquete/transporte del sistema |
 | `<leader>aS` | `:SapSearchLive` | Búsqueda global en vivo (Telescope); `<C-f>` filtra por tipo |
+| `<leader>alh` | `:SapHelp` | Popup de documentación SAP oficial |
+| `<leader>alp` | `:SapHelpPanel` | Panel lateral de documentación SAP oficial |
+| `<leader>alf` | `:SapHelpPanelSearch` | Buscar desde/en el panel lateral SAP Help |
+| `<leader>als` | `:SapHelpSearch` | Buscar documentación/objetos SAP y abrir enlaces oficiales |
+| `<leader>alo` | `:SapHelpOpen` | Abrir enlace oficial SAP para el símbolo/búsqueda |
+| `<leader>alb` | `:SapHelpBrowser` | Diagnosticar el lanzador de navegador |
+| `<leader>alr` | `:SapHelpRoutes` | Validar la búsqueda ADT usada por la ayuda |
 | `<leader>cc` | `:SapSearchCds` | Búsqueda en vivo de CDS / RAP |
 | `<leader>afs` | `:SapSearch` | Buscar objetos en SAP |
 | `<leader>afb` | `:SapBrowse` | Explorar contenido de un paquete |
@@ -623,6 +701,7 @@ Después autenticá una sola vez: `:Copilot auth` (usa tu login de GitHub de la 
 | `<leader>asi` | `:SapStatus` | Mostrar info de la conexión SAP activa |
 | `<leader>asc` | `:SapSetup` | Asistente de configuración de conexión (kubeconfig de sapcli) |
 | `<leader>asd` | `:SapDoctor` | Validación de solo lectura: conexión, objetos, transportes |
+| — | `:SapLiveCheck` | Pruebas vivas no destructivas: ADT, daemon y sapcli |
 | `<leader>asg` | — | Abrir SAP GUI |
 | `<leader>aso` | — | Abrir el objeto actual en SAP GUI |
 | `<leader>ah` | — | Ayuda (todos los atajos) |

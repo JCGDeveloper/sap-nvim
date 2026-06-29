@@ -42,13 +42,12 @@ def log(msg):
 
 class AdtDaemon:
     def __init__(self):
-        base = os.environ.get("ADT_BASE", "")
-        self.client = os.environ.get("ADT_CLIENT", "")
-        user = os.environ.get("ADT_USER", "")
-        password = os.environ.get("ADT_PASS", "")
-        self.host, self.port, self.is_https = self._parse_base(base)
-        token = base64.b64encode(("%s:%s" % (user, password)).encode("utf-8"))
-        self.authorization = "Basic " + token.decode("ascii")
+        self.client = ""
+        self.host = ""
+        self.port = 443
+        self.is_https = True
+        self.authorization = ""
+        self.auth_ready = False
         self.ctx = self._ssl_context()
 
         self.csrf = None
@@ -57,6 +56,25 @@ class AdtDaemon:
         self.pool = []                        # conexiones libres
         self.pool_lock = threading.Lock()
         self.out_lock = threading.Lock()      # serializa SOLO la escritura a stdout
+
+    def configure_auth(self, req):
+        base = req.get("base") or ""
+        self.client = req.get("client") or ""
+        user = req.get("user") or ""
+        password = req.get("password") or ""
+        ready = bool(base and user and password)
+        self.host, self.port, self.is_https = self._parse_base(base)
+        token = base64.b64encode(("%s:%s" % (user, password)).encode("utf-8"))
+        self.authorization = "Basic " + token.decode("ascii")
+        with self.pool_lock:
+            for conn in self.pool:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self.pool = []
+        self.auth_ready = ready
+        return ready
 
     @staticmethod
     def _ssl_context():
@@ -88,6 +106,8 @@ class AdtDaemon:
         return host, port, is_https
 
     def _new_conn(self):
+        if not self.auth_ready:
+            raise RuntimeError("daemon not authenticated")
         if self.is_https:
             return http.client.HTTPSConnection(self.host, self.port, context=self.ctx, timeout=30)
         return http.client.HTTPConnection(self.host, self.port, timeout=30)
@@ -238,14 +258,8 @@ class AdtDaemon:
                 pass  # se recupera en la próxima petición real
 
     def run(self):
-        log("START host=%s port=%s pool=%d" % (self.host, self.port, POOL_MAX))
-        try:
-            t = time.time()
-            self.login()
-            log("LOGIN csrf=%s cookies=%s %.0fms" % (bool(self.csrf), bool(self.cookies), (time.time() - t) * 1000))
-        except Exception as e:
-            log("LOGIN EXC " + repr(e))
-        threading.Thread(target=self._keepalive_loop, daemon=True).start()
+        log("START pool=%d" % POOL_MAX)
+        keepalive_started = False
 
         # Lee peticiones y atiende CADA UNA EN SU HILO (paralelo, como VSCode). readline()
         # entrega línea a línea (con `python3 -u`).
@@ -260,6 +274,27 @@ class AdtDaemon:
                 req = json.loads(line)
             except Exception:
                 self._respond({"id": None, "status": 0, "body": "bad request"})
+                continue
+            if req.get("type") == "auth":
+                try:
+                    if not self.configure_auth(req):
+                        log("AUTH missing credentials")
+                        continue
+                    log("AUTH host=%s port=%s" % (self.host, self.port))
+                    t = time.time()
+                    ok = self.login()
+                    self.auth_ready = ok
+                    log("LOGIN ok=%s csrf=%s cookies=%s %.0fms" % (
+                        ok, bool(self.csrf), bool(self.cookies), (time.time() - t) * 1000))
+                    if ok and not keepalive_started:
+                        threading.Thread(target=self._keepalive_loop, daemon=True).start()
+                        keepalive_started = True
+                except Exception as e:
+                    self.auth_ready = False
+                    log("LOGIN EXC " + repr(e))
+                continue
+            if not self.auth_ready:
+                self._respond({"id": req.get("id"), "status": 0, "body": "daemon not authenticated"})
                 continue
             threading.Thread(target=self._serve, args=(req,), daemon=True).start()
 

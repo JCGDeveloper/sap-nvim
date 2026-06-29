@@ -106,6 +106,15 @@ local function adt_msg(body, code)
   return "HTTP " .. tostring(code or 0)
 end
 
+local function unxml(s)
+  return (s or "")
+    :gsub("&lt;", "<")
+    :gsub("&gt;", ">")
+    :gsub("&quot;", '"')
+    :gsub("&apos;", "'")
+    :gsub("&amp;", "&")
+end
+
 local function lock_handle(body)
   return body and (
     body:match("<LOCK_HANDLE>([^<]*)</LOCK_HANDLE>")
@@ -133,8 +142,74 @@ local function package_from_xml(xml)
     return nil
   end
   local pkg = xml:match('packageRef[^>]-adtcore:name="([^"]*)"')
+    or xml:match('packageRef[^>]-name="([^"]*)"')
+    or xml:match('[%w_:-]*packageName="([^"]*)"')
+    or xml:match('[%w_:-]*devclass="([^"]*)"')
+    or xml:match('[%w_:-]*package="([^"]*)"')
+    or xml:match("<[^>]-DEVCLASS[^>]*>(.-)</[^>]-DEVCLASS>")
+    or xml:match("<[^>]-PACKAGE_NAME[^>]*>(.-)</[^>]-PACKAGE_NAME>")
+    or xml:match("<[^>]-PACKAGE[^>]*>(.-)</[^>]-PACKAGE>")
   if pkg and pkg ~= "" then
-    return pkg
+    return unxml(vim.trim(pkg)):upper()
+  end
+  return nil
+end
+
+local function normalize_package_value(value)
+  return package_from_xml(value or "") or (value and tostring(value):upper() or nil)
+end
+
+local function is_real_package(pkg)
+  pkg = normalize_package_value(pkg)
+  return pkg and pkg ~= "" and pkg ~= "$TMP"
+end
+
+local function better_package(primary, fallback)
+  primary = normalize_package_value(primary)
+  fallback = normalize_package_value(fallback)
+  if is_real_package(primary) then
+    return primary
+  end
+  if is_real_package(fallback) then
+    return fallback
+  end
+  return primary or fallback
+end
+
+local function include_names_from_lines(lines)
+  local out, seen = {}, {}
+  for _, raw in ipairs(lines or {}) do
+    local inc = tostring(raw or ""):match("^%s*[Ii][Nn][Cc][Ll][Uu][Dd][Ee]%s+([%w_/]+)")
+    if inc then
+      inc = inc:upper()
+      if not seen[inc] then
+        seen[inc] = true
+        out[#out + 1] = inc
+      end
+    end
+  end
+  return out
+end
+
+local function package_from_index(name, group, lines)
+  local ok, index = pcall(require, "sap-nvim.core.index")
+  if not ok or not index.search then
+    return nil
+  end
+  local candidates = { tostring(name or ""):upper() }
+  for _, inc in ipairs(include_names_from_lines(lines)) do
+    candidates[#candidates + 1] = inc
+  end
+  for _, candidate in ipairs(candidates) do
+    if candidate ~= "" then
+      for _, entry in ipairs(index.search(candidate, { limit = 20 }) or {}) do
+        local same_name = tostring(entry.name or ""):upper() == candidate
+        local same_group = not group or not entry.group or entry.group == group or candidate ~= tostring(name or ""):upper()
+        if same_name and same_group and is_real_package(entry.package) then
+          return normalize_package_value(entry.package)
+        end
+      end
+    end
   end
   return nil
 end
@@ -142,19 +217,20 @@ end
 -- Lee (síncrono, mismo patrón que read_source_adt) la metadata ADT del objeto para
 -- conocer su paquete real. Best-effort: sin conexión, error HTTP o sin packageRef ->
 -- nil, de modo que confirm_activation no pueda DEMOSTRAR $TMP y pida confirmación.
-local function fetch_object_package(uri)
+local function fetch_object_package(uri, fallback)
+  fallback = normalize_package_value(fallback)
   if not uri or uri == "" then
-    return nil
+    return fallback
   end
   local adt_http = require("sap-nvim.core.adt_http")
   if not adt_http.is_available() then
-    return nil
+    return fallback
   end
   local body, _, code = adt_http.raw({ method = "GET", path = uri, accept = "application/*" })
   if not body or code < 200 or code >= 300 then
-    return nil
+    return fallback
   end
-  return package_from_xml(body)
+  return better_package(package_from_xml(body), fallback)
 end
 
 local function unlock_object(adt_http, uri, handle)
@@ -287,6 +363,13 @@ end
 -- opts.line / opts.col (opcional): salta a esa posición tras abrir (para go-to-definition).
 local RAP_KINDS = { ddl = true, ddls = true, ddlx = true, dcl = true, bdef = true, srvd = true }
 local DDIC_METADATA_KINDS = { dataelement = true, domain = true, tabletype = true }
+local DDIC_METADATA_FALLBACK_KINDS = {
+  table = true,
+  structure = true,
+  dataelement = true,
+  domain = true,
+  tabletype = true,
+}
 
 local function pretty_xml(xml)
   return vim.split((xml or ""):gsub("><", ">\n<"):gsub("\r", ""), "\n", { plain = true })
@@ -429,6 +512,19 @@ function M.open(name, group, opts)
     notify("Tipo de objeto desconocido para '" .. name .. "'", vim.log.levels.WARN)
     return
   end
+  if group == "package" then
+    return require("sap-nvim.core.browser").browse_package(name)
+  end
+  if group == "transaction" then
+    return require("sap-nvim.core.transaction").view(name, { uri = opts.uri })
+  end
+  if group == "messageclass" then
+    local ok, message = pcall(require, "sap-nvim.core.message")
+    if ok and message.manage then
+      return message.manage(name)
+    end
+    return require("sap-nvim.core.textsymbol").message_class(name)
+  end
   -- Objetos CDS/RAP: mantienen su abridor especializado, pero el guardado ya va por ADT
   -- porque core.cds deja vim.b.sap_obj.uri poblada.
   if RAP_KINDS[group] then
@@ -438,7 +534,7 @@ function M.open(name, group, opts)
     notify("No hay conexion SAP. Usa :SapSetup primero.", vim.log.levels.WARN)
     return
   end
-  -- GUARDIÁN ANTI-BLOQUEO: sapcli lee la contraseña de SAP_PASSWORD (entorno) o config.yml.
+  -- GUARDIÁN ANTI-BLOQUEO: sapcli recibe credenciales solo desde core.sapcli tras validar ADT.
   -- Si la conexión no está VALIDADA (recién arrancado, freno activo, password sin probar),
   -- NO lanzamos sapcli — enviaría un login (vacío o sin validar) que puede bloquear el usuario.
   -- Pedimos login (valida con 1 petición) y, si va bien, reintentamos la apertura.
@@ -472,7 +568,8 @@ function M.open(name, group, opts)
     local reason = readonly_reason(name, group)
     -- Paquete real desde la metadata ADT: permite a confirm_activation DEMOSTRAR $TMP
     -- (rama rápida) o, si no se puede leer, quedarse en nil y exigir confirmación.
-    local package = fetch_object_package(uri)
+    local package = fetch_object_package(uri, opts.package or opts.devclass or opts.package_name)
+    package = better_package(package, package_from_index(name, group, lines))
     vim.b[bufnr].sap_obj = { name = name:upper(), group = group, fgroup = fgroup, uri = uri, package = package, readonly = reason ~= nil }
     vim.bo[bufnr].filetype = "abap"
     apply_readonly(bufnr, reason)
@@ -503,7 +600,7 @@ function M.open(name, group, opts)
     vim.bo[bufnr].filetype = "xml"
     local reason = readonly_reason(name, group, "metadata ADT sin editor de código")
     -- El paquete sale del propio cuerpo de metadata ya descargado (sin llamada extra).
-    local package = package_from_xml(body)
+    local package = better_package(package_from_xml(body), opts.package or opts.devclass or opts.package_name)
     vim.b[bufnr].sap_obj = { name = name:upper(), group = group, fgroup = fgroup, uri = uri, package = package, readonly = true }
     apply_readonly(bufnr, reason)
     vim.b[bufnr].sap_caps = M.capabilities(bufnr)
@@ -515,7 +612,7 @@ function M.open(name, group, opts)
   if body then
     return open_from_lines(vim.split(body, "\n", { plain = true }), uri)
   end
-  if DDIC_METADATA_KINDS[group] then
+  if DDIC_METADATA_FALLBACK_KINDS[group] then
     local meta_uri = object_uri(group, name, { fgroup = fgroup })
     local adt_http = require("sap-nvim.core.adt_http")
     local meta_body, _, meta_code = adt_http.raw({
@@ -534,7 +631,7 @@ function M.open(name, group, opts)
       or { "sapcli", group, "read", name }
 
     local out, err = {}, {}
-    vim.fn.jobstart(read_args, {
+    require("sap-nvim.core.sapcli").jobstart(read_args, {
     on_stdout = function(_, data)
       for _, l in ipairs(data) do table.insert(out, l) end
     end,
@@ -757,7 +854,7 @@ function M.push(bufnr, activate, callback)
         else
           if callback then callback(false, {}, qf or {}) end
         end
-      end, { confirmed = true })
+      end, { confirmed = true, scope = "single" })
     end
 
     if activate then
@@ -799,7 +896,7 @@ function M.delete(bufnr)
 
         notify("Borrando " .. obj.name .. "...")
         local err = {}
-        vim.fn.jobstart(args, {
+        require("sap-nvim.core.sapcli").jobstart(args, {
           on_stderr = function(_, data)
             for _, l in ipairs(data) do if vim.trim(l) ~= "" then err[#err + 1] = l end end
           end,
@@ -838,13 +935,7 @@ function M.activate_recursive()
   if vim.b[bufnr].sap_obj then
     M.push(bufnr, false, function(ok)
       if ok then
-        confirm_activation(vim.b[bufnr].sap_obj, nil, function(confirmed)
-          if confirmed then
-            require("sap-nvim.core.adt").activate_related_current(bufnr, { confirmed = true })
-          else
-            notify("Activación cancelada.", vim.log.levels.INFO)
-          end
-        end)
+        require("sap-nvim.core.adt").activate_related_current(bufnr, { scope = "tree" })
       end
     end)
   else
@@ -895,5 +986,12 @@ function M.setup()
   vim.keymap.set("n", "<leader>aX", function() M.delete(nil) end,
     { desc = "ABAP: Borrar objeto remoto (requiere opt-in)" })
 end
+
+M._package_from_xml = package_from_xml
+M._normalize_package_value = normalize_package_value
+M._better_package = better_package
+M._object_uri = object_uri
+M._source_uri = source_uri
+M._readonly_reason = readonly_reason
 
 return M

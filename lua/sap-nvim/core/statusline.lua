@@ -11,6 +11,29 @@ local _has_lualine = nil   -- cached lualine presence check
 
 local REFRESH_INTERVAL = 30  -- seconds between config re-reads
 
+local function field_in_block(content, header, key)
+  local in_block = false
+  for line in (content .. "\n"):gmatch("([^\n]*)\n") do
+    if line:match("^%s*" .. vim.pesc(header) .. ":%s*$") then
+      in_block = true
+    elseif in_block and line:match("^%S") then
+      break
+    elseif in_block then
+      local v = line:match("^%s+" .. vim.pesc(key) .. ":%s*(.+)%s*$")
+      if v then return (v:gsub("^['\"]", ""):gsub("['\"]%s*$", "")) end
+    end
+  end
+  return nil
+end
+
+local function active_profile()
+  local ok, cfg = pcall(require, "sap-nvim.core.config")
+  if ok and cfg.profile_name then
+    return cfg.profile_name():upper()
+  end
+  return "DEV"
+end
+
 -- Read connection details from ~/.sapcli/config.yml
 local function read_context()
   local config_path = vim.fn.expand("~/.sapcli/config.yml")
@@ -22,27 +45,18 @@ local function read_context()
   local current = content:match("current%-context:%s*([%w_%-]+)")
   if not current then return nil end
 
-  local in_ctx = false
-  local result = { name = current }
-
-  for line in content:gmatch("[^\r\n]+") do
-    if line:match("^" .. vim.pesc(current) .. ":%s*$") then
-      in_ctx = true
-    elseif in_ctx and not line:match("^%s") then
-      break
-    elseif in_ctx then
-      local k, v = line:match("^%s+(%w+):%s*(.+)$")
-      if k and v then
-        result[k] = vim.trim(v)
-      end
-    end
-  end
+  local conn = field_in_block(content, current, "connection") or current
+  local user_ref = field_in_block(content, current, "user") or (current .. "-user")
+  local sysid = field_in_block(content, conn, "sysid") or field_in_block(content, conn, "sid")
+  local client = field_in_block(content, conn, "client")
+  local user = field_in_block(content, user_ref, "user")
 
   return {
-    sysid  = (result.sysid or result.name or "???"):upper():sub(1, 3),
-    client = result.client or "???",
-    user   = result.user and result.user:upper() or "???",
+    sysid  = ((sysid or conn or current or "???"):upper():match("[A-Z0-9]+") or "???"):sub(1, 3),
+    client = client or "???",
+    user   = user and user:upper() or "???",
     ctx    = current,
+    profile = active_profile(),
   }
 end
 
@@ -61,7 +75,7 @@ function M.refresh()
   _last_check = 0
   local ctx = get_cached()
   if ctx then
-    vim.g.sap_nvim_status = ctx.sysid .. "/" .. ctx.client .. "/" .. ctx.user
+    vim.g.sap_nvim_status = ctx.profile .. ":" .. ctx.sysid .. "/" .. ctx.client .. "/" .. ctx.user
   else
     vim.g.sap_nvim_status = ""
   end
@@ -72,7 +86,7 @@ end
 function M.get_string()
   local ctx = get_cached()
   if not ctx then return "" end
-  return ctx.sysid .. "/" .. ctx.client .. "/" .. ctx.user
+  return ctx.profile .. ":" .. ctx.sysid .. "/" .. ctx.client .. "/" .. ctx.user
 end
 
 -- Returns a short activation indicator for the current buffer: "[OK]", "[ERR]", or "".
@@ -102,7 +116,7 @@ M.component = {
   function()
     local ctx = get_cached()
     if not ctx then return "" end
-    return " " .. ctx.sysid .. " · " .. ctx.client .. " · " .. ctx.user .. activation_indicator() .. caps_badge()
+    return " " .. ctx.profile .. " · " .. ctx.sysid .. " · " .. ctx.client .. " · " .. ctx.user .. activation_indicator() .. caps_badge()
   end,
   cond = function()
     local ft = vim.bo.filetype
@@ -122,7 +136,7 @@ local function apply_native_statusline()
     _has_lualine = pcall(require, "lualine")
   end
   if not _has_lualine then
-    local sap_part = " [SAP: " .. ctx.sysid .. "/" .. ctx.client .. "/" .. ctx.user .. activation_indicator() .. "]"
+    local sap_part = " [SAP: " .. ctx.profile .. ":" .. ctx.sysid .. "/" .. ctx.client .. "/" .. ctx.user .. activation_indicator() .. "]"
     vim.opt_local.statusline = "%f %m%=%y" .. sap_part .. caps_badge() .. " %l:%c "
   end
 end
@@ -149,6 +163,7 @@ function M.setup()
         "[sap-nvim] Sistema: " .. ctx.sysid
           .. "  Cliente: " .. ctx.client
           .. "  Usuario: " .. ctx.user
+          .. "  Perfil: " .. ctx.profile
           .. "  Contexto: " .. ctx.ctx,
         vim.log.levels.INFO
       )

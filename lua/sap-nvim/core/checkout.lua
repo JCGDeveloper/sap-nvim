@@ -4,6 +4,7 @@
 
 local M = {}
 local adt = require("sap-nvim.core.adt")
+local sapcli = require("sap-nvim.core.sapcli")
 
 local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
@@ -18,7 +19,7 @@ local function do_checkout(pkg, dir, recursive)
   local count  = 0
   local stderr = {}
 
-  vim.fn.jobstart(args, {
+  sapcli.jobstart(args, {
     cwd = vim.fn.getcwd(),
     on_stdout = function(_, data)
       for _, l in ipairs(data) do

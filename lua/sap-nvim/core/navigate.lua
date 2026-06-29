@@ -299,7 +299,7 @@ local function goto_global(word)
     local pool = #exact > 0 and exact or rows
     local function open_row(r)
       local g = adt.group_from_adt_type(r.type)
-      if g then push_here(); source.open(r.name, g)
+      if g then push_here(); source.open(r.name, g, { uri = r.uri })
       else notify("No se pudo resolver el tipo de '" .. r.name .. "' (" .. (r.type or "?") .. ").",
         vim.log.levels.WARN) end
     end

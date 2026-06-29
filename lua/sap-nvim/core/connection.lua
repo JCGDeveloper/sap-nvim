@@ -3,8 +3,8 @@
 -- guarda en memoria + keyring del kernel (recordar estilo VSCode) — nunca en texto plano en
 -- disco. La contraseña se VALIDA con una sola petición ANTES de habilitar nada: así una
 -- contraseña errónea cuesta UN intento, no la ráfaga (completado por tecla + sapcli) que
--- bloquea el usuario en SAP. Una vez validada, se propaga al entorno (SAP_USER/SAP_PASSWORD)
--- para que sapcli la herede.
+-- bloquea el usuario en SAP. Una vez validada, core.sapcli inyecta credenciales solo en los
+-- procesos hijo que las necesitan.
 
 local M = {}
 local adt = require("sap-nvim.core.adt_http")
@@ -105,14 +105,14 @@ function M.bootstrap()
 		return
 	end
 	adt.validate(function(ok, code)
-		if ok or not (code == 401 or code == 403) then
-			-- OK, o fallo TRANSITORIO (red/timeout/5xx, code 0): confiamos en la contraseña
-			-- recordada y habilitamos sin preguntar. Si más tarde hay un 401 real, salta el
-			-- freno (1 intento). NO borramos el almacén por un parpadeo de red al arrancar.
+		if ok then
 			adt.mark_validated()
-		else
+		elseif code == 401 or code == 403 then
 			-- 401/403: la contraseña recordada es INVÁLIDA → olvidarla y pedir re-login.
 			adt.on_auth_failure()
+		else
+			adt.export_env()
+			notify("No se pudo validar SAP al arrancar (HTTP " .. tostring(code) .. "). La conexión queda sin validar.", vim.log.levels.WARN)
 		end
 	end)
 end
@@ -136,14 +136,18 @@ function M.start_login(cb)
 		if adt.creds() then
 			-- Hay contraseña recordada → validar en silencio (1 intento) y entrar.
 			adt.validate(function(ok, code)
-				if ok or not (code == 401 or code == 403) then
-					adt.mark_validated() -- OK o fallo transitorio: entra (el freno cubre un 401 real luego)
+				if ok then
+					adt.mark_validated()
 					notify("Conectado a " .. conn.description .. " como " .. conn.user .. ".")
 					cb(true)
-				else
+				elseif code == 401 or code == 403 then
 					-- Recordada inválida (401/403): olvidarla y pedir contraseña nueva.
 					adt.on_auth_failure()
 					M.ask_password(conn, cb)
+				else
+					adt.export_env()
+					notify("No se pudo validar SAP (HTTP " .. tostring(code) .. "). Reintenta :SapLogin cuando haya conexión.", vim.log.levels.WARN)
+					cb(false)
 				end
 			end)
 		else

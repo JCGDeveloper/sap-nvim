@@ -7,6 +7,7 @@
 --                                 (la creación del text symbol vía ADT se añade aparte)
 
 local M = {}
+local sapcli = require("sap-nvim.core.sapcli")
 
 local function notify(msg, level)
   vim.notify("[sap-nvim] " .. msg, level or vim.log.levels.INFO)
@@ -69,7 +70,7 @@ local function create_se91(p, class, text, corrnr, allow_create_class)
   if corrnr then vim.list_extend(args, { "--corrnr", corrnr }) end
   notify("Creando mensaje " .. class .. "/" .. p.msgno .. "...")
   local err = {}
-  vim.fn.jobstart(args, {
+  sapcli.jobstart(args, {
     on_stderr = function(_, d) for _, l in ipairs(d) do if vim.trim(l) ~= "" then err[#err + 1] = l end end end,
     on_exit = function(_, code)
       vim.schedule(function()
@@ -90,7 +91,7 @@ local function create_se91(p, class, text, corrnr, allow_create_class)
                 pkg = (pkg ~= "" and pkg or "$TMP"):upper()
                 local cargs = { "sapcli", "messageclass", "create", class, "Mensajes " .. class, pkg }
                 if corrnr and pkg ~= "$TMP" then vim.list_extend(cargs, { "--corrnr", corrnr }) end
-                vim.fn.jobstart(cargs, { on_exit = function(_, c2)
+                sapcli.jobstart(cargs, { on_exit = function(_, c2)
                   vim.schedule(function()
                     if c2 ~= 0 then notify("No se pudo crear la clase " .. class, vim.log.levels.ERROR); return end
                     create_se91(p, class, text, corrnr, false)
@@ -158,13 +159,14 @@ local READ_TIMEOUT_MS = 45000
 local function read_class(name)
   local cmd = { "sapcli", "messageclass", "read", name, "--output", "JSON" }
   local res, code
+  if not sapcli.ensure_ready(cmd) then return nil, "Conexión SAP no validada" end
   if vim.system then -- Neovim 0.10+: spawn con timeout real, mata el proceso si excede
     local ok, out = pcall(function() return vim.system(cmd, { text = true }):wait(READ_TIMEOUT_MS) end)
     if not ok then return nil, "timeout o error lanzando sapcli" end
     res, code = out.stdout, out.code
     if code == nil then return nil, "sapcli no respondió en " .. (READ_TIMEOUT_MS / 1000) .. "s (timeout)" end
   else -- fallback: sin timeout fiable, pero acotado por el shell
-    res = vim.fn.system(cmd)
+    res = sapcli.system(cmd)
     code = vim.v.shell_error
   end
   if code ~= 0 or not res or res == "" then return nil, res end
@@ -215,7 +217,7 @@ local function write_message(verb, name, msgno, text, selfexpl, cb)
     if corrnr then vim.list_extend(args, { "--corrnr", corrnr }) end
     notify((verb == "create" and "Creando" or "Actualizando") .. " mensaje " .. name .. "/" .. msgno .. "...")
     local err = {}
-    vim.fn.jobstart(args, {
+    sapcli.jobstart(args, {
       on_stderr = function(_, d) for _, l in ipairs(d) do if vim.trim(l) ~= "" then err[#err + 1] = l end end end,
       on_exit = function(_, code)
         vim.schedule(function()
@@ -253,16 +255,16 @@ local function manage_delete(buf)
   local no = msgno_under_cursor()
   if not no or not st.by_no[no] then notify("Pon el cursor en una línea de mensaje.", vim.log.levels.WARN); return end
   if not is_own(st.name) then notify("Solo se pueden borrar clases propias (Z/Y). " .. st.name .. " es estándar SAP.", vim.log.levels.WARN); return end
-  vim.ui.select({ "Sí, borrar " .. st.name .. "/" .. no, "No" },
-    { prompt = 'Borrar el mensaje ' .. no .. ' ("' .. (st.by_no[no].text or "") .. '")?' },
-    function(ch)
-      if not ch or ch:match("^No") then return end
+  local confirm = st.name .. "/" .. no
+  vim.ui.input({ prompt = "Borrar mensaje " .. confirm .. ". Escribe '" .. confirm .. "' para confirmar: " },
+    function(input)
+      if vim.trim(input or ""):upper() ~= confirm:upper() then return end
       require("sap-nvim.core.source").resolve_transport(function(corrnr)
         local args = { "sapcli", "messageclass", "message", "delete", st.name, no }
         if corrnr then vim.list_extend(args, { "--corrnr", corrnr }) end
         notify("Borrando mensaje " .. st.name .. "/" .. no .. "...")
         local err = {}
-        vim.fn.jobstart(args, {
+        sapcli.jobstart(args, {
           on_stderr = function(_, d) for _, l in ipairs(d) do if vim.trim(l) ~= "" then err[#err + 1] = l end end end,
           on_exit = function(_, code)
             vim.schedule(function()
