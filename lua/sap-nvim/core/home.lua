@@ -83,6 +83,27 @@ local MENU = {
 		end,
 	},
 	{
+		key = "e",
+		desc = "Repository Explorer SAP del objeto/paquete actual",
+		action = function()
+			vim.cmd("SapRepositoryToggle")
+		end,
+	},
+	{
+		key = "i",
+		desc = "Estado del índice local SAP",
+		action = function()
+			vim.cmd("SapIndexStatus")
+		end,
+	},
+	{
+		key = "I",
+		desc = "Reconstruir índice local SAP",
+		action = function()
+			vim.cmd("SapIndexBuild")
+		end,
+	},
+	{
 		key = "C",
 		desc = "Abrir vista CDS / objeto RAP (ddls, bdef…)",
 		action = function()
@@ -122,6 +143,20 @@ local MENU = {
 		desc = "Órdenes de transporte (mías)",
 		action = function()
 			require("sap-nvim.core.cts").list_transports()
+		end,
+	},
+	{
+		key = "D",
+		desc = "Dumps del sistema (ADT/ST22, solo lectura)",
+		action = function()
+			vim.cmd("SapDumps")
+		end,
+	},
+	{
+		key = "l",
+		desc = "Logs locales de la sesión",
+		action = function()
+			vim.cmd("SapLogs")
 		end,
 	},
 	{
@@ -458,5 +493,7 @@ function M.setup(opts)
 		end)
 	end
 end
+
+M._menu = MENU
 
 return M

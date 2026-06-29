@@ -31,7 +31,7 @@ Lanzar con `isolation: worktree` (copia aislada del repo) y pasarle:
 | F15 | BAdIs / enhancements | pendiente |
 | F17 | Autocompletado ADT | pendiente (baja prioridad) |
 | F18 | Depurador (nvim-dap ⇄ ADT) | contrato de API mapeado; pendiente spike + adaptador |
-| F19 | Revisiones / comparar versiones | pendiente |
+| F19 | Revisiones / comparar versiones | parcial: listado/probes/diff vs revision |
 | F20 | CDS preview | pendiente |
 
 F0–F11, F13, F14, F16 ya implementados (ver SDD y `PLAN-MAESTRO.md §1`).

@@ -29,11 +29,11 @@
 |14|abapfs.runInGui|`:SapRunTransaction`/SAP GUI|✅|
 |15|abapfs.runInEmbeddedGui|(webview)|N/A (abrimos navegador)|
 |16|abapfs.runTransaction|`:SapRunTransaction`/`<leader>ax`|✅|
-|17|abapfs.quickfix|—|➕ **code actions / quick fixes (alto valor)**|
+|17|abapfs.quickfix|`:SapQuickfix`/`:SapQuickfixPreview`|~ **quick fixes locales/ADT detectados; falta aplicar edits ADT remotos completos**|
 |18|abapfs.changeInclude|—|➕ **fijar programa principal del include (arregla `gd` cross-include)**|
 |19|abapfs.showdocu|hover (`K`) parcial|~ (ABAP Doc completo)|
 |20|abapfs.showObject|`source.open`/`gd`|✅|
-|21|abapfs.extractMethod|—|➕ refactor extract method|
+|21|abapfs.extractMethod|`:SapRefactor`|✅|
 |22|abapfs.cleanCode|pretty printer (`<leader>aF`)|~ (clean code/cleaner)|
 |23|abapfs.setupCleaner|—|⏸|
 
@@ -43,7 +43,7 @@
 |24|abapfs.unittest|`:SapAUnit`/`<leader>aT`|✅|
 |25|abapfs.createtestinclude|—|➕ crear include de test|
 |26|abapfs.atcChecks|`<leader>aK` (ATC run)|✅|
-|27-37|atcIgnore/atcRefresh/atcRequestExemption(+All)/atcShowDocumentation/atcAutoRefreshOn/Off/atcDocHistoryFwd/Back/atcFilterExemptOn/Off|—|➕ **gestión completa de ATC (worklist, exenciones, navegación)**|
+|27-37|atcIgnore/atcRefresh/atcRequestExemption(+All)/atcShowDocumentation/atcAutoRefreshOn/Off/atcDocHistoryFwd/Back/atcFilterExemptOn/Off|`:SapQuality`/`:SapAtcPanel`|~ **ATC run + panel; falta worklist/exenciones/documentación completa**|
 
 ## Favoritos / organización (3)
 |38|abapfs.addfavourite|—|➕ favoritos|
@@ -54,10 +54,10 @@
 |41|abapfs.refreshHierarchy|`gh`/`gH` type hierarchy|✅|
 |42|abapfs.pickObject|`:SapSearch` parcial|~ (picker de objeto)|
 |43|abapfs.pickAdtRootConn|—|⏸ (UI)|
-|44|abapfs.runClass|—|➕ ejecutar clase (F9)|
+|44|abapfs.runClass|`:SapRunClass`/`<leader>aE`|✅|
 
 ## Revisiones / diff / merge (14)
-|45-58|clearScmGroup/filterScmGroup/openrevstate/opendiff/opendiffNormalized/togglediffNormalize/prevRevLeft/nextRevLeft/prevRevRight/nextRevRight/changequickdiff/remotediff/comparediff/openMergeEditor|`:SapDiff` (local vs activo)|~ → ➕ **revisiones de servidor + comparar/normalizar/merge** (comparediff/remotediff alto valor; resto nicho)|
+|45-58|clearScmGroup/filterScmGroup/openrevstate/opendiff/opendiffNormalized/togglediffNormalize/prevRevLeft/nextRevLeft/prevRevRight/nextRevRight/changequickdiff/remotediff/comparediff/openMergeEditor|`:SapDiff`, `:SapRevisions`|~ local vs activo + historial ADT; falta diff entre dos revisiones, normalizar y merge|
 
 ## Transportes (13)
 |59|abapfs.transportObjectDiff|—|⏸|
@@ -78,7 +78,7 @@
 |72-85|refreshrepos/revealPackage/openRepo/pullRepo/createRepo/unlinkRepo/registerSCM/refreshAbapGit/pullAbapGit/pushAbapGit/addAbapGit/removeAbapGit/resetAbapGitPwd/switchBranch|`:SapCheckout` (solo bajar)|➕ **abapGit completo (sapcli `abapgit`/`gcts`): pull/push/repos/branch**|
 
 ## Trazas / diagnóstico (6)
-|86-91|refreshTraces/deleteTrace/showDump/refreshDumps/activateCommLog/deactivateCommLog|—|⏸ (trazas SAT / dumps ST22 — nicho)|
+|86-91|refreshTraces/deleteTrace/showDump/refreshDumps/activateCommLog/deactivateCommLog|`:SapDumps`/`:SapST22`|~ dumps ST22/ADT hecho; trazas y comm log pendientes|
 
 ## Datos / utilidades (4)
 |—|abapfs.tableContents|`:SapTableData`/`:SapData`|✅|
@@ -103,15 +103,15 @@ configureFeeds/refreshFeedInbox/viewFeedEntry/markAllFeedsRead/markFeedFolderRea
 ## Resumen (de 92)
 - **✅ hecho:** ~26 (núcleo de edición, navegación, transacciones, transportes, paquetes, AUnit/ATC-run, datos, crear/borrar, activar).
 - **~ parcial/mejorar:** ~9 (showdocu, cleanCode, manageTextElements, pickObject, transportUser, diff→revisiones, rapGen). _(búsqueda en vivo + filtro de tipo: hecha ✅)_
-- **➕ FALTA (a implementar):** ~20 núcleo: quickfix, changeInclude, extractMethod, runClass, createtestinclude, gestión ATC, favoritos, comparediff/remotediff/revisiones, abapGit (pull/push/repos/branch), transportAddUser/openTransportObject, exportToJson, showdocu completo.
-- **⏸ nicho/diferido:** ~30 (feeds, trazas, dumps, blame, S4H copilot, GUI embebida, walkthrough, setupCleaner, transportObjectDiff/openLocation/RunAtc/Revision, clearPassword/changePassword).
+- **➕ FALTA (a implementar):** núcleo: changeInclude, createtestinclude, gestión ATC avanzada, favoritos, comparediff/remotediff/revisiones, abapGit (pull/push/repos/branch), transportAddUser/openTransportObject, exportToJson, showdocu completo.
+- **⏸ nicho/diferido:** feeds, trazas/comm log, blame, S4H copilot, GUI embebida, walkthrough, setupCleaner, transportObjectDiff/openLocation/RunAtc/Revision, clearPassword/changePassword.
 - **N/A:** runInEmbeddedGui (webview), showWalkThrough.
 
 ## Orden de ejecución para "idéntico" (núcleo primero)
 1. **changeInclude** → fijar programa principal del include (arregla `gd` cross-include). [BUG]
 2. ~~**search en vivo** (searchObject as-you-type)~~ ✅ hecho — `<C-f>` filtra por tipo (`&objectType`).
-3. **quickfix / code actions** (fixProposals + fixEdits).
-4. **extractMethod**, **runClass**, **createtestinclude**.
+3. **quickfix / code actions ADT remotos** (fixProposals + fixEdits completos).
+4. **createtestinclude**.
 5. **gestión ATC** (exenciones, navegación, refresh).
 6. **revisiones/comparediff/remotediff** (versiones de servidor).
 7. **abapGit** (pull/push/repos/branch vía sapcli).

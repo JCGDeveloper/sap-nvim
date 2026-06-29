@@ -184,6 +184,9 @@ Al ejecutar una transacción (`<leader>ax`, dashboard `x`) o un programa (`<lead
 - **`:SapQuality`** — panel profesional de calidad. Acepta `atc object <OBJ>`,
   `atc package <PAQUETE>`, `atc transport <ORDEN>` y `aunit object <CLASE>` cuando `sapcli`/ADT
   lo permiten. Guarda historial local en **`:SapQualityHistory`**.
+- **`<leader>aqw`** (`:SapAtcWorklist`) — worklist ATC desde quickfix/historial con filtros
+  `all/errors/warnings/info`. En el panel: `o` salta al hallazgo, `c` vuelve a quickfix, `?`/`K`
+  muestra ayuda del check si el hallazgo trae identificador o URL.
 - El panel puede servir como helper de bloqueo para release/activate, pero solo reporta: no libera
   transportes ni activa objetos. Configurable con `quality.release_activate_helper`,
   `quality.block_release_on_errors` y `quality.block_activate_on_errors`.
@@ -191,7 +194,22 @@ Al ejecutar una transacción (`<leader>ax`, dashboard `x`) o un programa (`<lead
 
 ---
 
-## 11. Depurador
+## 11. Home, UX y sistema
+
+- **`<leader>aW`** (`:SapHome`) — dashboard principal de `home.lua` con accesos a repository,
+  search, transports, quality, new, doctor, docs, dumps y logs.
+- **`:SapLogs`** — visor de logs locales de la sesion. **`:SapLogsExport [archivo]`** exporta JSONL
+  sin secretos; **`:SapLogsClear`** limpia la sesion actual.
+- **`<leader>asD`** (`:SapDumps`) — visor de dumps del sistema por ADT cuando el backend lo expone.
+  Es solo lectura y tiene fallback a **`:SapST22`**. **`:SapDumpsRoutes`** muestra las rutas ADT
+  probadas y sus codigos HTTP.
+- **`<leader>aV`** (`:SapRevisions`) — historial de revisiones/versiones del objeto actual por ADT.
+  Es solo lectura. En el panel: `d` abre diff local contra la revision, `a` compara version activa
+  contra revision, `R` muestra las rutas ADT probadas.
+
+---
+
+## 12. Depurador
 
 - **`<leader>ad`** — iniciar sesión de depuración ABAP (vsp). Stepping estándar con `nvim-dap`:
   `<leader>db/dB/dc/di/do/dO/dr/dt/du/de` y `F5/F10/F11/F12`. Breakpoints visibles en el margen (`●`).
@@ -199,7 +217,7 @@ Al ejecutar una transacción (`<leader>ax`, dashboard `x`) o un programa (`<lead
 
 ---
 
-## 12. Diagnóstico
+## 13. Diagnóstico
 
 `:SapDoctor` (chequeo general) · `:SapStatus` (conexión) · `:SapDiscovery [filtro]` (endpoints ADT
 que SÍ existen en tu sistema) · `:SapDaemonTest` (conexión persistente) · `:SapCompleteDebug`

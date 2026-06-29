@@ -80,12 +80,14 @@ sap-nvim atajos:
   <leader>aK   Quality panel (ATC)
   <leader>aqp  Quality panel (ATC + AUnit objeto)
   <leader>aqh  Historial local de calidad
+  <leader>aqw  Worklist ATC con filtros (:SapAtcWorklist)
   <leader>ai   Objetos inactivos
   <leader>ad   Debuggear (vsp)
   <leader>db   Limpiar breakpoints del objeto/buffer actual (:SapDapClearBreakpoints)
   <leader>dB   Limpiar breakpoints raíz + includes relacionados (:SapDapClearBreakpointsRecursive)
-  <leader>aR   Ejecutar programa/report en WebGUI (:SapRun)
+ <leader>aR   Ejecutar programa/report en WebGUI (:SapRun)
   <leader>e    Repository Explorer SAP del objeto/paquete actual (:SapRepositoryToggle)
+  <leader>aW   SAP Home dashboard (:SapHome)
 
   OBJETOS:
   <leader>aa   Activar SOLO objeto actual (:SapActivate)
@@ -100,6 +102,9 @@ sap-nvim atajos:
   <leader>aX   Borrar objeto remoto (:SapDelete, desactivado salvo opt-in)
   <leader>aw   Where-used list → quickfix
   <leader>aD   Diff local vs sistema SAP (:SapDiff)
+  <leader>aV   Revisiones/versiones ADT (:SapRevisions)
+  :SapRevisionRoutes  Probar rutas ADT de revisiones (solo lectura)
+  :SapRevisionDiff    Diff local vs revision si ADT devuelve fuente
 
   INTELIGENCIA ADT (como VSCode):
   (auto)       Completado al escribir clase/metodo + params al abrir '(' (blink)
@@ -134,6 +139,8 @@ sap-nvim atajos:
   <leader>afs  Buscar objeto en sistema (:SapSearch)
   <leader>afb  Explorar paquete (:SapBrowse)
   <leader>afr  Repository Explorer persistente (:SapRepositoryToggle)
+  <leader>alg  Logs locales de sesión (:SapLogs)
+  <leader>asD  Dumps del sistema (:SapDumps, solo lectura)
   <leader>ack  Checkout paquete completo (:SapCheckout)
 
   TRANSPORTES:
@@ -148,7 +155,7 @@ sap-nvim atajos:
   <leader>aso  Objeto en SAP GUI
   <leader>asc  Configurar conexiones (:SapSetup, formato kubeconfig)
   <leader>asd  Diagnostico SAP solo-lectura (:SapDoctor)
-  <leader>asi  Info conexion activa (:SapStatus)
+ <leader>asi  Info conexion activa (:SapStatus)
     ]],
 			vim.log.levels.INFO
 		)
@@ -255,6 +262,7 @@ sap-nvim atajos:
 		{ "<leader>ag", "<cmd>SapGotoDef<cr>", "Ir a definición" },
 		{ "<leader>aw", "<cmd>SapWhereUsed<cr>", "Where-used" },
 		{ "<leader>ar", "<cmd>SapRefactor<cr>", "Refactors offline con preview" },
+		{ "<leader>aV", "<cmd>SapRevisions<cr>", "Revisiones/versiones ADT" },
 		{ "<leader>ai", "<cmd>SapInactive<cr>", "Objetos inactivos" },
 		{ "<leader>an", "<cmd>SapNew<cr>", "Nuevo objeto en SAP" },
 		{ "<leader>aT", "<cmd>SapAUnit<cr>", "Tests unitarios (AUnit)" },
@@ -275,6 +283,9 @@ sap-nvim atajos:
 		{ "<leader>avd", "<cmd>SapTableData<cr>", "Ver datos de tabla" },
 		{ "<leader>avq", "<cmd>SapData<cr>", "Ejecutar OpenSQL" },
 		{ "<leader>e", "<cmd>SapRepositoryToggle<cr>", "Repository Explorer SAP" },
+		{ "<leader>aW", "<cmd>SapHome<cr>", "SAP Home dashboard" },
+		{ "<leader>alg", "<cmd>SapLogs<cr>", "Logs locales de sesión" },
+		{ "<leader>asD", "<cmd>SapDumps<cr>", "Dumps del sistema" },
 	}
 
 	local cds_maps = {

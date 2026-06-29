@@ -32,8 +32,8 @@
 - [—] **Inlay hints** — N/A: la extensión ABAP de VSCode no los implementa
 - [—] **Code lens** — N/A: la extensión ABAP de VSCode no los implementa
 - [ ] **Documentación completa en el item** (resolve perezoso con doc del método) — bloque mayor
-- [ ] **Quick fixes / code actions** — la *evaluación* funciona (ADT `quickfixes`); *aplicar*
-  (deltas de texto) es bloque mayor
+- [~] **Quick fixes / code actions** — quick fixes locales y preview funcionan; falta aplicar
+  edits ADT remotos completos desde `quickfixes/edits`
 - [ ] **Rename / refactor** (renombrar con todos los usos) — bloque mayor + riesgo (ADT rename)
 - [ ] **Call hierarchy / type hierarchy** — bloque mayor (ADT type hierarchy)
 
@@ -52,11 +52,11 @@
 - [x] **Transportes** (listar/crear/liberar) — `core/transport.lua`
 - [x] **Checkout** de paquete a disco — `:SapCheckout`
 - [x] **Navegación entre includes** (PERFORM→FORM, variable→decl) + volver con `-`
-- [~] **Diff / comparar** con el sistema — `:SapDiff` (local vs activo; falta comparar revisiones)
-- [ ] **Revisiones / historial de versiones** (comparar versiones) — ADT revisions (pendiente)
-- [ ] **Árbol del repositorio** navegable (paquetes→objetos) — `briefs/F12` (pendiente)
+- [~] **Diff / comparar** con el sistema — `:SapDiff` local vs activo; `:SapRevisions` inicia diff contra revision cuando ADT devuelve fuente
+- [~] **Revisiones / historial de versiones** — `:SapRevisions` / `:SapRevisionRoutes`; pendiente validar todos los backends ADT y diff entre dos revisiones
+- [x] **Árbol del repositorio** navegable (paquetes→objetos) — `:SapRepositoryToggle` / `<leader>e`
 - [ ] **BAdIs / enhancements** — `briefs/F15` (pendiente)
-- [ ] **Debugging** (breakpoints, step, variables) — `briefs/F18`, nvim-dap (pendiente, mayor esfuerzo)
+- [x] **Debugging** (breakpoints, step, variables) — cockpit estilo SAP GUI + nvim-dap/ADT
 - [ ] **CDS**: editar + preview de datos — `briefs/F20` (parcial; editar sí, preview pendiente)
 - [~] **Abrir en SAP GUI / transacción** — `adt.open_gui` (parcial)
 
@@ -75,7 +75,7 @@
 - [x] **Formateo al guardar** (format-on-save) — opcional: `setup({ format = { on_save = true } })`
 - [ ] **Formateo de selección / rango** — ADT prettyprinter soporta rango (pendiente)
 - [ ] **Semantic highlighting** (colorear según el análisis del servidor, no solo treesitter) — pendiente
-- [ ] **Resaltar ocurrencias** del símbolo bajo el cursor — pendiente
+- [x] **Resaltar ocurrencias** del símbolo bajo el cursor — CursorHold local
 
 ## D. Innovaciones (NO están en VSCode) — pedidas por el usuario
 

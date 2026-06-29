@@ -28,6 +28,15 @@ local function json_decode(s)
   return vim.fn.json_decode(s)
 end
 
+local current_object
+local worklist_state = {
+  source = "auto",
+  filter = "all",
+  items = {},
+  filtered = {},
+  title = "SAP ATC Worklist",
+}
+
 local function state_dir()
   return vim.fn.stdpath("state") .. "/sap-nvim"
 end
@@ -74,6 +83,58 @@ local function show(bufname, lines)
   return b
 end
 
+local function landing_lines(scope, reason)
+  local lines = {
+    "SAP Quality",
+    "",
+    "Panel de calidad local: ATC, AUnit, quickfix e historial.",
+    "",
+  }
+  if scope then
+    lines[#lines + 1] = string.format("Objeto  : %s [%s]", scope.name or "?", scope.group or "?")
+    if scope.package and scope.package ~= "" then lines[#lines + 1] = "Paquete : " .. scope.package end
+    lines[#lines + 1] = ""
+  elseif reason and reason ~= "" then
+    lines[#lines + 1] = "Estado  : " .. reason
+    lines[#lines + 1] = ""
+  end
+  lines[#lines + 1] = "Acciones"
+  lines[#lines + 1] = "  a  ATC del objeto actual"
+  lines[#lines + 1] = "  p  ATC del paquete del objeto actual"
+  lines[#lines + 1] = "  w  Worklist ATC desde quickfix/historial"
+  lines[#lines + 1] = "  u  AUnit del objeto actual"
+  lines[#lines + 1] = "  h  Historial local"
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "Comandos"
+  lines[#lines + 1] = "  :SapQuality atc object <OBJ>"
+  lines[#lines + 1] = "  :SapQuality atc package <PAQUETE>"
+  lines[#lines + 1] = "  :SapQuality atc transport <ORDEN>"
+  lines[#lines + 1] = "  :SapAtcWorklist [quickfix|history] [all|errors|warnings|info]"
+  lines[#lines + 1] = "  :SapAtcFilter <all|errors|warnings|info>"
+  lines[#lines + 1] = "  :SapAtcHelp"
+  lines[#lines + 1] = "  :SapQuality aunit object <CLASE>"
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "q cierra"
+  return lines
+end
+
+function M.open_panel(reason)
+  local scope, err = current_object()
+  local buf = show("sap-quality://panel", landing_lines(scope, reason or err))
+  vim.keymap.set("n", "a", function() M.run_atc("") end, { buffer = buf, desc = "Quality: ATC objeto" })
+  vim.keymap.set("n", "p", function()
+    local obj = current_object()
+    if obj and obj.package and obj.package ~= "" then
+      M.run_atc("package " .. obj.package)
+    else
+      M.open_panel("El objeto actual no tiene paquete conocido.")
+    end
+  end, { buffer = buf, desc = "Quality: ATC paquete" })
+  vim.keymap.set("n", "u", function() M.run_aunit("") end, { buffer = buf, desc = "Quality: AUnit objeto" })
+  vim.keymap.set("n", "w", function() M.show_worklist("") end, { buffer = buf, desc = "Quality: worklist ATC" })
+  return buf
+end
+
 local function severity_type(sev)
   sev = tostring(sev or ""):upper()
   if sev:match("^W") or sev == "WARNING" then return "W" end
@@ -81,7 +142,134 @@ local function severity_type(sev)
   return "E"
 end
 
-local function current_object()
+local function severity_label(sev)
+  sev = severity_type(sev)
+  if sev == "W" then return "warning" end
+  if sev == "I" then return "info" end
+  return "error"
+end
+
+local filter_aliases = {
+  a = "all",
+  all = "all",
+  e = "errors",
+  err = "errors",
+  error = "errors",
+  errors = "errors",
+  w = "warnings",
+  warn = "warnings",
+  warning = "warnings",
+  warnings = "warnings",
+  i = "info",
+  inf = "info",
+  info = "info",
+  infos = "info",
+}
+
+local function normalize_filter(filter)
+  filter = trim(filter):lower()
+  if filter == "" then return "all" end
+  return filter_aliases[filter]
+end
+
+local function severity_matches_filter(sev, filter)
+  filter = normalize_filter(filter) or "all"
+  sev = severity_type(sev)
+  if filter == "all" then return true end
+  if filter == "errors" then return sev == "E" end
+  if filter == "warnings" then return sev == "W" end
+  if filter == "info" then return sev == "I" end
+  return true
+end
+
+local function extract_url(text)
+  local url = tostring(text or ""):match("(https?://%S+)")
+  if not url then return nil end
+  return (url:gsub("[%)%]%.,;]+$", ""))
+end
+
+local function extract_check_id(text)
+  text = tostring(text or "")
+  return text:match("[Cc]heck%s*[Ii][Dd]%s*[:=]%s*([%w_./:-]+)")
+    or text:match("[Aa][Tt][Cc]%s*[Cc]heck%s*[:=]%s*([%w_./:-]+)")
+    or text:match("[Cc]heck%s*[:=]%s*([%w_./:-]+)")
+    or text:match("%[([%w_./:-]+)%]")
+end
+
+local function item_user_data(item)
+  local data = type(item) == "table" and item.user_data or nil
+  return type(data) == "table" and data or {}
+end
+
+local function check_meta(item)
+  local data = item_user_data(item)
+  local text = tostring((type(item) == "table" and item.text) or "")
+  return {
+    check_id = data.check_id or data.check or extract_check_id(text),
+    help_url = data.help_url or data.url or extract_url(text),
+    help_text = data.help_text or data.documentation or data.long_text,
+  }
+end
+
+local function attach_check_meta(item, meta)
+  if not item then return end
+  meta = meta or {}
+  local extracted = check_meta(item)
+  local data = item_user_data(item)
+  data.check_id = data.check_id or meta.check_id or extracted.check_id
+  data.help_url = data.help_url or meta.help_url or extracted.help_url
+  data.help_text = data.help_text or meta.help_text or extracted.help_text
+  if data.check_id or data.help_url or data.help_text then item.user_data = data end
+end
+
+local function serialized_finding(item)
+  if type(item) ~= "table" then return nil end
+  local meta = check_meta(item)
+  return {
+    filename = item.filename or item.module or "",
+    bufnr = item.bufnr,
+    lnum = tonumber(item.lnum) or 0,
+    col = tonumber(item.col) or 1,
+    type = severity_type(item.type),
+    text = tostring(item.text or ""),
+    check_id = meta.check_id,
+    help_url = meta.help_url,
+    help_text = meta.help_text,
+  }
+end
+
+local function normalize_finding(item, qf_index)
+  local f = serialized_finding(item)
+  if not f then return nil end
+  f.qf_index = qf_index
+  if f.check_id or f.help_url or f.help_text then
+    f.user_data = {
+      check_id = f.check_id,
+      help_url = f.help_url,
+      help_text = f.help_text,
+    }
+  end
+  return f
+end
+
+function M._serialize_findings(qf)
+  local findings = {}
+  for _, item in ipairs(qf or {}) do
+    local f = serialized_finding(item)
+    if f then findings[#findings + 1] = f end
+  end
+  return findings
+end
+
+function M._filter_findings(items, filter)
+  local out = {}
+  for _, item in ipairs(items or {}) do
+    if severity_matches_filter(item.type, filter) then out[#out + 1] = item end
+  end
+  return out
+end
+
+current_object = function()
   local bufnr = vim.api.nvim_get_current_buf()
   local filename = vim.api.nvim_buf_get_name(bufnr)
   local meta = vim.b[bufnr].sap_obj or {}
@@ -89,6 +277,7 @@ local function current_object()
   local name = meta.name or objtype.name(filename)
   name = tostring(name or ""):upper()
   if name == "" then return nil, "Guarda o abre un objeto SAP primero." end
+  if not group or group == "" then return nil, "No puedo deducir el tipo SAP del objeto actual." end
   return {
     scope = "object",
     name = name,
@@ -126,6 +315,7 @@ function M._parse_atc_output(lines, opts)
   opts = opts or {}
   local qf, context = {}, nil
   local filename = opts.filename or vim.api.nvim_buf_get_name(0)
+  local pending_meta, last_item = {}, nil
   for _, raw in ipairs(lines or {}) do
     local line = trim(raw)
     if line ~= "" then
@@ -133,6 +323,18 @@ function M._parse_atc_output(lines, opts)
       if ctx then
         context = trim(ctx)
       else
+        local meta_key, meta_value = line:match("^([%w%s]+):%s*(.+)$")
+        meta_key = meta_key and trim(meta_key):lower() or nil
+        if meta_key and (meta_key == "check" or meta_key == "check id" or meta_key == "atc check") then
+          pending_meta.check_id = trim(meta_value)
+        elseif meta_key and (meta_key == "help" or meta_key == "documentation" or meta_key == "doc"
+            or meta_key == "long text" or meta_key == "longtext") then
+          local target = last_item and item_user_data(last_item) or pending_meta
+          local url = extract_url(meta_value)
+          if url then target.help_url = target.help_url or url end
+          target.help_text = target.help_text or trim(meta_value)
+          if last_item then last_item.user_data = target end
+        else
         local lnum, col, sev, msg =
           line:match("^[^:]+:(%d+):(%d+):%s*([EWIe wi][A-Za-z]*):%s*(.+)$")
         if not lnum then
@@ -144,15 +346,22 @@ function M._parse_atc_output(lines, opts)
           lnum, col = 0, 1
         end
         if msg then
-          qf[#qf + 1] = {
+          local item = {
             filename = filename,
             lnum = tonumber(lnum) or 0,
             col = tonumber(col) or 1,
             type = severity_type(sev),
             text = (context and (context .. ": ") or "") .. trim(msg),
           }
+          attach_check_meta(item, pending_meta)
+          qf[#qf + 1] = item
+          last_item = item
         elseif line:match("[Ee]rror") or line:match("[Ww]arning") or line:match("[Ii]nfo") then
-          qf[#qf + 1] = { filename = filename, lnum = 0, col = 1, type = "E", text = line }
+          local item = { filename = filename, lnum = 0, col = 1, type = "E", text = line }
+          attach_check_meta(item, pending_meta)
+          qf[#qf + 1] = item
+          last_item = item
+        end
         end
       end
     end
@@ -173,6 +382,246 @@ end
 local function set_qf(qf, title)
   vim.fn.setqflist({}, "r", { items = qf or {}, title = title })
   if #(qf or {}) > 0 then pcall(vim.cmd, "copen") end
+end
+
+local function qf_item(item)
+  local f = serialized_finding(item)
+  if not f then return nil end
+  local out = {
+    filename = f.filename,
+    bufnr = f.bufnr,
+    lnum = f.lnum,
+    col = f.col,
+    type = f.type,
+    text = f.text,
+  }
+  if f.check_id or f.help_url or f.help_text then
+    out.user_data = {
+      check_id = f.check_id,
+      help_url = f.help_url,
+      help_text = f.help_text,
+    }
+  end
+  return out
+end
+
+local function qf_items(items)
+  local out = {}
+  for _, item in ipairs(items or {}) do
+    local q = qf_item(item)
+    if q then out[#out + 1] = q end
+  end
+  return out
+end
+
+local function current_quickfix_items()
+  local out = {}
+  for i, item in ipairs(vim.fn.getqflist()) do
+    local f = normalize_finding(item, i)
+    if f then out[#out + 1] = f end
+  end
+  return out
+end
+
+local function latest_history_items()
+  local entries = read_history()
+  for i = #entries, 1, -1 do
+    local e = entries[i]
+    if type(e.findings) == "table" and #e.findings > 0 then
+      local out = {}
+      for j, item in ipairs(e.findings) do
+        if type(item) == "table" then
+          local enriched = vim.tbl_extend("force", item, {
+            user_data = {
+              check_id = item.check_id,
+              help_url = item.help_url,
+              help_text = item.help_text,
+            },
+          })
+          local f = normalize_finding(enriched, j)
+          if f then out[#out + 1] = f end
+        end
+      end
+      return out, e
+    end
+  end
+  return {}, nil
+end
+
+local function parse_worklist_args(args)
+  local source, filter = nil, nil
+  for token in tostring(args or ""):gmatch("%S+") do
+    local t = token:lower()
+    if t == "qf" or t == "quickfix" or t == "current" then
+      source = "quickfix"
+    elseif t == "hist" or t == "history" or t == "historical" then
+      source = "history"
+    elseif normalize_filter(t) then
+      filter = normalize_filter(t)
+    end
+  end
+  return source or "auto", filter
+end
+
+local function collect_worklist_items(source)
+  if source == "history" then
+    local items, entry = latest_history_items()
+    return items, "history", entry
+  end
+  local qf = current_quickfix_items()
+  if source == "quickfix" or #qf > 0 then return qf, "quickfix", nil end
+  local items, entry = latest_history_items()
+  return items, "history", entry
+end
+
+function M._worklist_lines(items, opts)
+  opts = opts or {}
+  local filter = normalize_filter(opts.filter) or "all"
+  local filtered = M._filter_findings(items, filter)
+  local source = opts.source or "quickfix"
+  local lines = {
+    "SAP ATC Worklist",
+    "",
+    "Source   : " .. source,
+    string.format("Filter   : %s (%d/%d)", filter, #filtered, #(items or {})),
+    "Commands : <CR>/o jump · c quickfix · ? help · a/e/w/i filter · H history · q close",
+    "",
+  }
+  local rows = {}
+  if #filtered == 0 then
+    lines[#lines + 1] = "Sin hallazgos para este filtro."
+  else
+    lines[#lines + 1] = "Hallazgos"
+    for i, item in ipairs(filtered) do
+      local meta = check_meta(item)
+      local loc = (item.filename and item.filename ~= "" and vim.fn.fnamemodify(item.filename, ":t") or "?")
+        .. ":" .. tostring(item.lnum or 0) .. ":" .. tostring(item.col or 1)
+      local check = meta.check_id and (" [" .. meta.check_id .. "]") or ""
+      local help = (meta.help_url or meta.help_text) and " ?" or ""
+      lines[#lines + 1] = string.format(
+        "%3d. %s %-7s %-24s %s%s%s",
+        i,
+        severity_type(item.type),
+        severity_label(item.type),
+        loc,
+        (item.text or ""):gsub("%s+", " "),
+        check,
+        help
+      )
+      rows[#lines] = i
+    end
+  end
+  return lines, rows, filtered
+end
+
+local function worklist_index_from_cursor()
+  local buf = vim.api.nvim_get_current_buf()
+  local ok, rows = pcall(function() return vim.b[buf].sap_quality_worklist_rows end)
+  if not ok or type(rows) ~= "table" then return nil end
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+  return rows[line]
+end
+
+local function selected_worklist_item(index)
+  index = tonumber(index) or worklist_index_from_cursor()
+  if index and worklist_state.filtered[index] then return worklist_state.filtered[index], index end
+  local info = vim.fn.getqflist({ idx = 0, items = 0 })
+  local qf_index = tonumber(info.idx) or 0
+  local item = info.items and info.items[qf_index]
+  if item then return normalize_finding(item, qf_index), qf_index end
+  return nil, nil
+end
+
+local function put_worklist_in_quickfix(open)
+  local items = qf_items(worklist_state.filtered)
+  vim.fn.setqflist({}, "r", { items = items, title = worklist_state.title })
+  if open and #items > 0 then pcall(vim.cmd, "copen") end
+  return items
+end
+
+function M.open_worklist_quickfix()
+  local items = put_worklist_in_quickfix(true)
+  if #items == 0 then notify("No hay hallazgos en la worklist filtrada.", vim.log.levels.INFO) end
+end
+
+function M.open_worklist_item(index)
+  local _, idx = selected_worklist_item(index)
+  if not idx then return notify("Selecciona un hallazgo de la worklist.", vim.log.levels.WARN) end
+  local items = put_worklist_in_quickfix(false)
+  if #items == 0 then return notify("No hay hallazgos navegables.", vim.log.levels.INFO) end
+  pcall(vim.cmd, "cc " .. tostring(idx))
+end
+
+function M._finding_help_lines(item)
+  local meta = check_meta(item or {})
+  local lines = {
+    "ATC Check Help",
+    "",
+    "Severity : " .. severity_label((item or {}).type),
+    "Location : " .. tostring((item or {}).filename or "?") .. ":" .. tostring((item or {}).lnum or 0),
+    "Message  : " .. tostring((item or {}).text or ""),
+  }
+  if meta.check_id then lines[#lines + 1] = "Check   : " .. meta.check_id end
+  lines[#lines + 1] = ""
+  if meta.help_url then lines[#lines + 1] = "URL     : " .. meta.help_url end
+  if meta.help_text then lines[#lines + 1] = "Text    : " .. meta.help_text end
+  if not meta.help_url and not meta.help_text and not meta.check_id then
+    lines[#lines + 1] = "Este hallazgo no trae documentación local parseable."
+  end
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "q cierra"
+  return lines
+end
+
+function M.show_check_help(args)
+  local item = selected_worklist_item(tonumber(trim(args or "")))
+  if not item then return notify("No hay hallazgo ATC seleccionado.", vim.log.levels.WARN) end
+  show("sap-atc-help://check", M._finding_help_lines(item))
+end
+
+local function render_worklist(items, source, filter, title)
+  filter = normalize_filter(filter) or "all"
+  local lines, rows, filtered = M._worklist_lines(items, { source = source, filter = filter })
+  worklist_state = {
+    source = source,
+    filter = filter,
+    items = items or {},
+    filtered = filtered or {},
+    title = title or ("SAP ATC Worklist: " .. source .. " " .. filter),
+  }
+  local buf = show("sap-atc-worklist://" .. source .. "/" .. filter, lines)
+  vim.b[buf].sap_quality_worklist_rows = rows
+  vim.keymap.set("n", "<CR>", function() M.open_worklist_item() end, { buffer = buf, desc = "ATC: ir al hallazgo" })
+  vim.keymap.set("n", "o", function() M.open_worklist_item() end, { buffer = buf, desc = "ATC: ir al hallazgo" })
+  vim.keymap.set("n", "c", M.open_worklist_quickfix, { buffer = buf, desc = "ATC: enviar a quickfix" })
+  vim.keymap.set("n", "?", function() M.show_check_help("") end, { buffer = buf, desc = "ATC: ayuda del check" })
+  vim.keymap.set("n", "K", function() M.show_check_help("") end, { buffer = buf, desc = "ATC: ayuda del check" })
+  vim.keymap.set("n", "a", function() M.filter_worklist("all") end, { buffer = buf, desc = "ATC: todos" })
+  vim.keymap.set("n", "e", function() M.filter_worklist("errors") end, { buffer = buf, desc = "ATC: errores" })
+  vim.keymap.set("n", "w", function() M.filter_worklist("warnings") end, { buffer = buf, desc = "ATC: warnings" })
+  vim.keymap.set("n", "i", function() M.filter_worklist("info") end, { buffer = buf, desc = "ATC: info" })
+  vim.keymap.set("n", "H", function() M.show_worklist("history " .. filter) end, { buffer = buf, desc = "ATC: historial" })
+  return buf
+end
+
+function M.show_worklist(args)
+  local source, filter = parse_worklist_args(args)
+  filter = filter or worklist_state.filter or "all"
+  local items, actual_source, history_entry = collect_worklist_items(source)
+  local title
+  if history_entry and history_entry.target then
+    title = "SAP ATC Worklist: history " .. tostring(history_entry.target)
+  end
+  return render_worklist(items, actual_source, filter, title)
+end
+
+function M.filter_worklist(args)
+  local filter = normalize_filter(args or "")
+  if not filter then return notify("Filtro ATC no reconocido: " .. tostring(args), vim.log.levels.WARN) end
+  if worklist_state.items and #worklist_state.items > 0 then
+    return render_worklist(worklist_state.items, worklist_state.source or "quickfix", filter)
+  end
+  return M.show_worklist(filter)
 end
 
 local function panel_lines(run)
@@ -204,7 +653,7 @@ local function panel_lines(run)
     end
   end
   lines[#lines + 1] = ""
-  lines[#lines + 1] = "o abre quickfix · h historial · q cierra"
+  lines[#lines + 1] = "w worklist · o abre quickfix · h historial · q cierra"
   return lines
 end
 
@@ -248,8 +697,10 @@ local function finish_run(run)
     info = run.summary.info,
     detail = run.detail,
     command = run.command,
+    findings = M._serialize_findings(run.qf),
   })
-  show("sap-quality://" .. (run.kind or "run"), panel_lines(run))
+  local buf = show("sap-quality://" .. (run.kind or "run"), panel_lines(run))
+  vim.keymap.set("n", "w", function() M.show_worklist("quickfix") end, { buffer = buf, desc = "Quality: worklist" })
   notify(string.format(
     "%s %s: %d error(s), %d warning(s)",
     run.kind or "Quality",
@@ -289,7 +740,7 @@ end
 
 function M.run_atc(args)
   local scope, err = parse_scope(args or "", "package")
-  if not scope then return notify(err, vim.log.levels.WARN) end
+  if not scope then return M.open_panel(err) end
   if scope.scope == "transport" then
     return M.run_transport_atc(scope.name)
   end
@@ -378,7 +829,7 @@ end
 
 function M.run_aunit(args)
   local scope, err = parse_scope(args or "", "object")
-  if not scope then return notify(err, vim.log.levels.WARN) end
+  if not scope then return M.open_panel(err) end
   if scope.scope ~= "object" then
     return finish_run({
       kind = "AUnit",
@@ -422,9 +873,7 @@ end
 function M.run(args)
   args = trim(args or "")
   if args == "" then
-    M.run_atc("")
-    M.run_aunit("")
-    return
+    return M.open_panel()
   end
   local first, rest = args:match("^(%S+)%s*(.*)$")
   first = (first or ""):lower()
@@ -442,7 +891,7 @@ function M.show_history()
     for i = #entries, 1, -1 do
       local e = entries[i]
       lines[#lines + 1] = string.format(
-        "%s  %-6s %-9s %-24s %-8s E:%s W:%s %s",
+        "%s  %-6s %-9s %-24s %-8s E:%s W:%s F:%s %s",
         e.at or "?",
         e.kind or "?",
         e.scope or "?",
@@ -450,6 +899,7 @@ function M.show_history()
         e.status or "?",
         tostring(e.errors or 0),
         tostring(e.warnings or 0),
+        tostring(type(e.findings) == "table" and #e.findings or 0),
         e.detail or ""
       )
     end
@@ -466,10 +916,17 @@ function M.setup()
     { nargs = "*", desc = "sap-nvim: Panel AUnit" })
   vim.api.nvim_create_user_command("SapQualityHistory", M.show_history,
     { desc = "sap-nvim: Historial local de calidad" })
+  vim.api.nvim_create_user_command("SapAtcWorklist", function(args) M.show_worklist(args.args) end,
+    { nargs = "*", desc = "sap-nvim: Worklist ATC desde quickfix o historial" })
+  vim.api.nvim_create_user_command("SapAtcFilter", function(args) M.filter_worklist(args.args) end,
+    { nargs = 1, desc = "sap-nvim: Filtrar worklist ATC por severidad" })
+  vim.api.nvim_create_user_command("SapAtcHelp", function(args) M.show_check_help(args.args) end,
+    { nargs = "?", desc = "sap-nvim: Ayuda/documentación del hallazgo ATC seleccionado" })
 
   vim.keymap.set("n", "<leader>aK", function() M.run_atc("") end, { desc = "ABAP: ATC panel" })
   vim.keymap.set("n", "<leader>aqp", function() M.run("") end, { desc = "ABAP: Quality panel" })
   vim.keymap.set("n", "<leader>aqh", M.show_history, { desc = "ABAP: Historial quality" })
+  vim.keymap.set("n", "<leader>aqw", function() M.show_worklist("") end, { desc = "ABAP: ATC worklist" })
 end
 
 M._history_path = history_path

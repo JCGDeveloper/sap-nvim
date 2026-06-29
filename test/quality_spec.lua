@@ -28,6 +28,47 @@ local summary = quality._summarize_qf(atc)
 assert_eq(summary.errors, 1, "summary counts errors")
 assert_eq(summary.warnings, 1, "summary counts warnings")
 
+local serialized = quality._serialize_findings(atc)
+assert_eq(#serialized, 2, "ATC findings serialize for history/worklist")
+assert_eq(#quality._filter_findings(serialized, "errors"), 1, "ATC worklist filters errors")
+assert_eq(#quality._filter_findings(serialized, "warnings"), 1, "ATC worklist filters warnings")
+local worklist_lines = table.concat(quality._worklist_lines(serialized, { source = "quickfix", filter = "all" }), "\n")
+if not worklist_lines:find("SAP ATC Worklist", 1, true) then error("ATC worklist title missing") end
+if not worklist_lines:find("SELECT * is not allowed", 1, true) then error("ATC worklist finding missing") end
+local help_lines = table.concat(quality._finding_help_lines({
+  text = "Check ID: SELECT_STAR https://example.invalid/check",
+  check = "SELECT_STAR",
+}), "\n")
+if not help_lines:find("SELECT_STAR", 1, true) then error("ATC help should include check id") end
+if not help_lines:find("https://example.invalid/check", 1, true) then error("ATC help should include URL") end
+
+local atc_doc = quality._parse_atc_output({
+  "Check ID: SECURITY.SELECT_STAR",
+  "zcl_demo.clas.abap:21:3: W: Avoid SELECT * https://example.invalid/atc/select-star",
+  "Documentation: Replace SELECT * with the required field list.",
+}, { filename = "/tmp/zcl_demo.clas.abap" })
+assert_eq(#atc_doc, 1, "ATC parser returns documented finding")
+assert_eq(atc_doc[1].user_data.check_id, "SECURITY.SELECT_STAR", "ATC parser keeps check id")
+assert_eq(atc_doc[1].user_data.help_url, "https://example.invalid/atc/select-star", "ATC parser keeps help url")
+assert_eq(atc_doc[1].user_data.help_text, "Replace SELECT * with the required field list.", "ATC parser keeps help text")
+
+local warnings = quality._filter_findings(atc, "warnings")
+assert_eq(#warnings, 1, "ATC worklist filter keeps warnings only")
+assert_eq(warnings[1].type, "W", "ATC worklist warning severity")
+
+local worklist_lines, worklist_rows, worklist_filtered = quality._worklist_lines(atc_doc, {
+  source = "quickfix",
+  filter = "warnings",
+})
+assert_eq(worklist_lines[1], "SAP ATC Worklist", "ATC worklist renders title")
+assert_eq(#worklist_filtered, 1, "ATC worklist renders filtered findings")
+assert_eq(worklist_rows[8], 1, "ATC worklist maps finding line to item index")
+
+local help_lines = table.concat(quality._finding_help_lines(atc_doc[1]), "\n")
+if not help_lines:match("SECURITY%.SELECT_STAR") then error("ATC help should include check id") end
+if not help_lines:match("https://example%.invalid/atc/select%-star") then error("ATC help should include URL") end
+if not help_lines:match("Replace SELECT") then error("ATC help should include help text") end
+
 local failures = aunit._parse_junit4([[
 <testsuite tests="2" failures="1" errors="0" skipped="0">
   <testcase classname="ZCL_DEMO" name="test_one">
@@ -41,14 +82,45 @@ assert_eq(failures[1].line, 42, "AUnit parser extracts line")
 
 os.remove(quality._history_path())
 quality._record_history({ kind = "ATC", scope = "object", target = "ZCL_DEMO", status = "ok", errors = 0, warnings = 0 })
+quality._record_history({
+  kind = "ATC",
+  scope = "object",
+  target = "ZCL_DEMO",
+  status = "issues",
+  errors = 0,
+  warnings = 1,
+  findings = quality._serialize_findings(atc_doc),
+})
 local history = quality._read_history()
-assert_eq(#history, 1, "quality history persists one entry")
+assert_eq(#history, 2, "quality history persists entries")
 assert_eq(history[1].target, "ZCL_DEMO", "quality history keeps target")
+assert_eq(#history[2].findings, 1, "quality history keeps serialized findings")
 
 quality.setup()
 assert_eq(vim.fn.exists(":SapQuality"), 2, "SapQuality command exists")
 assert_eq(vim.fn.exists(":SapAUnitPanel"), 2, "SapAUnitPanel command exists")
 assert_eq(vim.fn.exists(":SapAtcPanel"), 2, "SapAtcPanel command exists")
 assert_eq(vim.fn.exists(":SapQualityHistory"), 2, "SapQualityHistory command exists")
+assert_eq(vim.fn.exists(":SapAtcWorklist"), 2, "SapAtcWorklist command exists")
+assert_eq(vim.fn.exists(":SapAtcFilter"), 2, "SapAtcFilter command exists")
+assert_eq(vim.fn.exists(":SapAtcHelp"), 2, "SapAtcHelp command exists")
+
+vim.fn.setqflist({}, "r", { items = atc_doc, title = "ATC test" })
+local qf_worklist = quality.show_worklist("quickfix warnings")
+local rendered_qf = table.concat(vim.api.nvim_buf_get_lines(qf_worklist, 0, -1, false), "\n")
+if not rendered_qf:match("Source%s+:%s+quickfix") then error("ATC worklist should render quickfix source") end
+if not rendered_qf:match("Filter%s+:%s+warnings %(1/1%)") then error("ATC worklist should render warning filter") end
+quality.open_worklist_quickfix()
+assert_eq(#vim.fn.getqflist(), 1, "ATC worklist exports filtered quickfix")
+
+vim.fn.setqflist({}, "r", { items = {}, title = "empty" })
+local hist_worklist = quality.show_worklist("history warnings")
+local rendered_hist = table.concat(vim.api.nvim_buf_get_lines(hist_worklist, 0, -1, false), "\n")
+if not rendered_hist:match("Source%s+:%s+history") then error("ATC worklist should render history source") end
+
+vim.cmd("enew")
+vim.bo.filetype = "abap"
+local ok, err = pcall(function() quality.run("") end)
+if not ok then error("SapQuality without SAP object should not fail: " .. tostring(err)) end
 
 print("QUALITY_OK")

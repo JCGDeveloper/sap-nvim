@@ -437,6 +437,14 @@ la extensión del archivo), carga los hallazgos parseables en quickfix y abre `:
 en `:SapQualityHistory`. El panel solo reporta helpers de bloqueo para release/activate; no libera
 transportes ni activa objetos.
 
+`:SapAtcWorklist` / `<leader>aqw` abre una worklist ATC navegable desde quickfix o historial.
+Incluye filtros por severidad (`:SapAtcFilter errors|warnings|info|all`) y ayuda contextual del
+check con `:SapAtcHelp` cuando el hallazgo trae identificador o enlace.
+
+`:SapDumps` abre un visor de dumps del sistema de solo lectura. Prueba rutas ADT conocidas y, si el
+backend no las expone, permite saltar a ST22 con `s` o `:SapST22`. Usa `:SapDumpsRoutes` para ver
+qué rutas respondió el sistema.
+
 ---
 
 ### Where-used (lista de usos)
@@ -462,6 +470,10 @@ entradas se marcan `[local]` si el archivo existe localmente, `[system]` si no.
 
 `<leader>aD` (`:SapDiff`) lee el objeto actual desde SAP vía `sapcli program/class/interface read`
 y abre un vimdiff en split vertical. El buffer del sistema es de solo lectura y se limpia solo al cerrar.
+
+`<leader>aV` (`:SapRevisions`) abre el historial de versiones del objeto actual usando ADT en modo
+solo lectura. Desde el panel puedes refrescar, ver las rutas ADT probadas, hacer diff local contra
+una revisión o comparar la versión activa contra esa revisión si el backend devuelve fuente.
 
 ---
 
@@ -678,9 +690,11 @@ Después autenticá una sola vez: `:Copilot auth` (usa tu login de GitHub de la 
 | `<leader>aa` | — | Activar objeto → errores en quickfix, salta a la línea |
 | `<leader>aT` | `:SapAUnit` | Correr tests AUnit → fallos en quickfix |
 | `<leader>aK` | — | Correr chequeo de calidad ATC |
+| `<leader>aqw` | `:SapAtcWorklist` | Worklist ATC filtrable |
 | `<leader>aF` | — | Formatear archivo (ABAP mayúsculas+indent / CDS llaves) |
 | `<leader>aw` | `:SapWhereUsed` | Lista de usos → quickfix |
 | `<leader>aD` | `:SapDiff` | Diff del buffer local vs la versión activa del sistema |
+| `<leader>aV` | `:SapRevisions` | Revisiones/versiones ADT del objeto actual |
 | `<leader>ai` | `:SapInactive` | Objetos inactivos — abrir o activar de a uno |
 | `<leader>an` | `:SapNew` | Nuevo objeto ABAP con pickers de paquete/transporte del sistema |
 | `<leader>aS` | `:SapSearchLive` | Búsqueda global en vivo (Telescope); `<C-f>` filtra por tipo |

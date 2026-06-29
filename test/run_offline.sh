@@ -11,6 +11,9 @@ luajit test/completion_spec.lua
 luajit test/sapcli_gate_spec.lua
 luajit test/sapcli_productive_gate_spec.lua
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/quality_spec.lua +qa!
+env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/ux_spec.lua +qa!
+env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/dumps_spec.lua +qa!
+env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/revisions_spec.lua +qa!
 
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/adt_http_plaintext_password_spec.lua +qa!
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/productive_config_status_spec.lua +qa!
