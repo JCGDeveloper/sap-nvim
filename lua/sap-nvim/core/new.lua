@@ -34,7 +34,11 @@ end
 
 local function is_customer_namespace(name)
 	name = (name or ""):upper()
-	return name:match("^[ZY]") ~= nil or name:match("^/[^/]+/") ~= nil
+	return name:match("^[ZY]") ~= nil or name:match("^/[A-Z0-9_]+/[A-Z0-9_]") ~= nil
+end
+
+local function normalize_name(name)
+	return vim.trim(tostring(name or "")):upper()
 end
 
 local function xml_escape(s)
@@ -86,6 +90,7 @@ local TYPES = {
 	{ key = "data_element", label = "Data Element", group = "dataelement" },
 	{ key = "domain", label = "Dominio", group = "domain" },
 	{ key = "table_type", label = "Table Type", group = "tabletype" },
+	{ key = "search_help", label = "Search Help (DDIC)", group = "searchhelp", plan_only = true },
 	{ key = "cds_view", label = "CDS View (DDL)", group = "ddl", open_group = "ddls" },
 	{ key = "metadata_extension", label = "Metadata Extension (DDLX)", group = "ddlx" },
 	{ key = "dcl", label = "Access Control (DCL)", group = "dcl" },
@@ -94,8 +99,62 @@ local TYPES = {
 	{ key = "transaction", label = "Transacción", group = "transaction" },
 	{ key = "report_variant", label = "Variante de report", group = "program_variant", needs_program = true },
 	{ key = "message_class", label = "Message Class", group = "messageclass" },
+	{ key = "number_range", label = "Number Range Object (SNRO)", group = "numberrange", plan_only = true },
 	{ key = "package", label = "Paquete (DEVC)", group = "package" },
 }
+
+local NAME_RULES = {
+	program = { max = 40 },
+	include = { max = 40 },
+	class = { max = 30 },
+	interface = { max = 30 },
+	function_group = { max = 26 },
+	function_module = { max = 30 },
+	table = { max = 30 },
+	structure = { max = 30 },
+	data_element = { max = 30 },
+	domain = { max = 30 },
+	table_type = { max = 30 },
+	search_help = { max = 30 },
+	cds_view = { max = 30 },
+	metadata_extension = { max = 30 },
+	dcl = { max = 30 },
+	behavior_definition = { max = 30 },
+	service_definition = { max = 30 },
+	transaction = { max = 20 },
+	report_variant = { max = 14, customer_required = false },
+	message_class = { max = 20 },
+	number_range = { max = 10 },
+	package = { max = 30 },
+}
+
+local function validate_object_name(spec, name, opts)
+	opts = opts or {}
+	spec = spec or {}
+	name = normalize_name(name)
+	if name == "" then
+		return false, "Nombre obligatorio."
+	end
+	local rule = NAME_RULES[spec.key] or { max = 30 }
+	if #name > rule.max then
+		return false, string.format("%s supera el máximo (%d caracteres).", name, rule.max)
+	end
+	if name:match("^/") then
+		if not name:match("^/[A-Z0-9_]+/[A-Z0-9_][A-Z0-9_]*$") then
+			return false, "Namespace inválido: usa /NAMESPACE/NOMBRE con letras, números o _."
+		end
+	elseif not name:match("^[A-Z][A-Z0-9_]*$") then
+		return false, "Nombre inválido: usa letras, números o _; debe empezar por letra."
+	end
+	local customer_required = opts.customer_required
+	if customer_required == nil then
+		customer_required = rule.customer_required ~= false
+	end
+	if customer_required and safe_mode() and not is_customer_namespace(name) then
+		return false, "Modo productivo: no se crea '" .. name .. "' fuera de namespace cliente Z/Y o /NAMESPACE/."
+	end
+	return true, nil
+end
 
 local SOURCE_GROUPS = {
 	program = true,
@@ -120,6 +179,8 @@ local ADT_CREATE_PATHS = {
 	data_element = "/sap/bc/adt/ddic/dataelements",
 	domain = "/sap/bc/adt/ddic/domains",
 	table_type = "/sap/bc/adt/ddic/tabletypes",
+	search_help = "/sap/bc/adt/ddic/searchhelps",
+	number_range = "/sap/bc/adt/numberranges/objects",
 	cds_view = "/sap/bc/adt/ddic/ddl/sources",
 	metadata_extension = "/sap/bc/adt/ddic/ddlx/sources",
 	dcl = "/sap/bc/adt/acm/dcl/sources",
@@ -665,6 +726,34 @@ local DDIC_CREATE = {
 			)
 		end,
 	},
+	search_help = {
+		path = "/sap/bc/adt/ddic/searchhelps",
+		content_type = "application/vnd.sap.adt.ddic.searchhelps.v1+xml; charset=utf-8",
+		build = function(name, desc, lang, user, pkg, opts)
+			opts = opts or {}
+			local selection_method = (opts.selection_method or opts.table or "T000"):upper()
+			local parameter = (opts.parameter or "MANDT"):upper()
+			local element = (opts.element or "MANDT"):upper()
+			return ddic_create_body(
+				"ddic:searchHelp",
+				'xmlns:ddic="http://www.sap.com/adt/ddic/searchhelps"',
+				"SHLP/SH",
+				desc,
+				lang,
+				name,
+				user,
+				pkg,
+				{
+					'<ddic:selectionMethod adtcore:name="' .. xml_escape(selection_method) .. '"/>',
+					'<ddic:parameters><ddic:parameter ddic:name="'
+						.. xml_escape(parameter)
+						.. '" ddic:import="true" ddic:export="true"><ddic:typeRef adtcore:name="'
+						.. xml_escape(element)
+						.. '"/></ddic:parameter></ddic:parameters>',
+				}
+			)
+		end,
+	},
 	table = {
 		path = "/sap/bc/adt/ddic/tables",
 		content_type = "application/vnd.sap.adt.ddic.tables.v1+xml; charset=utf-8",
@@ -706,6 +795,29 @@ local DDIC_CREATE = {
 				{
 					'<ddic:fields><ddic:field ddic:name="' .. xml_escape(field) .. '"><ddic:typeRef adtcore:name="' .. xml_escape(elem) .. '"/></ddic:field></ddic:fields>',
 				}
+			)
+		end,
+	},
+	number_range = {
+		path = "/sap/bc/adt/numberranges/objects",
+		content_type = "application/vnd.sap.adt.numberranges.object.v1+xml; charset=utf-8",
+		build = function(name, desc, lang, user, pkg, opts)
+			opts = opts or {}
+			local length = tostring(opts.length or 10)
+			return adt_create_body(
+				"nrob:numberRangeObject",
+				'xmlns:nrob="http://www.sap.com/adt/numberranges"',
+				"NROB/O",
+				' adtcore:version="inactive"',
+				desc,
+				lang,
+				name,
+				user,
+				table.concat({
+					package_ref(pkg),
+					'<nrob:attributes nrob:objectLength="' .. xml_escape(length) .. '" nrob:buffering="mainMemory"/>',
+					"<nrob:intervals/>",
+				}, "\n")
 			)
 		end,
 	},
@@ -898,8 +1010,8 @@ local function create_transaction(name, desc, pkg, corrnr, ttype, prog)
 		return
 	end
 	-- Seguridad §7: aviso si el nombre no parece de cliente (Z/Y o namespace /).
-	if not name:match("^[ZY]") and not name:match("^/") then
-		notify("Aviso: '" .. name .. "' no empieza por Z/Y; SAP puede rechazarlo.", vim.log.levels.WARN)
+	if not is_customer_namespace(name) then
+		notify("Aviso: '" .. name .. "' no está en namespace cliente Z/Y o /NAMESPACE/.", vim.log.levels.WARN)
 	end
 	local args = build_transaction_args(name, desc, pkg, corrnr, ttype, prog)
 
@@ -1024,8 +1136,8 @@ local function create_package(name, desc, super, corrnr)
 		return
 	end
 	-- Seguridad §7: aviso si el nombre no parece de cliente (Z/Y o namespace /).
-	if not name:match("^[ZY]") and not name:match("^/") then
-		notify("Aviso: '" .. name .. "' no empieza por Z/Y; SAP puede rechazarlo.", vim.log.levels.WARN)
+	if not is_customer_namespace(name) then
+		notify("Aviso: '" .. name .. "' no está en namespace cliente Z/Y o /NAMESPACE/.", vim.log.levels.WARN)
 	end
 	local args = { "sapcli", "package", "create", name, desc }
 	if super and super ~= "" then
@@ -1101,8 +1213,8 @@ local function create_package_adt(name, desc, super, corrnr)
 		return
 	end
 	-- Seguridad §7: aviso si el nombre no parece de cliente (Z/Y o namespace /).
-	if not name:match("^[ZY]") and not name:match("^/") then
-		notify("Aviso: '" .. name .. "' no empieza por Z/Y; SAP puede rechazarlo.", vim.log.levels.WARN)
+	if not is_customer_namespace(name) then
+		notify("Aviso: '" .. name .. "' no está en namespace cliente Z/Y o /NAMESPACE/.", vim.log.levels.WARN)
 	end
 
 	local adt_http = require("sap-nvim.core.adt_http")
@@ -1235,16 +1347,7 @@ local function build_adt_plan(kind, name, desc, pkg, opts)
 	}
 end
 
-local function show_adt_plan(args)
-	local parts = {}
-	for p in tostring(args or ""):gmatch("%S+") do
-		parts[#parts + 1] = p
-	end
-	local plan, err = build_adt_plan(parts[1] or "cds_view", parts[2], parts[2], parts[3])
-	if not plan then
-		notify(err, vim.log.levels.WARN)
-		return
-	end
+local function open_adt_plan(plan)
 	local lines = {
 		"== sap-nvim ADT create plan (sin POST) ==",
 		"type        : " .. plan.key .. " (" .. plan.label .. ")",
@@ -1256,14 +1359,29 @@ local function show_adt_plan(args)
 		"content-type: " .. plan.content_type,
 		"default     : " .. (plan.default_path and "sí" or "no, validación DDIC offline"),
 		"",
-		plan.body,
 	}
+	for _, line in ipairs(vim.split(tostring(plan.body or ""):gsub("\r", ""), "\n", { plain = true })) do
+		lines[#lines + 1] = line
+	end
 	local buf = vim.api.nvim_create_buf(false, true)
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
 	vim.bo[buf].bufhidden = "wipe"
 	vim.bo[buf].filetype = "xml"
 	vim.cmd("botright split")
 	vim.api.nvim_win_set_buf(0, buf)
+end
+
+local function show_adt_plan(args)
+	local parts = {}
+	for p in tostring(args or ""):gmatch("%S+") do
+		parts[#parts + 1] = p
+	end
+	local plan, err = build_adt_plan(parts[1] or "cds_view", parts[2], parts[2], parts[3])
+	if not plan then
+		notify(err, vim.log.levels.WARN)
+		return
+	end
+	open_adt_plan(plan)
 end
 
 local function validate_create_routes(filter)
@@ -1302,6 +1420,9 @@ end
 M._test = {
 	types = TYPES,
 	type_by_key = type_by_key,
+	normalize_name = normalize_name,
+	is_customer_namespace = is_customer_namespace,
+	validate_object_name = validate_object_name,
 	creation_block_reason = creation_block_reason,
 	xml_escape = xml_escape,
 	adt_create_body = adt_create_body,
@@ -1457,13 +1578,14 @@ function M.new_object()
 			if not name or name == "" then
 				return
 			end
-			name = name:upper()
-			if not is_customer_namespace(name) then
-				if safe_mode() then
-					notify("Modo productivo: no se crea '" .. name .. "' fuera de namespace Z/Y o /.../.", vim.log.levels.ERROR)
-					return
-				end
-				notify("Aviso: '" .. name .. "' no empieza por Z/Y; SAP puede rechazarlo.", vim.log.levels.WARN)
+			name = normalize_name(name)
+			local valid, name_err = validate_object_name(spec, name)
+			if not valid then
+				notify(name_err, vim.log.levels.ERROR)
+				return
+			end
+			if not is_customer_namespace(name) and (NAME_RULES[spec.key] or {}).customer_required ~= false then
+				notify("Aviso: '" .. name .. "' no está en namespace cliente Z/Y o /NAMESPACE/.", vim.log.levels.WARN)
 			end
 
 			vim.ui.input({ prompt = "Descripción: ", default = name }, function(desc)
@@ -1477,9 +1599,28 @@ function M.new_object()
 							if not fg or fg == "" then
 								return
 							end
-							do_create(spec, name, desc, nil, nil, fg:upper())
+							fg = normalize_name(fg)
+							local ok_fg, fg_err = validate_object_name(type_by_key("function_group"), fg)
+							if not ok_fg then
+								notify(fg_err, vim.log.levels.ERROR)
+								return
+							end
+							do_create(spec, name, desc, nil, nil, fg)
 						end
 					)
+					return
+				end
+
+				if spec.plan_only then
+					ask_package(function(pkg)
+						local plan, err = build_adt_plan(spec.key, name, desc, pkg)
+						if not plan then
+							notify(err, vim.log.levels.WARN)
+							return
+						end
+						open_adt_plan(plan)
+						notify(spec.label .. ": plan offline mostrado; no se ha enviado ningún POST.", vim.log.levels.INFO)
+					end)
 					return
 				end
 
@@ -1497,6 +1638,15 @@ function M.new_object()
 										vim.ui.input(
 											{ prompt = "Programa (report) de la transacción: ", default = "" },
 											function(prog)
+												prog = normalize_name(prog)
+												if prog ~= "" then
+													local ok_prog, prog_err =
+														validate_object_name(type_by_key("program"), prog, { customer_required = false })
+													if not ok_prog then
+														notify(prog_err, vim.log.levels.ERROR)
+														return
+													end
+												end
 												create_transaction(name, desc, pkg, corrnr, ttype, prog)
 											end
 										)
@@ -1531,6 +1681,13 @@ function M.new_object()
 				if spec.group == "program_variant" then
 					vim.ui.input({ prompt = "Programa/report destino: ", default = cfg.report or "Z" }, function(program)
 						if not program or program == "" then
+							return
+						end
+						program = normalize_name(program)
+						local ok_prog, prog_err =
+							validate_object_name(type_by_key("program"), program, { customer_required = false })
+						if not ok_prog then
+							notify(prog_err, vim.log.levels.ERROR)
 							return
 						end
 						ask_transport(function(corrnr)

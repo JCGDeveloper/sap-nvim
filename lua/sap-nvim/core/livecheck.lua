@@ -100,17 +100,43 @@ local function run_adt_raw(label, opts, validator, results)
 	return ok, body, code
 end
 
-function M.run()
-	local cfg = require("sap-nvim.core.config")
+local function readiness_summary(cfg)
 	local sec = cfg.security()
 	local prod = cfg.productive()
+	local profile = cfg.profile_name and cfg.profile_name() or "dev"
+	local ok_adt, adt = pcall(require, "sap-nvim.core.adt_http")
+	local ready = ok_adt and adt.ready and adt.ready() == true
+	local needs_login = ok_adt and adt.needs_login and adt.needs_login() == true
+	local state = ready and "validada"
+		or (needs_login and "pausada/no validada; posible 401 previo")
+		or "no validada"
+	local ctx = ok_adt and adt.context_info and adt.context_info() or nil
+	local context = ctx and (tostring(ctx.sysid or "???") .. "/" .. tostring(ctx.client or "???") .. "/" .. tostring(ctx.user or "???"))
+		or "sin contexto visible"
+	return {
+		"Perfil: " .. profile:upper()
+			.. "  Contexto: " .. context
+			.. "  Conexión: " .. state,
+		"Seguridad: TLS verify=" .. tostring(sec.verify_tls == true)
+			.. "  ca_file=" .. tostring(sec.ca_file and sec.ca_file ~= "" and vim.fn.expand(sec.ca_file) or "trust-store")
+			.. "  safe_mode=" .. tostring(prod.safe_mode == true)
+			.. "  read_only=" .. tostring(prod.read_only == true),
+		"Bloqueos: create=" .. tostring(prod.allow_create_objects ~= true)
+			.. "  write/activate=" .. tostring(prod.allow_write_objects ~= true)
+			.. "  release=" .. tostring(prod.allow_release_transports ~= true)
+			.. "  delete=" .. tostring(prod.allow_delete_objects ~= true and prod.allow_delete_transports ~= true),
+	}
+end
+
+function M.run()
+	local cfg = require("sap-nvim.core.config")
 	local results = {
 		"Objetivo: validar el entorno real sin crear, activar, bloquear ni borrar objetos.",
-		"Perfil: " .. (cfg.profile_name and cfg.profile_name() or "dev")
-			.. "  TLS verify=" .. tostring(sec.verify_tls == true)
-			.. "  read_only=" .. tostring(prod.read_only == true),
-		"",
 	}
+	for _, line in ipairs(readiness_summary(cfg)) do
+		table.insert(results, line)
+	end
+	table.insert(results, "")
 
 	require("sap-nvim.core.connection").ensure(function(login_ok)
 		if not login_ok then
@@ -177,6 +203,8 @@ function M.run()
 		end)
 	end)
 end
+
+M._readiness_summary = readiness_summary
 
 function M.setup()
 	vim.api.nvim_create_user_command("SapLiveCheck", M.run, {

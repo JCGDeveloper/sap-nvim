@@ -140,9 +140,9 @@ local MENU = {
 	},
 	{
 		key = "t",
-		desc = "Órdenes de transporte (mías)",
+		desc = "Cockpit de transportes (ADT/CTS)",
 		action = function()
-			require("sap-nvim.core.cts").list_transports()
+			require("sap-nvim.core.transport").list_transports()
 		end,
 	},
 	{

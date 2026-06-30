@@ -14,6 +14,33 @@ local function trim(s)
   return vim.trim(tostring(s or ""))
 end
 
+local function xmlesc(s)
+  return (tostring(s or ""))
+    :gsub("&", "&amp;")
+    :gsub("<", "&lt;")
+    :gsub(">", "&gt;")
+    :gsub('"', "&quot;")
+end
+
+local function unxml(s)
+  return (s or ""):gsub("&lt;", "<")
+    :gsub("&gt;", ">")
+    :gsub("&quot;", '"')
+    :gsub("&apos;", "'")
+    :gsub("&#x0A;", "\n")
+    :gsub("&#x0D;", "\r")
+    :gsub("&#10;", "\n")
+    :gsub("&#13;", "\r")
+    :gsub("&amp;", "&")
+end
+
+local function xml_attr(attrs, name)
+  return attrs and (
+    attrs:match('[%w_:-]*' .. name .. '="([^"]*)"')
+    or attrs:match(name .. '="([^"]*)"')
+  ) or nil
+end
+
 local function now()
   return os.date("!%Y-%m-%dT%H:%M:%SZ")
 end
@@ -45,6 +72,10 @@ local function history_path()
   return state_dir() .. "/quality-history.json"
 end
 
+local function settings_path()
+  return state_dir() .. "/quality-settings.json"
+end
+
 local function read_history()
   local path = history_path()
   if vim.fn.filereadable(path) ~= 1 then return {} end
@@ -64,6 +95,19 @@ local function record_history(entry)
   entries[#entries + 1] = entry
   while #entries > 100 do table.remove(entries, 1) end
   write_history(entries)
+end
+
+local function read_settings()
+  local path = settings_path()
+  if vim.fn.filereadable(path) ~= 1 then return {} end
+  local ok, data = pcall(json_decode, table.concat(vim.fn.readfile(path), "\n"))
+  if not ok or type(data) ~= "table" then return {} end
+  return data
+end
+
+local function write_settings(settings)
+  pcall(vim.fn.mkdir, state_dir(), "p")
+  pcall(vim.fn.writefile, vim.split(json_encode(settings or {}), "\n", { plain = true }), settings_path())
 end
 
 local function show(bufname, lines)
@@ -110,8 +154,11 @@ local function landing_lines(scope, reason)
   lines[#lines + 1] = "  :SapQuality atc package <PAQUETE>"
   lines[#lines + 1] = "  :SapQuality atc transport <ORDEN>"
   lines[#lines + 1] = "  :SapAtcWorklist [quickfix|history] [all|errors|warnings|info]"
+  lines[#lines + 1] = "  :SapAtcRemoteWorklist [id=<ID>] [timestamp=<TS>] [all|errors|warnings|info]"
   lines[#lines + 1] = "  :SapAtcFilter <all|errors|warnings|info>"
   lines[#lines + 1] = "  :SapAtcHelp"
+  lines[#lines + 1] = "  :SapAtcDoc"
+  lines[#lines + 1] = "  :SapAtcRoutes"
   lines[#lines + 1] = "  :SapQuality aunit object <CLASE>"
   lines[#lines + 1] = ""
   lines[#lines + 1] = "q cierra"
@@ -172,6 +219,19 @@ local function normalize_filter(filter)
   return filter_aliases[filter]
 end
 
+local function default_filter()
+  return normalize_filter(read_settings().severity_filter or "") or "all"
+end
+
+local function persist_filter(filter)
+  filter = normalize_filter(filter)
+  if not filter then return nil end
+  local settings = read_settings()
+  settings.severity_filter = filter
+  write_settings(settings)
+  return filter
+end
+
 local function severity_matches_filter(sev, filter)
   filter = normalize_filter(filter) or "all"
   sev = severity_type(sev)
@@ -186,6 +246,12 @@ local function extract_url(text)
   local url = tostring(text or ""):match("(https?://%S+)")
   if not url then return nil end
   return (url:gsub("[%)%]%.,;]+$", ""))
+end
+
+local function extract_adt_uri(text)
+  local uri = tostring(text or ""):match("(/sap/bc/adt/%S+)")
+  if not uri then return nil end
+  return (uri:gsub("[%)%]%.,;]+$", ""))
 end
 
 local function extract_check_id(text)
@@ -207,6 +273,9 @@ local function check_meta(item)
   return {
     check_id = data.check_id or data.check or extract_check_id(text),
     help_url = data.help_url or data.url or extract_url(text),
+    doc_uri = data.doc_uri or data.documentation_uri or data.uri or extract_adt_uri(text),
+    finding_uri = data.finding_uri or data.finding,
+    exemption_uri = data.exemption_uri or data.exemption,
     help_text = data.help_text or data.documentation or data.long_text,
   }
 end
@@ -218,8 +287,13 @@ local function attach_check_meta(item, meta)
   local data = item_user_data(item)
   data.check_id = data.check_id or meta.check_id or extracted.check_id
   data.help_url = data.help_url or meta.help_url or extracted.help_url
+  data.doc_uri = data.doc_uri or meta.doc_uri or extracted.doc_uri
+  data.finding_uri = data.finding_uri or meta.finding_uri or extracted.finding_uri
+  data.exemption_uri = data.exemption_uri or meta.exemption_uri or extracted.exemption_uri
   data.help_text = data.help_text or meta.help_text or extracted.help_text
-  if data.check_id or data.help_url or data.help_text then item.user_data = data end
+  if data.check_id or data.help_url or data.doc_uri or data.finding_uri or data.exemption_uri or data.help_text then
+    item.user_data = data
+  end
 end
 
 local function serialized_finding(item)
@@ -234,6 +308,9 @@ local function serialized_finding(item)
     text = tostring(item.text or ""),
     check_id = meta.check_id,
     help_url = meta.help_url,
+    doc_uri = meta.doc_uri,
+    finding_uri = meta.finding_uri,
+    exemption_uri = meta.exemption_uri,
     help_text = meta.help_text,
   }
 end
@@ -242,10 +319,13 @@ local function normalize_finding(item, qf_index)
   local f = serialized_finding(item)
   if not f then return nil end
   f.qf_index = qf_index
-  if f.check_id or f.help_url or f.help_text then
+  if f.check_id or f.help_url or f.doc_uri or f.finding_uri or f.exemption_uri or f.help_text then
     f.user_data = {
       check_id = f.check_id,
       help_url = f.help_url,
+      doc_uri = f.doc_uri,
+      finding_uri = f.finding_uri,
+      exemption_uri = f.exemption_uri,
       help_text = f.help_text,
     }
   end
@@ -399,6 +479,9 @@ local function qf_item(item)
     out.user_data = {
       check_id = f.check_id,
       help_url = f.help_url,
+      doc_uri = f.doc_uri,
+      finding_uri = f.finding_uri,
+      exemption_uri = f.exemption_uri,
       help_text = f.help_text,
     }
   end
@@ -435,6 +518,9 @@ local function latest_history_items()
             user_data = {
               check_id = item.check_id,
               help_url = item.help_url,
+              doc_uri = item.doc_uri,
+              finding_uri = item.finding_uri,
+              exemption_uri = item.exemption_uri,
               help_text = item.help_text,
             },
           })
@@ -474,6 +560,102 @@ local function collect_worklist_items(source)
   return items, "history", entry
 end
 
+local function priority_severity(priority, typ)
+  typ = tostring(typ or ""):upper()
+  if typ:match("^W") then return "W" end
+  if typ:match("^I") then return "I" end
+  local p = tonumber(priority)
+  if p == 2 then return "W" end
+  if p and p >= 3 then return "I" end
+  return "E"
+end
+
+function M._parse_reporters(body)
+  local out, seen = {}, {}
+  for attrs in tostring(body or ""):gmatch("<[%w_:]*reporter%s+([^>]*)/?>") do
+    local id = unxml(xml_attr(attrs, "id") or xml_attr(attrs, "name") or xml_attr(attrs, "key") or "")
+    local name = unxml(xml_attr(attrs, "name") or xml_attr(attrs, "description") or id)
+    if id ~= "" and not seen[id] then
+      seen[id] = true
+      out[#out + 1] = { id = id, name = name }
+    end
+  end
+  table.sort(out, function(a, b) return (a.id or "") < (b.id or "") end)
+  return out
+end
+
+local function object_label_from_attrs(attrs)
+  local name = unxml(xml_attr(attrs, "name") or xml_attr(attrs, "objectName") or "")
+  local typ = unxml(xml_attr(attrs, "type") or xml_attr(attrs, "objectType") or "")
+  if name ~= "" and typ ~= "" then return name .. " [" .. typ .. "]" end
+  if name ~= "" then return name end
+  return unxml(xml_attr(attrs, "uri") or "SAP")
+end
+
+local function finding_from_worklist_attrs(attrs, inner, obj)
+  attrs = attrs or ""
+  inner = inner or ""
+  obj = obj or {}
+  local finding_uri = unxml(xml_attr(attrs, "uri") or xml_attr(attrs, "href") or "")
+  local location = unxml(xml_attr(attrs, "location") or xml_attr(attrs, "locationUri") or finding_uri)
+  local line, col = (location or ""):match("start=(%d+),(%d+)")
+  local doc_uri = inner:match("<[%w_:]*link%s+[^>]*rel=\"documentation\"[^>]*href=\"([^\"]+)\"")
+    or inner:match("<[%w_:]*link%s+[^>]*href=\"([^\"]+)\"[^>]*rel=\"documentation\"")
+    or unxml(xml_attr(attrs, "documentationUri") or xml_attr(attrs, "docUri") or "")
+  doc_uri = doc_uri ~= "" and unxml(doc_uri) or nil
+  local check_id = unxml(xml_attr(attrs, "checkId") or xml_attr(attrs, "check") or "")
+  local check_title = unxml(xml_attr(attrs, "checkTitle") or xml_attr(attrs, "checkName") or "")
+  local msg = unxml(xml_attr(attrs, "messageTitle") or xml_attr(attrs, "message") or xml_attr(attrs, "shortText") or "")
+  if msg == "" then
+    msg = unxml(inner:match("<[%w_:]*message[^>]*>(.-)</[%w_:]*message>") or inner:match("<[%w_:]*shortText[^>]*>(.-)</[%w_:]*shortText>") or "")
+  end
+  if msg == "" then msg = check_title ~= "" and check_title or "ATC finding" end
+  local help_url = doc_uri and doc_uri:match("^https?://") and doc_uri or nil
+  local exemption_uri = unxml(xml_attr(attrs, "exemptionUri") or "")
+  return {
+    filename = obj.filename or obj.label or "SAP",
+    lnum = tonumber(line) or tonumber(xml_attr(attrs, "line")) or 0,
+    col = tonumber(col) or tonumber(xml_attr(attrs, "column")) or 1,
+    type = priority_severity(xml_attr(attrs, "priority"), xml_attr(attrs, "type") or xml_attr(attrs, "severity")),
+    text = (obj.label and (obj.label .. ": ") or "") .. msg,
+    module = obj.label or "SAP",
+    user_data = {
+      check_id = check_id ~= "" and check_id or nil,
+      help_url = help_url,
+      doc_uri = doc_uri and not help_url and doc_uri or nil,
+      finding_uri = finding_uri ~= "" and finding_uri or nil,
+      exemption_uri = exemption_uri ~= "" and exemption_uri or nil,
+      help_text = check_title ~= "" and check_title or nil,
+    },
+  }
+end
+
+function M._parse_atc_worklist_response(body)
+  local qf = {}
+  body = tostring(body or "")
+  for obj_attrs, obj_inner in body:gmatch("<[%w_:]*object%s+([^>]-)>(.-)</[%w_:]*object>") do
+    local obj = {
+      label = object_label_from_attrs(obj_attrs),
+      filename = unxml(xml_attr(obj_attrs, "name") or xml_attr(obj_attrs, "uri") or "SAP"),
+    }
+    for attrs, inner in obj_inner:gmatch("<[%w_:]*finding%s+([^>]-)>(.-)</[%w_:]*finding>") do
+      qf[#qf + 1] = finding_from_worklist_attrs(attrs, inner, obj)
+    end
+    for attrs in obj_inner:gmatch("<[%w_:]*finding%s+([^>]*)/>") do
+      qf[#qf + 1] = finding_from_worklist_attrs(attrs, "", obj)
+    end
+  end
+  if #qf == 0 then
+    for attrs, inner in body:gmatch("<[%w_:]*finding%s+([^>]-)>(.-)</[%w_:]*finding>") do
+      qf[#qf + 1] = finding_from_worklist_attrs(attrs, inner, nil)
+    end
+    for attrs in body:gmatch("<[%w_:]*finding%s+([^>]*)/>") do
+      qf[#qf + 1] = finding_from_worklist_attrs(attrs, "", nil)
+    end
+  end
+  return qf
+end
+
 function M._worklist_lines(items, opts)
   opts = opts or {}
   local filter = normalize_filter(opts.filter) or "all"
@@ -484,7 +666,7 @@ function M._worklist_lines(items, opts)
     "",
     "Source   : " .. source,
     string.format("Filter   : %s (%d/%d)", filter, #filtered, #(items or {})),
-    "Commands : <CR>/o jump · c quickfix · ? help · a/e/w/i filter · H history · q close",
+    "Commands : <CR>/o jump · c quickfix · ?/K help · D doc · x exemption · a/e/w/i filter · H history · q close",
     "",
   }
   local rows = {}
@@ -564,8 +746,10 @@ function M._finding_help_lines(item)
   if meta.check_id then lines[#lines + 1] = "Check   : " .. meta.check_id end
   lines[#lines + 1] = ""
   if meta.help_url then lines[#lines + 1] = "URL     : " .. meta.help_url end
+  if meta.doc_uri then lines[#lines + 1] = "ADT URI : " .. meta.doc_uri end
+  if meta.finding_uri then lines[#lines + 1] = "Finding : " .. meta.finding_uri end
   if meta.help_text then lines[#lines + 1] = "Text    : " .. meta.help_text end
-  if not meta.help_url and not meta.help_text and not meta.check_id then
+  if not meta.help_url and not meta.doc_uri and not meta.help_text and not meta.check_id then
     lines[#lines + 1] = "Este hallazgo no trae documentación local parseable."
   end
   lines[#lines + 1] = ""
@@ -577,6 +761,81 @@ function M.show_check_help(args)
   local item = selected_worklist_item(tonumber(trim(args or "")))
   if not item then return notify("No hay hallazgo ATC seleccionado.", vim.log.levels.WARN) end
   show("sap-atc-help://check", M._finding_help_lines(item))
+end
+
+local function strip_xml_text(body)
+  local text = unxml(tostring(body or ""))
+  text = text:gsub("<[%w_:]*br%s*/>", "\n")
+    :gsub("</[%w_:]*p>", "\n")
+    :gsub("<[^>]+>", " ")
+    :gsub("[ \t]+", " ")
+    :gsub("\n%s+", "\n")
+  local lines = {}
+  for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+    line = trim(line)
+    if line ~= "" then lines[#lines + 1] = line end
+  end
+  return lines
+end
+
+function M._remote_doc_request(item)
+  local meta = check_meta(item or {})
+  local uri = meta.doc_uri or meta.help_url
+  if not uri or uri == "" or uri:match("^https?://") then return nil, "no ADT documentation URI" end
+  if not uri:match("^/sap/bc/adt/") then return nil, "documentation URI is not an ADT route" end
+  return { method = "GET", path = uri, accept = "text/html,application/xml,text/plain" }
+end
+
+function M._finding_doc_lines(item, remote_body, detail)
+  local lines = M._finding_help_lines(item)
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "Remote documentation"
+  if remote_body and remote_body ~= "" then
+    local doc = strip_xml_text(remote_body)
+    if #doc == 0 then
+      lines[#lines + 1] = "ADT devolvió documentación, pero no hay texto parseable."
+    else
+      for _, line in ipairs(doc) do lines[#lines + 1] = line end
+    end
+  else
+    lines[#lines + 1] = detail or "No hay documentación remota disponible para este hallazgo."
+  end
+  return lines
+end
+
+function M.show_check_documentation(args)
+  local item = selected_worklist_item(tonumber(trim(args or "")))
+  if not item then return notify("No hay hallazgo ATC seleccionado.", vim.log.levels.WARN) end
+  local req, reason = M._remote_doc_request(item)
+  if not req then return show("sap-atc-doc://check", M._finding_doc_lines(item, nil, reason)) end
+  local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+  if not ok_http or not adt_http.is_available or not adt_http.is_available() then
+    return show("sap-atc-doc://check", M._finding_doc_lines(item, nil, "ADT no disponible o no validado."))
+  end
+  local body, _, code = adt_http.raw(req)
+  if tonumber(code) == nil or code < 200 or code >= 300 then
+    return show("sap-atc-doc://check", M._finding_doc_lines(item, nil, "Documentación ADT no disponible (HTTP " .. tostring(code) .. ")."))
+  end
+  show("sap-atc-doc://check", M._finding_doc_lines(item, body, nil))
+end
+
+function M.request_exemption_info(args)
+  local item = selected_worklist_item(tonumber(trim(args or "")))
+  if not item then return notify("No hay hallazgo ATC seleccionado.", vim.log.levels.WARN) end
+  local meta = check_meta(item)
+  local lines = {
+    "ATC Exemption Request",
+    "",
+    "Esta acción es informativa y no envía ninguna exención a SAP.",
+    "sap-nvim no implementa POST de exenciones sin endpoint verificado y confirmaciones explícitas.",
+    "",
+    "Finding : " .. tostring(meta.finding_uri or "?"),
+    "Check   : " .. tostring(meta.check_id or "?"),
+    "Message : " .. tostring(item.text or ""),
+    "",
+    "q cierra",
+  }
+  show("sap-atc-exemption://request", lines)
 end
 
 local function render_worklist(items, source, filter, title)
@@ -596,6 +855,8 @@ local function render_worklist(items, source, filter, title)
   vim.keymap.set("n", "c", M.open_worklist_quickfix, { buffer = buf, desc = "ATC: enviar a quickfix" })
   vim.keymap.set("n", "?", function() M.show_check_help("") end, { buffer = buf, desc = "ATC: ayuda del check" })
   vim.keymap.set("n", "K", function() M.show_check_help("") end, { buffer = buf, desc = "ATC: ayuda del check" })
+  vim.keymap.set("n", "D", function() M.show_check_documentation("") end, { buffer = buf, desc = "ATC: documentación remota" })
+  vim.keymap.set("n", "x", function() M.request_exemption_info("") end, { buffer = buf, desc = "ATC: solicitud de exención informativa" })
   vim.keymap.set("n", "a", function() M.filter_worklist("all") end, { buffer = buf, desc = "ATC: todos" })
   vim.keymap.set("n", "e", function() M.filter_worklist("errors") end, { buffer = buf, desc = "ATC: errores" })
   vim.keymap.set("n", "w", function() M.filter_worklist("warnings") end, { buffer = buf, desc = "ATC: warnings" })
@@ -606,7 +867,7 @@ end
 
 function M.show_worklist(args)
   local source, filter = parse_worklist_args(args)
-  filter = filter or worklist_state.filter or "all"
+  filter = filter or worklist_state.filter or default_filter()
   local items, actual_source, history_entry = collect_worklist_items(source)
   local title
   if history_entry and history_entry.target then
@@ -615,13 +876,112 @@ function M.show_worklist(args)
   return render_worklist(items, actual_source, filter, title)
 end
 
+function M.show_remote_worklist(args)
+  local info, filter = parse_remote_worklist_args(args)
+  if not info.id and worklist_state.remote then info = vim.tbl_extend("force", {}, worklist_state.remote, info) end
+  if not info.id or info.id == "" then
+    return notify("Indica id=<WORKLIST_ID> o ejecuta un ATC que devuelva worklistId.", vim.log.levels.WARN)
+  end
+  local qf, detail = M._fetch_remote_worklist(info)
+  if detail and detail ~= "" then notify(detail, #qf > 0 and vim.log.levels.INFO or vim.log.levels.WARN) end
+  worklist_state.remote = info
+  return render_worklist(qf, "remote", filter or default_filter(), "SAP ATC Worklist: remote " .. tostring(info.id))
+end
+
 function M.filter_worklist(args)
-  local filter = normalize_filter(args or "")
+  local filter = persist_filter(args or "")
   if not filter then return notify("Filtro ATC no reconocido: " .. tostring(args), vim.log.levels.WARN) end
   if worklist_state.items and #worklist_state.items > 0 then
     return render_worklist(worklist_state.items, worklist_state.source or "quickfix", filter)
   end
   return M.show_worklist(filter)
+end
+
+local function object_base_uri(scope)
+  scope = scope or current_object()
+  if not scope then return nil end
+  if scope.uri and scope.uri ~= "" then return scope.uri:gsub("/source/main$", "") end
+  local ok_source, source = pcall(require, "sap-nvim.core.source")
+  if ok_source and source._object_uri then
+    return source._object_uri(scope.group, scope.name, scope)
+  end
+  return nil
+end
+
+function M._checkrun_xml(objects)
+  local parts = {
+    '<?xml version="1.0" encoding="UTF-8"?><chkrun:checkObjectList xmlns:chkrun="http://www.sap.com/adt/checkrun" xmlns:adtcore="http://www.sap.com/adt/core">',
+  }
+  for _, obj in ipairs(objects or {}) do
+    if obj.uri and obj.uri ~= "" then
+      parts[#parts + 1] = '<chkrun:checkObject adtcore:uri="' .. xmlesc(obj.uri:gsub("/source/main$", "")) .. '" chkrun:version="active"></chkrun:checkObject>'
+    end
+  end
+  parts[#parts + 1] = "</chkrun:checkObjectList>"
+  return table.concat(parts, "")
+end
+
+function M._remote_validation_lines(result)
+  result = result or {}
+  local lines = {
+    "SAP ATC Remote Routes",
+    "",
+    "Reporters route : GET /sap/bc/adt/checkruns/reporters",
+    "Reporters HTTP  : " .. tostring(result.reporters_code or 0),
+    "Reporters       : " .. tostring(#(result.reporters or {})),
+  }
+  for _, r in ipairs(result.reporters or {}) do
+    lines[#lines + 1] = "  - " .. tostring(r.id) .. (r.name and r.name ~= r.id and (" - " .. r.name) or "")
+  end
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "Checkrun route  : POST /sap/bc/adt/checkruns?reporters=abapCheckRun"
+  lines[#lines + 1] = "Checkrun HTTP   : " .. tostring(result.checkrun_code or 0)
+  lines[#lines + 1] = "Checkrun object : " .. tostring(result.object_uri or "skipped")
+  lines[#lines + 1] = "Findings        : " .. tostring(#(result.qf or {}))
+  if result.detail and result.detail ~= "" then
+    lines[#lines + 1] = ""
+    lines[#lines + 1] = "Detail          : " .. result.detail
+  end
+  lines[#lines + 1] = ""
+  lines[#lines + 1] = "q cierra"
+  return lines
+end
+
+function M.validate_remote(args)
+  local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+  if not ok_http or not adt_http.is_available or not adt_http.is_available() then
+    return show("sap-atc-routes://remote", M._remote_validation_lines({ detail = "ADT no disponible o no validado." }))
+  end
+  local result = {}
+  local body, _, code = adt_http.raw({
+    method = "GET",
+    path = "/sap/bc/adt/checkruns/reporters",
+    accept = "application/xml",
+  })
+  result.reporters_code = code
+  result.reporters = M._parse_reporters(body)
+
+  local scope = parse_scope(args or "", "object")
+  local uri = scope and object_base_uri(scope) or nil
+  result.object_uri = uri
+  if uri then
+    local check_body, _, check_code = adt_http.raw({
+      method = "POST",
+      path = "/sap/bc/adt/checkruns",
+      query = { reporters = "abapCheckRun" },
+      content_type = "application/vnd.sap.adt.checkobjects+xml",
+      body = M._checkrun_xml({ { uri = uri, name = scope.name, group = scope.group } }),
+      accept = "application/xml",
+    })
+    result.checkrun_code = check_code
+    local ok_adt, adt = pcall(require, "sap-nvim.core.adt")
+    result.qf = ok_adt and adt._parse_checkrun_response(check_body, { scope }, { filename = scope.filename }) or {}
+  else
+    result.checkrun_code = 0
+    result.qf = {}
+    result.detail = "No hay objeto SAP actual para validar checkruns; reporters sí se consultó."
+  end
+  return show("sap-atc-routes://remote", M._remote_validation_lines(result))
 end
 
 local function panel_lines(run)
@@ -738,6 +1098,70 @@ local function atc_command(scope)
   return nil
 end
 
+function M._parse_atc_run_info(lines)
+  local text = type(lines) == "table" and table.concat(lines, "\n") or tostring(lines or "")
+  local id = text:match('worklistId="([^"]+)"')
+    or text:match("<[%w_:]*worklistId[^>]*>(.-)</[%w_:]*worklistId>")
+    or text:match("[Ww]orklist%s*[Ii][Dd]%s*[:=]%s*([%w_./:-]+)")
+    or text:match("[Rr]un%s*[Ii][Dd]%s*[:=]%s*([%w_./:-]+)")
+  local timestamp = text:match('timestamp="([^"]+)"')
+    or text:match("<[%w_:]*timestamp[^>]*>(.-)</[%w_:]*timestamp>")
+    or text:match("[Tt]imestamp%s*[:=]%s*([%w_./:-]+)")
+  if not id or trim(id) == "" then return nil end
+  return { id = trim(unxml(id)), timestamp = timestamp and trim(unxml(timestamp)) or nil }
+end
+
+local function parse_remote_worklist_args(args)
+  local info = {}
+  local filter
+  for token in tostring(args or ""):gmatch("%S+") do
+    local k, v = token:match("^([%w_%-]+)=(.+)$")
+    if k then
+      k = k:lower()
+      if k == "id" or k == "worklist" or k == "worklistid" then info.id = trim(v)
+      elseif k == "timestamp" or k == "ts" then info.timestamp = trim(v)
+      elseif k == "exempted" or k == "includeexemptedfindings" then info.include_exempted = v == "true" or v == "1" or v == "yes" end
+    elseif normalize_filter(token) then
+      filter = normalize_filter(token)
+    elseif token == "exempted" or token == "with-exempted" then
+      info.include_exempted = true
+    elseif not info.id then
+      info.id = trim(token)
+    elseif not info.timestamp then
+      info.timestamp = trim(token)
+    end
+  end
+  return info, filter
+end
+
+function M._remote_worklist_request(info)
+  info = info or {}
+  if not info.id or trim(info.id) == "" then return nil, "missing worklist id" end
+  local query = { includeExemptedFindings = info.include_exempted and "true" or "false" }
+  if info.timestamp and info.timestamp ~= "" then query.timestamp = info.timestamp end
+  return {
+    method = "GET",
+    path = "/sap/bc/adt/atc/worklists/" .. trim(info.id),
+    query = query,
+    accept = "application/xml",
+  }
+end
+
+function M._fetch_remote_worklist(info)
+  local ok_http, adt_http = pcall(require, "sap-nvim.core.adt_http")
+  if not ok_http or not adt_http.is_available or not adt_http.is_available() then
+    return {}, "ADT no disponible o no validado para refrescar la worklist remota.", 0
+  end
+  local req, err = M._remote_worklist_request(info)
+  if not req then return {}, err, 0 end
+  local body, _, code = adt_http.raw(req)
+  if tonumber(code) == nil or code < 200 or code >= 300 then
+    return {}, "Worklist remota no disponible (HTTP " .. tostring(code) .. ").", code
+  end
+  local qf = M._parse_atc_worklist_response(body)
+  return qf, string.format("Worklist remota %s refrescada (%d hallazgo(s)).", info.id, #qf), code
+end
+
 function M.run_atc(args)
   local scope, err = parse_scope(args or "", "package")
   if not scope then return M.open_panel(err) end
@@ -749,7 +1173,18 @@ function M.run_atc(args)
   notify("Ejecutando ATC para " .. scope.scope .. " " .. scope.name .. "...")
   run_sapcli(cmd, function(code, stdout, stderr)
     local qf = M._parse_atc_output(stdout, { filename = scope.filename })
+    local remote_info = M._parse_atc_run_info(stdout)
+    local remote_detail
+    if remote_info then
+      local remote_qf, detail = M._fetch_remote_worklist(remote_info)
+      worklist_state.remote = remote_info
+      remote_detail = detail
+      if #remote_qf > 0 then qf = remote_qf end
+    end
     local detail = #stderr > 0 and table.concat(stderr, "\n") or (code ~= 0 and "sapcli exit " .. tostring(code) or "")
+    if remote_detail and remote_detail ~= "" then
+      detail = detail ~= "" and (detail .. "\n" .. remote_detail) or remote_detail
+    end
     finish_run({
       kind = "ATC",
       scope = scope.scope,
@@ -918,10 +1353,18 @@ function M.setup()
     { desc = "sap-nvim: Historial local de calidad" })
   vim.api.nvim_create_user_command("SapAtcWorklist", function(args) M.show_worklist(args.args) end,
     { nargs = "*", desc = "sap-nvim: Worklist ATC desde quickfix o historial" })
+  vim.api.nvim_create_user_command("SapAtcRemoteWorklist", function(args) M.show_remote_worklist(args.args) end,
+    { nargs = "*", desc = "sap-nvim: Refrescar worklist ATC remota por ADT" })
   vim.api.nvim_create_user_command("SapAtcFilter", function(args) M.filter_worklist(args.args) end,
-    { nargs = 1, desc = "sap-nvim: Filtrar worklist ATC por severidad" })
+    { nargs = 1, desc = "sap-nvim: Filtrar worklist ATC por severidad y persistir filtro" })
   vim.api.nvim_create_user_command("SapAtcHelp", function(args) M.show_check_help(args.args) end,
     { nargs = "?", desc = "sap-nvim: Ayuda/documentación del hallazgo ATC seleccionado" })
+  vim.api.nvim_create_user_command("SapAtcDoc", function(args) M.show_check_documentation(args.args) end,
+    { nargs = "?", desc = "sap-nvim: Documentación ADT del hallazgo ATC seleccionado" })
+  vim.api.nvim_create_user_command("SapAtcRoutes", function(args) M.validate_remote(args.args) end,
+    { nargs = "*", desc = "sap-nvim: Validar rutas ADT de reporters/checkruns ATC" })
+  vim.api.nvim_create_user_command("SapAtcRequestExemption", function(args) M.request_exemption_info(args.args) end,
+    { nargs = "?", desc = "sap-nvim: Panel informativo para solicitud de exención ATC" })
 
   vim.keymap.set("n", "<leader>aK", function() M.run_atc("") end, { desc = "ABAP: ATC panel" })
   vim.keymap.set("n", "<leader>aqp", function() M.run("") end, { desc = "ABAP: Quality panel" })
@@ -930,8 +1373,11 @@ function M.setup()
 end
 
 M._history_path = history_path
+M._settings_path = settings_path
 M._read_history = read_history
+M._read_settings = read_settings
 M._record_history = record_history
 M._parse_scope = parse_scope
+M._parse_remote_worklist_args = parse_remote_worklist_args
 
 return M

@@ -4,6 +4,7 @@ local adt_http = require("sap-nvim.core.adt_http")
 
 local DEBUG = true
 M.MAX_CHILDREN = 500
+M.MAX_EMPTY_LISTENER_RETRIES = 3
 M.session = nil
 
 local function log(tag, msg)
@@ -429,7 +430,7 @@ local function clear_breakpoints(match, cb)
 		return
 	end
 
-	local deleted, failed, i = 0, 0, 0
+	local deleted, failed, i, failures = 0, 0, 0, {}
 	local function next_target()
 		i = i + 1
 		local target = targets[i]
@@ -442,7 +443,7 @@ local function clear_breakpoints(match, cb)
 			end
 			s.breakpoints = keep
 			if cb then
-				cb({ deleted = deleted, failed = failed, matched = #targets })
+				cb({ deleted = deleted, failed = failed, matched = #targets, failures = failures })
 			end
 			return
 		end
@@ -450,6 +451,13 @@ local function clear_breakpoints(match, cb)
 		curl({
 			method = "DELETE",
 			path = "/sap/bc/adt/debugger/breakpoints/" .. urlenc(target.bp.id),
+			query = {
+				scope = "external",
+				debuggingMode = "user",
+				requestUser = s.user,
+				terminalId = s.terminalId,
+				ideId = s.ideId,
+			},
 			accept = "application/xml",
 		}, function(body, status)
 			local ok = tostring(status):match("^2") ~= nil and not parse_exception(body)
@@ -458,6 +466,11 @@ local function clear_breakpoints(match, cb)
 				deleted = deleted + 1
 			else
 				failed = failed + 1
+				failures[#failures + 1] = {
+					id = target.bp.id,
+					status = status,
+					body = tostring(body or ""):gsub("%s+", " "):sub(1, 300),
+				}
 			end
 			next_target()
 		end)
@@ -552,6 +565,16 @@ function M.listen(cb)
 		end
 		if not body or body == "" then
 			s.listener_retries = (s.listener_retries or 0) + 1
+			if s.listener_retries >= M.MAX_EMPTY_LISTENER_RETRIES then
+				local tries = s.listener_retries
+				fail("listen", "respuesta vacía tras " .. tostring(tries) .. " intento(s); limpiando listener.")
+				M.stop(function()
+					if cb then
+						cb(nil, { reason = "empty-listener", retries = tries, status = status })
+					end
+				end)
+				return
+			end
 			local delay = math.min(5000, 500 * s.listener_retries)
 			log("listen", "respuesta vacía (HTTP " .. tostring(status) .. "); reintentando...")
 			vim.defer_fn(function()

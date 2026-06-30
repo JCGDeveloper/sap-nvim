@@ -57,6 +57,8 @@ local ADT_TYPE_BY_GROUP = {
 	tabletype = "TTYP/TT",
 	dataelement = "DTEL/DE",
 	domain = "DOMA/DO",
+	searchhelp = "SHLP/SH",
+	numberrange = "NROB/O",
 	ddl = "DDLS/DF",
 	ddls = "DDLS/DF",
 	ddlx = "DDLX/EX",
@@ -1185,6 +1187,7 @@ local function run_activation_check(objects, opts)
 		method = "POST",
 		path = "/sap/bc/adt/checkruns",
 		query = { reporters = "abapCheckRun" },
+		accept = "application/vnd.sap.adt.checkmessages+xml, application/xml",
 		content_type = "application/vnd.sap.adt.checkobjects+xml",
 		body = table.concat(xml_parts, ""),
 	})

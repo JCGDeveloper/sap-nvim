@@ -164,6 +164,91 @@ do
   ok(out[3] == "  DATA lv_flag TYPE abap_bool.", "applies quickfix to real buffer from qflist")
 end
 
+do
+  local proposals = quickfix._parse_remote_proposals([[
+<quickfixes:proposals xmlns:adtcore="http://www.sap.com/adt/core">
+  <adtcore:objectReference adtcore:name="FIX1" adtcore:description="Remote fix"
+    adtcore:uri="adt://S4F/sap/bc/adt/quickfixes/edits/1"/>
+</quickfixes:proposals>
+]])
+  ok(#proposals == 1, "parses ADT quickfix proposals")
+  ok(proposals[1].adt_uri == "/sap/bc/adt/quickfixes/edits/1", "normalizes ADT proposal URI")
+  ok(proposals[1].desc == "Remote fix", "keeps ADT proposal description")
+
+  local deltas = quickfix._parse_remote_deltas([[
+<quickfixes:edits xmlns:adtcore="http://www.sap.com/adt/core">
+  <unit>
+    <adtcore:objectReference adtcore:uri="/sap/bc/adt/programs/programs/z/source/main#start=2,2;end=2,9"/>
+    <content>DATA lv_text TYPE string.</content>
+  </unit>
+</quickfixes:edits>
+]])
+  ok(#deltas == 1, "parses ADT quickfix deltas")
+  local out = quickfix._apply_remote_deltas_to_lines({ "REPORT z.", "  lv_text = `A`." }, deltas)
+  ok(out[2] == "  DATA lv_text TYPE string. = `A`.", "applies ADT delta to in-memory lines for preview")
+end
+
+do
+  local xml = [[
+    <quickfixes:proposals xmlns:quickfixes="http://www.sap.com/adt/quickfixes" xmlns:adtcore="http://www.sap.com/adt/core">
+      <quickfixes:proposal>
+        <adtcore:objectReference adtcore:uri="/sap/bc/adt/quickfixes/evaluation/foo?proposalId=42&amp;mode=edit" adtcore:name="CREATE_DATA" adtcore:description="Crear DATA &quot;lv_text&quot;"/>
+        <quickfixes:userContent>TYPE string</quickfixes:userContent>
+      </quickfixes:proposal>
+    </quickfixes:proposals>
+  ]]
+  local proposals = quickfix._parse_proposals(xml)
+  ok(#proposals == 1, "parses nested ADT proposal")
+  ok(proposals[1].adt_uri == "/sap/bc/adt/quickfixes/evaluation/foo?proposalId=42&mode=edit", "keeps dynamic proposal URI")
+  ok(proposals[1].desc == 'Crear DATA "lv_text"', "decodes ADT proposal description")
+  ok(proposals[1].user == "TYPE string", "parses ADT proposal userContent")
+end
+
+do
+  local xml = [[
+    <quickfixes:edits xmlns:quickfixes="http://www.sap.com/adt/quickfixes" xmlns:adtcore="http://www.sap.com/adt/core">
+      <quickfixes:unit>
+        <adtcore:objectReference adtcore:uri="/sap/bc/adt/programs/programs/zq/source/main#start=2,0;end=2,0"/>
+        <quickfixes:content>  DATA lv_total TYPE i.&#10;</quickfixes:content>
+      </quickfixes:unit>
+    </quickfixes:edits>
+  ]]
+  local deltas, unsupported = quickfix._parse_deltas(xml)
+  ok(#deltas == 1 and #unsupported == 0, "parses ADT edit delta with range")
+  ok(deltas[1].srow == 2 and deltas[1].scol == 0 and deltas[1].erow == 2, "reads ADT delta range")
+  ok(deltas[1].content == "  DATA lv_total TYPE i.\n", "decodes ADT delta content entities")
+  local after = quickfix._apply_deltas_to_lines({ "REPORT zq.", "START-OF-SELECTION.", "  lv_total = 1." }, deltas)
+  ok(after[2] == "  DATA lv_total TYPE i." and after[3] == "START-OF-SELECTION.", "applies ADT delta to preview lines")
+  local preview = table.concat(quickfix._remote_preview_lines({
+    lines = { "REPORT zq.", "START-OF-SELECTION.", "  lv_total = 1." },
+    uri = "/sap/bc/adt/programs/programs/zq/source/main",
+    row = 2,
+    col = 0,
+  }, { desc = "Crear DATA", adt_uri = "/sap/bc/adt/quickfixes/evaluation/foo" }, deltas, {}), "\n")
+  ok(preview:find("Estado: preview; no aplicado", 1, true) ~= nil, "remote preview marks non-applied state")
+  ok(preview:find("--- antes", 1, true) ~= nil and preview:find("--- despues", 1, true) ~= nil, "remote preview renders before and after")
+end
+
+do
+  local xml = [[
+    <quickfixes:edits xmlns:quickfixes="http://www.sap.com/adt/quickfixes">
+      <quickfixes:workspaceEdit>
+        <quickfixes:documentChanges>opaque server format</quickfixes:documentChanges>
+      </quickfixes:workspaceEdit>
+    </quickfixes:edits>
+  ]]
+  local deltas, unsupported = quickfix._parse_deltas(xml)
+  ok(#deltas == 0 and #unsupported == 1, "keeps unclear ADT edit format unsupported")
+  local preview = table.concat(quickfix._remote_preview_lines({
+    lines = { "REPORT zq." },
+    uri = "/sap/bc/adt/programs/programs/zq/source/main",
+    row = 1,
+    col = 0,
+  }, { desc = "Opaque edit", adt_uri = "/sap/bc/adt/quickfixes/opaque" }, deltas, unsupported), "\n")
+  ok(preview:find("Aplicacion bloqueada", 1, true) ~= nil, "blocks unclear ADT edits in preview")
+  ok(preview:find("Bloques ADT no convertidos", 1, true) ~= nil, "shows unsupported ADT edit detail")
+end
+
 if fails > 0 then
   error(fails .. " quickfix test(s) failed")
 end

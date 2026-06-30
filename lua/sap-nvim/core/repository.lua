@@ -13,6 +13,7 @@ local state = {
   width = 42,
   last_target_win = nil,
   store_loaded = false,
+  filter = "",
 }
 
 local function notify(msg, level)
@@ -493,18 +494,64 @@ local function icon(node)
   return "-"
 end
 
+local associated_transport
+
 local function status_badges(node)
   local out = {}
   if node.active_state and node.active_state ~= "" and node.active_state ~= "active" then
     out[#out + 1] = node.active_state
   end
   if node.locked_by and node.locked_by ~= "" then out[#out + 1] = "lock:" .. node.locked_by end
-  if node.transport and node.transport ~= "" then out[#out + 1] = node.transport end
+  local transport = associated_transport and associated_transport(node) or node.transport
+  if transport and transport ~= "" then out[#out + 1] = transport end
   if node.index_source then
     out[#out + 1] = node.index_stale and "index:old" or "index"
   end
   if #out == 0 then return "" end
   return " {" .. table.concat(out, " ") .. "}"
+end
+
+associated_transport = function(node)
+  local cur = node
+  while cur do
+    local raw = cur.raw or {}
+    local transport = first_nonempty(
+      cur.transport,
+      cur.corrnr,
+      cur.transport_request,
+      raw.transport,
+      raw.transport_request,
+      raw.corrnr,
+      raw.CORRNR
+    )
+    if transport then return transport end
+    if cur.kind == "transport" then return cur.id or cur.label end
+    cur = cur.parent
+  end
+  return nil
+end
+
+local function filter_matches(node, filter)
+  filter = trim(filter):lower()
+  if filter == "" then return true end
+  if not node then return false end
+  if node.kind == "section" then return true end
+  local haystack = table.concat({
+    node.name or "",
+    node.label or "",
+    node.type or "",
+    node.group or "",
+    node.member_kind or "",
+  }, " "):lower()
+  return haystack:find(filter, 1, true) ~= nil
+end
+
+local function node_visible(node, filter)
+  if filter_matches(node, filter) then return true end
+  for _, child in ipairs(node.children or {}) do
+    if node_visible(child, filter) then return true end
+  end
+  return false
 end
 
 local function node_text(node)
@@ -533,22 +580,25 @@ end
 
 local function collect_lines(nodes, depth, lines)
   lines = lines or {}
+  local filter = state.filter or ""
   for _, node in ipairs(nodes or {}) do
-    lines[#lines + 1] = string.rep("  ", depth) .. icon(node) .. " " .. node_text(node)
-    state.line_nodes[#lines] = node
-    if node.error then
-      lines[#lines + 1] = string.rep("  ", depth + 1) .. node.error
+    if node_visible(node, filter) then
+      lines[#lines + 1] = string.rep("  ", depth) .. icon(node) .. " " .. node_text(node)
       state.line_nodes[#lines] = node
-    end
-    if node.expanded and node.children then
-      if node.loading and #node.children == 0 then
-        lines[#lines + 1] = string.rep("  ", depth + 1) .. "loading..."
+      if node.error then
+        lines[#lines + 1] = string.rep("  ", depth + 1) .. node.error
         state.line_nodes[#lines] = node
-      elseif node.loaded and #node.children == 0 then
-        lines[#lines + 1] = string.rep("  ", depth + 1) .. "(empty)"
-        state.line_nodes[#lines] = node
-      else
-        collect_lines(node.children, depth + 1, lines)
+      end
+      if node.expanded and node.children then
+        if node.loading and #node.children == 0 then
+          lines[#lines + 1] = string.rep("  ", depth + 1) .. "loading..."
+          state.line_nodes[#lines] = node
+        elseif node.loaded and #node.children == 0 then
+          lines[#lines + 1] = string.rep("  ", depth + 1) .. "(empty)"
+          state.line_nodes[#lines] = node
+        else
+          collect_lines(node.children, depth + 1, lines)
+        end
       end
     end
   end
@@ -569,6 +619,10 @@ local function render()
   local lines = { "SAP Repository", "" }
   state.line_nodes[1] = nil
   state.line_nodes[2] = nil
+  if trim(state.filter) ~= "" then
+    lines[#lines + 1] = "Filter: " .. state.filter
+    state.line_nodes[#lines] = nil
+  end
   collect_lines(state.sections, 0, lines)
   if #state.roots == 0 then
     lines[#lines + 1] = ""
@@ -746,6 +800,7 @@ local function load_package(node, force)
     node.index_stale = meta and meta.stale or nil
     node.loaded = true
     node.error = nil
+    for _, child in ipairs(node.children or {}) do child.parent = node end
     render()
   end)
 end
@@ -801,6 +856,7 @@ local function refresh_favorites()
         active_state = fav.active_state,
         locked_by = fav.locked_by,
         transport = fav.transport,
+        package = fav.package,
         expandable = false,
         loaded = true,
       })
@@ -838,6 +894,8 @@ local function refresh_inactive()
             kind = "inactive",
             group = obj.group or group_from_type(obj.type),
             raw = obj,
+            transport = obj.transport or obj.transport_request or obj.corrnr,
+            package = obj.package or obj.devclass,
             expandable = false,
             loaded = true,
           })
@@ -960,6 +1018,43 @@ local function open_node(node)
   require("sap-nvim.core.source").open(node.name, node.group, { uri = node.uri, package = node.package })
 end
 
+local function object_gui_uri(node)
+  if not node then return nil end
+  if node.uri and node.uri ~= "" then return node.uri:gsub("/source/main$", "") end
+  if node.parent and node.parent.uri and node.parent.uri ~= "" then return node.parent.uri:gsub("/source/main$", "") end
+  return nil
+end
+
+local function open_node_sapgui(node)
+  if not node then return end
+  if node.kind == "transport" then
+    local id = node.id or node.label
+    if id then
+      pcall(vim.fn.setreg, "+", id)
+      local ok, sapgui = pcall(require, "sap-nvim.core.sapgui")
+      if ok and sapgui.transaction then sapgui.transaction("SE09", { desktop = true }) end
+      notify("Transport copied; opening SE09: " .. id)
+    end
+    return
+  end
+  local uri = object_gui_uri(node)
+  if not uri then
+    notify("No ADT URI available for SAP GUI.", vim.log.levels.WARN)
+    return
+  end
+  local ok, sapgui = pcall(require, "sap-nvim.core.sapgui")
+  if not ok or not sapgui.open then
+    notify("SAP GUI launcher not available.", vim.log.levels.WARN)
+    return
+  end
+  sapgui.open({
+    type = "Transaction",
+    command = "*SADT_START_WB_URI",
+    params = { { "D_OBJECT_URI", uri } },
+    okcode = "OKAY",
+  }, { desktop = true })
+end
+
 local function refresh_node(node)
   if not node then return M.refresh_all() end
   if node.kind == "section" then refresh_section(node); return end
@@ -976,6 +1071,85 @@ local function refresh_node(node)
   if node.kind == "favorite" then refresh_favorites(); render(); return end
   if node.kind == "inactive" then refresh_inactive(); return end
   if node.kind == "transport" then refresh_transports(); return end
+end
+
+local function copy_payload(node, kind)
+  if not node then return nil end
+  if kind == "name" then return node.name or node.id or node.label end
+  if kind == "uri" then return object_gui_uri(node) or node.uri end
+  if kind == "package" then return node.package end
+  if kind == "transport" then return associated_transport(node) end
+  return node.name or node.id or node.label or object_gui_uri(node) or node.package
+end
+
+local COPY_CHOICES = {
+  { label = "Nombre técnico", kind = "name" },
+  { label = "Ruta ADT", kind = "uri" },
+  { label = "Paquete", kind = "package" },
+  { label = "Transporte", kind = "transport" },
+}
+
+local function copy_node_value(node, kind)
+  if not node then return end
+  local value = copy_payload(node, kind)
+  if not value or value == "" then
+    notify("No hay valor disponible para copiar.", vim.log.levels.WARN)
+    return
+  end
+  pcall(vim.fn.setreg, "+", value)
+  notify("Copied: " .. value)
+end
+
+local function copy_selected_prompt()
+  local node = selected_node()
+  if not node then return end
+  vim.ui.select(COPY_CHOICES, {
+    prompt = "Copiar del Repository:",
+    format_item = function(item) return item.label end,
+  }, function(choice)
+    if choice then copy_node_value(node, choice.kind) end
+  end)
+end
+
+local function show_transport(node)
+  if not node then return end
+  local transport = associated_transport(node)
+  if not transport or transport == "" then
+    notify("No hay transporte asociado en este nodo.", vim.log.levels.WARN)
+    return
+  end
+  pcall(vim.fn.setreg, "+", transport)
+  local lines = {
+    "SAP Repository Transport",
+    "",
+    "Transport: " .. transport,
+  }
+  if node.name then lines[#lines + 1] = "Object: " .. node.name end
+  if node.type and node.type ~= "" then lines[#lines + 1] = "Type: " .. node.type end
+  if node.package and node.package ~= "" then lines[#lines + 1] = "Package: " .. node.package end
+  if node.uri and node.uri ~= "" then lines[#lines + 1] = "URI: " .. node.uri end
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].buftype = "nofile"
+  vim.bo[buf].bufhidden = "wipe"
+  vim.bo[buf].swapfile = false
+  vim.bo[buf].filetype = "saprepositorytransport"
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  vim.cmd("botright split")
+  vim.api.nvim_win_set_buf(0, buf)
+  vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = buf, nowait = true, silent = true, desc = "SAP Repository: close transport view" })
+  notify("Transport copied: " .. transport)
+end
+
+local function set_filter(filter)
+  state.filter = trim(filter or "")
+  render()
+end
+
+local function filter_prompt()
+  vim.ui.input({ prompt = "Repository filter (type/name, empty clears): ", default = state.filter or "" }, function(input)
+    if input ~= nil then set_filter(input) end
+  end)
 end
 
 local function add_package_prompt()
@@ -1002,6 +1176,7 @@ local function add_selected_to_favorites()
       fav.active_state = node.active_state or fav.active_state
       fav.locked_by = node.locked_by or fav.locked_by
       fav.transport = node.transport or fav.transport
+      fav.package = node.package or fav.package
       break
     end
   end
@@ -1015,6 +1190,7 @@ local function add_selected_to_favorites()
       active_state = node.active_state,
       locked_by = node.locked_by,
       transport = node.transport,
+      package = node.package,
     }
   end
   save_favorites(list)
@@ -1034,7 +1210,12 @@ local function setup_buffer_maps()
   vim.keymap.set("n", "r", function() refresh_node(selected_node()) end, vim.tbl_extend("force", opts, { desc = "SAP Repository: refresh node" }))
   vim.keymap.set("n", "R", M.refresh_all, vim.tbl_extend("force", opts, { desc = "SAP Repository: refresh all" }))
   vim.keymap.set("n", "a", add_package_prompt, vim.tbl_extend("force", opts, { desc = "SAP Repository: add package root" }))
-  vim.keymap.set("n", "f", add_selected_to_favorites, vim.tbl_extend("force", opts, { desc = "SAP Repository: favorite object" }))
+  vim.keymap.set("n", "f", filter_prompt, vim.tbl_extend("force", opts, { desc = "SAP Repository: filter by type/name" }))
+  vim.keymap.set("n", "F", function() set_filter("") end, vim.tbl_extend("force", opts, { desc = "SAP Repository: clear filter" }))
+  vim.keymap.set("n", "g", function() open_node_sapgui(selected_node()) end, vim.tbl_extend("force", opts, { desc = "SAP Repository: open in SAP GUI" }))
+  vim.keymap.set("n", "t", function() show_transport(selected_node()) end, vim.tbl_extend("force", opts, { desc = "SAP Repository: show transport" }))
+  vim.keymap.set("n", "y", copy_selected_prompt, vim.tbl_extend("force", opts, { desc = "SAP Repository: copy name/path/package" }))
+  vim.keymap.set("n", "A", add_selected_to_favorites, vim.tbl_extend("force", opts, { desc = "SAP Repository: favorite object" }))
   vim.keymap.set("n", "q", function()
     if is_valid_win(state.win) then vim.api.nvim_win_close(state.win, true) end
   end, vim.tbl_extend("force", opts, { desc = "SAP Repository: close" }))
@@ -1102,5 +1283,22 @@ M._parse_transport_line = parse_transport_line
 M._nodes_from_rows = nodes_from_rows
 M._status_badges = status_badges
 M._load_repository_store = load_repository_store
+M._test = {
+  associated_transport = associated_transport,
+  filter_matches = filter_matches,
+  node_visible = node_visible,
+  copy_payload = copy_payload,
+  set_filter = set_filter,
+  collect_lines = function(nodes, filter)
+    local old_filter = state.filter
+    local old_line_nodes = state.line_nodes
+    state.filter = filter or ""
+    state.line_nodes = {}
+    local lines = collect_lines(nodes, 0, {})
+    state.filter = old_filter
+    state.line_nodes = old_line_nodes
+    return lines
+  end,
+}
 
 return M

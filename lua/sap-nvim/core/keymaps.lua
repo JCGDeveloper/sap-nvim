@@ -147,6 +147,7 @@ sap-nvim atajos:
   <leader>atl  Listar ordenes (:SapTransports)
   <leader>atL  Listar TODAS las ordenes del sistema (:SapListAllTransports)
   <leader>atc  Crear orden (:SapTransportCreate)
+  <leader>atR  Checklist read-only antes de liberar (:SapReleaseAssistant)
   <leader>atr  Liberar orden (:SapTransportRelease)
 
   CONEXION:

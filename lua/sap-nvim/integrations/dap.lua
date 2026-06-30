@@ -936,6 +936,16 @@ end
 function M.setup()
 	local ok, dap = pcall(require, "dap")
 	if not ok then
+		local function missing_dap()
+			vim.notify("[sap-nvim] nvim-dap no está instalado; el debugger DAP no está disponible.", vim.log.levels.WARN)
+		end
+		vim.api.nvim_create_user_command("SapDap", missing_dap, { desc = "sap-nvim: Lanzar debugger ABAP (requiere nvim-dap)" })
+		vim.api.nvim_create_user_command("SapDapClearBreakpoints", missing_dap, {
+			desc = "sap-nvim: Limpiar breakpoints del objeto actual (requiere nvim-dap)",
+		})
+		vim.api.nvim_create_user_command("SapDapClearBreakpointsRecursive", missing_dap, {
+			desc = "sap-nvim: Limpiar breakpoints raíz + includes (requiere nvim-dap)",
+		})
 		return
 	end -- nvim-dap no instalado
 

@@ -67,7 +67,8 @@ Al arrancar sin argumentos se abre el **dashboard** (pantalla de inicio). Teclas
 
 - **`<leader>e`** en buffers ABAP/CDS, o **`<leader>afr`** global (`:SapRepository`) — explorador persistente tipo Eclipse/VSCode. Muestra
   roots de paquetes, favoritos, inactivos y transportes; Enter/`o` abre objetos con `source.open`,
-  `l`/Tab expande nodos, `r` refresca el nodo, `a` añade un root persistente y `f` guarda favorito.
+  `l`/Tab expande nodos, `r` refresca el nodo, `f` filtra por tipo/nombre, `g` abre el nodo en SAP GUI,
+  `y` copia nombre/ruta/paquete/transporte, `t` muestra la orden asociada y `A` guarda favorito.
 
 - **`␣␣`** (espacio-espacio) — saltar entre objetos SAP abiertos (estilo VSCode).
 - **`-`** (guion) — *volver*: recorre hacia atrás la navegación (gd/búsqueda/include) y, al
@@ -119,10 +120,12 @@ Al arrancar sin argumentos se abre el **dashboard** (pantalla de inicio). Teclas
 - **`<leader>an`** (`:SapNew`) — crea programa/include, clase, interface, FM/FUGR,
   DDIC (tabla, estructura, dominio, elemento de datos, table type), CDS/RAP (DDLS, DDLX,
   DCL, BDEF, SRVD), **transacción**, variante de report (si tu `sapcli` la expone),
-  message class y paquete **en el sistema**. Valida rutas ADT conocidas, exige paquete y
-  transporte para objetos transportables en modo productivo, escribe plantilla inicial donde
-  hay editor de fuente, y cae con mensaje seguro cuando el endpoint no existe. El campo
-  **paquete autocompleta en vivo** (picker que busca en el sistema según escribes, estilo VSCode).
+  message class y paquete **en el sistema**. También expone planes offline seguros para
+  search help y number range hasta validar el POST real. Valida rutas ADT conocidas, exige
+  paquete y transporte para objetos transportables en modo productivo, escribe plantilla
+  inicial donde hay editor de fuente, y cae con mensaje seguro cuando el endpoint no existe.
+  El campo **paquete autocompleta en vivo** (picker que busca en el sistema según escribes,
+  estilo VSCode).
 - **`:SapNewAdtPlan <tipo> <nombre> <paquete>`** — muestra ruta, MIME y XML calculado para
   creación ADT **sin hacer POST**. Útil para validar en vivo builders DDIC/RAP antes de tocar
   un sistema. DDIC sigue creando por la vía probada de `sapcli`; los builders ADT DDIC quedan
@@ -158,11 +161,30 @@ Al ejecutar una transacción (`<leader>ax`, dashboard `x`) o un programa (`<lead
 ## 8. Transportes (CTS)
 
 - **`<leader>atl`** (`:SapTransports`) listar mías · **`<leader>atc`** (`:SapTransportCreate`)
-  crear (no exige estar dentro de un objeto: usa el paquete) · **`<leader>atr`** liberar.
+  crear (no exige estar dentro de un objeto: usa el paquete) · **`<leader>atR`**
+  (`:SapReleaseAssistant`) checklist read-only antes de liberar · **`<leader>atr`** liberar.
 - Cockpit: órdenes/tareas, owner, estado, target, paquetes, objetos, readiness, inactivos,
   warnings por destino productivo/targets/paquetes mixtos y bloqueo por `safe_mode`.
-- `:SapTransportContents` · `:SapTransportReadiness` · `:SapTransportCompare` ·
+- `:SapTransportObjects [ORDEN] [filtro]` lista objetos; desde el panel Enter abre el objeto,
+  `d` compara inactive/transporte contra activo o buffer local y `g` lo abre en SAP GUI.
+- `:SapTransportOpenObject` · `:SapTransportObjectDiff` · `:SapTransportGui` ·
+  `:SapTransportContents` · `:SapTransportReadiness` · `:SapTransportCompare` ·
   `:SapTransportHistory` · `:SapTransportRelease` · `:SapTransportReassign`.
+- `:SapTransportConsistency [ORDEN]` consulta `consistencychecks` remoto por ADT: prueba GET y
+  solo usa POST cuando el endpoint indica que GET no está permitido. Muestra panel de resultado,
+  nunca libera ni borra.
+- `:SapTransportReleaseJobs [ORDEN]` consulta `releasejobs`/`newreleasejobs` por GET para ver
+  detalle/estado de jobs sin crear ni ejecutar release automáticamente.
+- `:SapTransportActions [ORDEN]` documenta acciones CTS disponibles y bloqueadas: sort/compress,
+  protect, reassign y newtask quedan como informativas o detrás de opt-in/confirmación.
+- `:SapReleaseAssistant [TRKORR]` no libera nada: muestra owner, estado, target, orden de release,
+  tareas abiertas, objetos, inactivos, ATC/quality si hay datos locales, consistency ADT por GET si
+  esta disponible y locks/estado cuando se puede inferir.
+- `:SapTransportAddUser <TRKORR> <USUARIO>` valida el código técnico de orden
+  (`S4FK...`, no la descripción) y el usuario SAP; delega en `:SapTransportNewTask` solo si
+  `productive.allow_transport_task_post=true`, si no copia la orden y abre SE09/SE10 como fallback.
+- `:SapTransportNewTask <TRKORR> <USUARIO>` hace POST ADT `/tasks` únicamente con opt-in productivo
+  y confirmación exacta del TRKORR.
 - Acciones peligrosas: liberar exige checks + confirmación fuerte; borrar y reasignar quedan
   bloqueados salvo opt-in explícito en `productive`.
 
@@ -186,7 +208,14 @@ Al ejecutar una transacción (`<leader>ax`, dashboard `x`) o un programa (`<lead
   lo permiten. Guarda historial local en **`:SapQualityHistory`**.
 - **`<leader>aqw`** (`:SapAtcWorklist`) — worklist ATC desde quickfix/historial con filtros
   `all/errors/warnings/info`. En el panel: `o` salta al hallazgo, `c` vuelve a quickfix, `?`/`K`
-  muestra ayuda del check si el hallazgo trae identificador o URL.
+  muestra ayuda del check si el hallazgo trae identificador o URL, `D` intenta leer documentación
+  ADT por `GET` si hay URI y `x` muestra el panel informativo de exención. El filtro queda
+  persistido localmente.
+- **`:SapAtcRoutes`** valida rutas ADT de `checkruns/reporters` y `checkruns` contra el objeto
+  actual. **`:SapAtcRemoteWorklist [id=<ID>] [timestamp=<TS>]`** refresca una worklist remota si
+  el ATC devuelve `worklistId`.
+- **`:SapAtcRequestExemption`** no envía exenciones: solo muestra el contexto del hallazgo hasta
+  que exista endpoint verificado y confirmación explícita.
 - El panel puede servir como helper de bloqueo para release/activate, pero solo reporta: no libera
   transportes ni activa objetos. Configurable con `quality.release_activate_helper`,
   `quality.block_release_on_errors` y `quality.block_activate_on_errors`.

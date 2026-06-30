@@ -40,8 +40,10 @@ local TYPE_MAP = {
 	["TTYP/TT"] = { label = "Table Type", group = "tabletype" },
 	["DTEL/DE"] = { label = "Data Element", group = "dataelement" },
 	["DOMA/DO"] = { label = "Domain", group = "domain" },
+	["SHLP/SH"] = { label = "Search Help", group = nil },
 	["ENQU/EL"] = { label = "Lock Object", group = nil },
 	["MSAG/N"] = { label = "Message Class", group = "messageclass" },
+	["NROB/O"] = { label = "Number Range Object", group = nil },
 	["TRAN/T"] = { label = "Transaction", group = "transaction" },
 	["DEVC/K"] = { label = "Package", group = "package" },
 	-- CDS / RAP (se abren por ADT directo vía core/cds)
@@ -76,8 +78,10 @@ local OBJECT_TYPES = {
 	{ code = "TTYP", label = "Table Type" },
 	{ code = "DTEL", label = "Data Element" },
 	{ code = "DOMA", label = "Domain" },
+	{ code = "SHLP", label = "Search Help" },
 	{ code = "ENQU", label = "Lock Object" },
 	{ code = "MSAG", label = "Message Class" },
+	{ code = "NROB", label = "Number Range Object" },
 	{ code = "TRAN", label = "Transaction" },
 	{ code = "DEVC", label = "Package" },
 }

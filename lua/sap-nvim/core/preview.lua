@@ -71,6 +71,29 @@ local function pane(name)
 	return cockpit.panes[name]
 end
 
+local function help_lines()
+	return {
+		"Comandos:",
+		":SapDebugCockpit abre el cockpit",
+		":SapDebugCode vuelve al código sin cerrar el cockpit",
+		":SapDebugClose cierra el cockpit y vuelve al código",
+		":SapDapWatch <expr> añade watch",
+		":SapDebugWatchTab <1..6|nombre> cambia Variables1/2, Locals, Globals, Auto o Memory",
+		":SapDebugDataExplorer abre Data Explorer",
+		":SapDebugDataFilter <texto> filtra Data Explorer",
+		":SapDebugSetVariable <var> <valor> modifica una variable si la config lo permite",
+		":SapAlvPreview / :SapAlvPreviewMine visualizan variable o tabla",
+		"",
+		"Teclas cockpit:",
+		"F5/F6/F7/F8 step into, step over, return, continue",
+		"1..7 cambia panel; v1..v6 cambia pestaña derecha",
+		"S/T/O/D/E cambia escritorio de datos",
+		"o abre variable; = set variable; r refresca; c código; q cierra; ? ayuda",
+		"a/i/Enter añade watch; e edita; d borra",
+		"[/] o </> pagina tablas; / filtra Data Explorer",
+	}
+end
+
 for _, tab in ipairs(COCKPIT_TABS) do
 	pane(tab)
 end
@@ -250,6 +273,46 @@ local function focus_preview_tab()
 	end
 end
 
+local function focus_code_target(target_tab, target_buf)
+	target_tab = target_tab or code_tab
+	target_buf = target_buf or code_buf
+	if target_buf and vim.api.nvim_buf_is_valid(target_buf) then
+		if tab_valid(target_tab) then
+			pcall(vim.api.nvim_set_current_tabpage, target_tab)
+			for _, win in ipairs(vim.api.nvim_tabpage_list_wins(target_tab)) do
+				if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == target_buf then
+					pcall(vim.api.nvim_set_current_win, win)
+					return true
+				end
+			end
+			local win = vim.api.nvim_get_current_win()
+			if win and vim.api.nvim_win_is_valid(win) then
+				pcall(vim.api.nvim_win_set_buf, win, target_buf)
+				return vim.api.nvim_win_get_buf(win) == target_buf
+			end
+		end
+		for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+			for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+				if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == target_buf then
+					pcall(vim.api.nvim_set_current_tabpage, tab)
+					pcall(vim.api.nvim_set_current_win, win)
+					return true
+				end
+			end
+		end
+	end
+	if tab_valid(target_tab) then
+		pcall(vim.api.nvim_set_current_tabpage, target_tab)
+		return true
+	end
+	local ok, dap = pcall(require, "dap")
+	if ok and dap.focus_frame then
+		pcall(dap.focus_frame)
+		return true
+	end
+	return false
+end
+
 local function pin_preview_after_step()
 	keep_preview_until = now_ms() + 10000
 end
@@ -291,9 +354,15 @@ function M.install_dap_focus_guard()
 	end
 	dap.listeners.after.event_terminated["sap_nvim_preview_focus"] = function()
 		keep_preview_until = 0
+		vim.schedule(function()
+			M.close_cockpit({ focus_code = true })
+		end)
 	end
 	dap.listeners.after.event_exited["sap_nvim_preview_focus"] = function()
 		keep_preview_until = 0
+		vim.schedule(function()
+			M.close_cockpit({ focus_code = true })
+		end)
 	end
 	dap_focus_guard_installed = true
 end
@@ -304,15 +373,30 @@ function M.jump_to_code()
 		pcall(vim.api.nvim_set_current_tabpage, preview_tab)
 		if code_win and vim.api.nvim_win_is_valid(code_win) then
 			pcall(vim.api.nvim_set_current_win, code_win)
+			return
 		end
-		return
+		if focus_code_target(code_tab, code_buf) then
+			return
+		end
 	end
 	if tab_valid(code_tab) then
-		pcall(vim.api.nvim_set_current_tabpage, code_tab)
+		if focus_code_target(code_tab, code_buf) then
+			return
+		end
 	end
 	local ok, dap = pcall(require, "dap")
 	if ok and dap.focus_frame then
 		pcall(dap.focus_frame)
+	end
+end
+
+function M.close_cockpit(opts)
+	opts = opts or {}
+	local target_tab, target_buf = code_tab, code_buf
+	keep_preview_until = 0
+	close_preview_tab()
+	if opts.focus_code ~= false then
+		focus_code_target(target_tab, target_buf)
 	end
 end
 
@@ -382,8 +466,13 @@ local function map_preview_keys(buf)
 	end
 
 	local opts = { buffer = buf, nowait = true, silent = true }
-	vim.keymap.set("n", "q", close_preview_tab, vim.tbl_extend("force", opts, { desc = "Cerrar preview SAP" }))
-	vim.keymap.set("n", "<Esc>", close_preview_tab, opts)
+	vim.keymap.set("n", "q", function()
+		M.close_cockpit()
+	end, vim.tbl_extend("force", opts, { desc = "Cerrar preview SAP" }))
+	vim.keymap.set("n", "<Esc>", function()
+		M.close_cockpit()
+	end, opts)
+	vim.keymap.set("n", "c", M.jump_to_code, vim.tbl_extend("force", opts, { desc = "SAP Debugger: volver al código" }))
 	vim.keymap.set("n", "<Tab>", function()
 		select_relative_tab(1)
 	end, vim.tbl_extend("force", opts, { desc = "Cockpit: pestaña siguiente" }))
@@ -441,6 +530,11 @@ local function map_preview_keys(buf)
 			M.refresh_pane(cockpit.active, { focus = false, preserve_cursor = true })
 		end
 	end, vim.tbl_extend("force", opts, { desc = "Cockpit: refrescar" }))
+	vim.keymap.set("n", "?", function()
+		if M.open_help then
+			M.open_help({ focus = true })
+		end
+	end, vim.tbl_extend("force", opts, { desc = "Cockpit: ayuda comandos/teclas" }))
 	vim.keymap.set("n", "/", function()
 		if M.set_data_explorer_filter then
 			M.set_data_explorer_filter()
@@ -645,6 +739,9 @@ map_code_debug_keys = function(buf)
 	set("<leader>du", dap_call_from_debugger("step_out"), "DAP step out")
 	set("<leader>dc", dap_call_from_debugger("continue"), "DAP continuar")
 	set("<leader>dg", M.jump_to_code, "DAP ir al código")
+	set("<leader>dq", function()
+		M.close_cockpit()
+	end, "SAP Debugger: cerrar cockpit")
 end
 
 local function ensure_preview_tab(focus)
@@ -2247,6 +2344,15 @@ function M.refresh_pane(name, opts)
 	end
 end
 
+function M.open_help(opts)
+	opts = opts or {}
+	local p = pane("Log")
+	p.title = "Ayuda"
+	p.lines = help_lines()
+	cockpit.active = "Log"
+	render_cockpit({ focus = opts.focus, preserve_cursor = opts.preserve_cursor })
+end
+
 function M.open_cockpit(opts)
 	opts = opts or {}
 	local focus = opts.focus ~= false
@@ -2276,6 +2382,10 @@ function M._debug_state()
 			preview = preview_win,
 			stack = stack_win,
 			watch = watch_win,
+		},
+		tabs = {
+			code = code_tab,
+			preview = preview_tab,
 		},
 		desktop_tabs = vim.deepcopy(SAPGUI_DESKTOPS),
 		watch_tabs = vim.deepcopy(SAPGUI_WATCH_TABS),
@@ -2523,6 +2633,15 @@ function M.setup()
 	vim.api.nvim_create_user_command("SapDebugCockpit", function()
 		M.open_cockpit()
 	end, { desc = "Abrir Debug Cockpit SAP" })
+	vim.api.nvim_create_user_command("SapDebugCode", function()
+		M.jump_to_code()
+	end, { desc = "Volver al código desde el Debug Cockpit SAP" })
+	vim.api.nvim_create_user_command("SapDebugClose", function()
+		M.close_cockpit()
+	end, { desc = "Cerrar Debug Cockpit SAP y volver al código" })
+	vim.api.nvim_create_user_command("SapDebugHelp", function()
+		M.open_help({ focus = true })
+	end, { desc = "Mostrar comandos y teclas del Debug Cockpit SAP" })
 	vim.api.nvim_create_user_command("SapDapWatch", function(args)
 		M.add_watch(args.args)
 	end, { nargs = "*", desc = "Añadir expresión Watch al Debug Cockpit" })

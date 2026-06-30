@@ -8,6 +8,7 @@ find lua -name '*.lua' -print0 | xargs -0 -I{} luajit -b {} /tmp/sap-nvim-luac-c
 python3 -m py_compile python/adt_daemon.py
 
 luajit test/completion_spec.lua
+env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/intel_commands_spec.lua +qa!
 luajit test/sapcli_gate_spec.lua
 luajit test/sapcli_productive_gate_spec.lua
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/quality_spec.lua +qa!
@@ -18,6 +19,7 @@ env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/adt_http_plaintext_password_spec.lua +qa!
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/productive_config_status_spec.lua +qa!
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/adt_http_productive_gate_spec.lua +qa!
+env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/doctor_livecheck_productive_spec.lua +qa!
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/new_spec.lua +qa!
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/index_spec.lua +qa!
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/index_consumers_spec.lua +qa!
@@ -27,7 +29,9 @@ env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/activation_check_spec.lua +qa!
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/docs_panel_spec.lua +qa!
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/transport_spec.lua +qa!
+env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/release_spec.lua +qa!
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/sapcli_auth_gate_spec.lua +qa!
+env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/dap_commands_spec.lua +qa!
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/debugger_cockpit_spec.lua
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada -S test/repository_spec.lua +qa!
 env XDG_STATE_HOME=/tmp/sap-nvim-state nvim --headless -u NONE -i /tmp/sap-nvim-shada +'set rtp+=.' +'lua require("sap-nvim").setup(); print("LOAD_OK")' +qa

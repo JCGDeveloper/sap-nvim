@@ -58,6 +58,18 @@ end
 if repo._status_badges(nodes[2]) ~= " {inactive lock:DEVUSER S4HK900777}" then
   error("status badges did not include inactive/lock/transport")
 end
+if repo._test.associated_transport(nodes[2]) ~= "S4HK900777" then
+  error("associated transport should use node transport")
+end
+if repo._test.copy_payload(nodes[2], "name") ~= "ZCL_DEMO" then
+  error("copy payload did not expose technical name")
+end
+if repo._test.copy_payload(nodes[2], "uri") ~= "/sap/bc/adt/oo/classes/zcl_demo" then
+  error("copy payload did not expose ADT URI")
+end
+if repo._test.copy_payload(nodes[2], "package") ~= "Z001" then
+  error("copy payload did not expose package")
+end
 
 local child_xml = table.concat({
   '<tre:node xmlns:tre="http://www.sap.com/adt/core/tree" xmlns:adtcore="http://www.sap.com/adt/core">',
@@ -84,6 +96,31 @@ if child_by_name.GET_DATA.member_kind ~= "method" or child_by_name.GET_DATA.lock
 end
 if child_by_name.CARRID.member_kind ~= "field" then
   error("DDIC field child was not classified")
+end
+child_by_name.CARRID.parent = nodes[2]
+if repo._test.associated_transport(child_by_name.CARRID) ~= "S4HK900777" then
+  error("associated transport should be inferred from parent without SAP writes")
+end
+if repo._status_badges(child_by_name.CARRID) ~= " {S4HK900777}" then
+  error("status badges should show inferred parent transport")
+end
+
+if not repo._test.filter_matches(nodes[2], "clas") or not repo._test.filter_matches(nodes[2], "zcl_demo") then
+  error("repository filter should match type and technical name")
+end
+if repo._test.filter_matches(nodes[2], "ztable") then
+  error("repository filter should not match unrelated names")
+end
+nodes[2].expanded = true
+nodes[2].loaded = true
+nodes[2].children = { child_by_name.CARRID }
+local filtered_lines = repo._test.collect_lines(nodes, "carrid")
+local rendered = table.concat(filtered_lines, "\n")
+if not rendered:find("ZCL_DEMO", 1, true) or not rendered:find("CARRID", 1, true) then
+  error("filtered render should keep matching descendants and their parents")
+end
+if rendered:find("ZPKG_SUB", 1, true) then
+  error("filtered render should hide unrelated package nodes")
 end
 
 local sapcli_rows = repo._parse_sapcli_package_lines({

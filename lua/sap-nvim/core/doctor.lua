@@ -41,6 +41,115 @@ local function warn(ok)
   return ok and "  ✅ " or "  ⚠ "
 end
 
+local function sapcli_config_path()
+  return vim.fn.expand("~/.sapcli/config.yml")
+end
+
+local function read_sapcli_config()
+  local f = io.open(sapcli_config_path(), "r")
+  if not f then return nil end
+  local content = f:read("*a") or ""
+  f:close()
+  return content
+end
+
+local function current_context_from_config(content)
+  return tostring(content or ""):match("current%-context:%s*([%w_%-]+)")
+end
+
+local function legacy_password_present(content)
+  content = tostring(content or "")
+  return content:match("^%s*password:%s*%S+") ~= nil
+    or content:match("\n%s*password:%s*%S+") ~= nil
+end
+
+local function config_permissions_ok(path)
+  local st = vim.loop.fs_stat(path)
+  if not st then return true, "sin archivo" end
+  return (st.mode % 64) == 0, string.format("%o", st.mode % 512)
+end
+
+local function connection_state(adt_http)
+  if not adt_http then
+    return false, "no disponible"
+  end
+  local ready = adt_http.ready and adt_http.ready() == true
+  if ready then
+    return true, "validada"
+  end
+  local needs_login = adt_http.needs_login and adt_http.needs_login() == true
+  if needs_login then
+    return false, "pausada/no validada; posible 401 previo, usa :SapRelogin"
+  end
+  return false, "no validada; usa :SapLogin"
+end
+
+local function productive_readiness_lines(opts)
+  opts = opts or {}
+  local cfg = opts.config or config
+  local sec = cfg.security()
+  local prod = cfg.productive()
+  local profile = cfg.profile_name and cfg.profile_name() or "dev"
+  local sapcli_cfg = opts.sapcli_config
+  if sapcli_cfg == nil then sapcli_cfg = read_sapcli_config() end
+  local current_context = current_context_from_config(sapcli_cfg)
+  local ok_adt, adt_http
+  if opts.adt_http ~= nil then
+    adt_http = opts.adt_http
+    ok_adt = adt_http ~= false
+  else
+    ok_adt, adt_http = pcall(require, "sap-nvim.core.adt_http")
+  end
+  local ctx = ok_adt and adt_http and adt_http.context_info and adt_http.context_info() or nil
+  local ready_ok, ready_detail = connection_state(ok_adt and adt_http or nil)
+  local perm_ok, perm_detail = config_permissions_ok(sapcli_config_path())
+  local ca_needed = prod.require_tls ~= false and sec.ca_file and sec.ca_file ~= ""
+  local ca_ok = not ca_needed or vim.fn.filereadable(vim.fn.expand(sec.ca_file)) == 1
+  local tls_ok = prod.require_tls == false or sec.verify_tls == true
+  local transport_safe = prod.allow_release_transports ~= true
+    and prod.allow_delete_transports ~= true
+    and prod.allow_reassign_transports ~= true
+    and prod.allow_transport_task_post ~= true
+
+  local lines = {
+    "Productivo/seguridad:",
+    (profile == "prod" and mark(true) or warn(true)) .. "perfil activo: " .. profile:upper() .. " (dev/qa/prod)",
+    mark(current_context ~= nil) .. "current-context: " .. tostring(current_context or "no configurado"),
+    mark(perm_ok) .. "~/.sapcli/config.yml permisos 0600" .. (perm_detail and (" (" .. perm_detail .. ")") or ""),
+    mark(not legacy_password_present(sapcli_cfg)) .. "~/.sapcli/config.yml sin password legacy",
+    mark(sec.allow_plaintext_password ~= true) .. "password legacy deshabilitada por configuración",
+    mark(tls_ok) .. "TLS verify_tls requerido/listo" .. (tls_ok and "" or " (configura security.verify_tls=true)"),
+  }
+
+  if sec.ca_file and sec.ca_file ~= "" then
+    table.insert(lines, mark(ca_ok) .. "CA file legible: " .. vim.fn.expand(sec.ca_file))
+  elseif prod.require_tls ~= false then
+    table.insert(lines, warn(true) .. "CA file no configurado; válido si el trust store del sistema cubre SAP")
+  end
+
+  table.insert(lines, mark(prod.safe_mode == true) .. "safe_mode activo")
+  table.insert(lines, mark(prod.confirm_destructive ~= false) .. "confirmación fuerte para acciones destructivas")
+  table.insert(lines, mark(prod.audit_sensitive_actions ~= false) .. "auditoría local de acciones sensibles")
+  table.insert(lines, mark(profile ~= "prod" or prod.read_only == true) .. "prod read_only por defecto")
+  table.insert(lines, mark(profile ~= "prod" or prod.allow_create_objects ~= true) .. "create bloqueado en prod salvo opt-in")
+  table.insert(lines, mark(profile ~= "prod" or prod.allow_write_objects ~= true) .. "write/activate bloqueado en prod salvo opt-in")
+  table.insert(lines, mark(profile ~= "prod" or prod.allow_release_transports ~= true) .. "release transporte bloqueado en prod salvo opt-in")
+  table.insert(lines, mark(prod.allow_delete_objects ~= true) .. "borrado remoto de objetos bloqueado")
+  table.insert(lines, mark(prod.allow_delete_transports ~= true) .. "borrado de transportes bloqueado")
+  table.insert(lines, mark(prod.allow_debug_set_variable ~= true) .. "debug set-variable bloqueado")
+  table.insert(lines, mark(transport_safe) .. "acciones CTS destructivas bloqueadas por defecto")
+  table.insert(lines, mark(ready_ok) .. "conexión ADT: " .. ready_detail)
+  if ctx then
+    table.insert(lines, warn(true) .. "contexto visible: "
+      .. tostring(ctx.sysid or "???") .. "/" .. tostring(ctx.client or "???")
+      .. "/" .. tostring(ctx.user or "???"))
+  else
+    table.insert(lines, warn(false) .. "contexto visible: no se pudo leer SID/mandante/usuario")
+  end
+
+  return lines
+end
+
 local function auth_hint(lines)
   local text = table.concat(lines or {}, "\n"):lower()
   if text == "" then return nil end
@@ -78,50 +187,16 @@ function M.run()
       return (st.mode % 64) == 0
     end },
     { "~/.sapcli/config.yml sin password legacy", function()
-      local f = io.open(vim.fn.expand("~/.sapcli/config.yml"), "r")
-      if not f then return true end
-      local content = f:read("*a") or ""
-      f:close()
-      return content:match("\n%s*password:%s*%S+") == nil
+      return not legacy_password_present(read_sapcli_config())
     end },
   }
   for _, c in ipairs(local_checks) do
     table.insert(results, mark(c[2]()) .. c[1])
   end
 
-  local sec = config.security()
-  local prod = config.productive()
-  local profile = config.profile_name and config.profile_name() or "dev"
   table.insert(results, "")
-  table.insert(results, "Productivo/seguridad:")
-  table.insert(results, (profile == "prod" and mark(true) or warn(true)) .. "perfil activo: " .. profile)
-  if profile == "prod" then
-    table.insert(results, mark(prod.read_only == true) .. "prod read_only por defecto")
-  else
-    table.insert(results, warn(true) .. "perfil no productivo; no fuerza solo lectura global")
-  end
-  table.insert(results, mark(prod.safe_mode == true) .. "safe_mode activo")
-  table.insert(results, mark(prod.confirm_destructive ~= false) .. "confirmación fuerte para acciones destructivas")
-  table.insert(results, mark(prod.audit_sensitive_actions ~= false) .. "auditoría local de acciones sensibles")
-  table.insert(results, mark(profile ~= "prod" or prod.allow_create_objects ~= true) .. "create bloqueado en prod salvo opt-in")
-  table.insert(results, mark(profile ~= "prod" or prod.allow_write_objects ~= true) .. "write/activate bloqueado en prod salvo opt-in")
-  table.insert(results, mark(profile ~= "prod" or prod.allow_release_transports ~= true) .. "release/reassign transporte bloqueado en prod salvo opt-in")
-  table.insert(results, mark(prod.allow_delete_objects ~= true) .. "borrado remoto de objetos bloqueado por defecto")
-  table.insert(results, mark(prod.allow_delete_transports ~= true) .. "borrado de transportes bloqueado por defecto")
-  table.insert(results, mark(prod.allow_debug_set_variable ~= true) .. "debug set-variable bloqueado por defecto")
-  table.insert(results, mark(sec.allow_plaintext_password ~= true) .. "password legacy de config.yml deshabilitada")
-  local tls_ok = sec.verify_tls == true
-  local tls_mark = prod.require_tls ~= false and mark or warn
-  table.insert(results, tls_mark(tls_ok) .. "TLS verificado" .. (tls_ok and "" or " (para productivo configura security.verify_tls=true + ca_file si aplica)"))
-  if sec.ca_file and sec.ca_file ~= "" then
-    table.insert(results, mark(vim.fn.filereadable(vim.fn.expand(sec.ca_file)) == 1) .. "CA file legible: " .. vim.fn.expand(sec.ca_file))
-  end
-  local ok_adt, adt_http = pcall(require, "sap-nvim.core.adt_http")
-  local ctx = ok_adt and adt_http.context_info and adt_http.context_info() or nil
-  if ctx then
-    table.insert(results, warn(true) .. "contexto visible: " .. tostring(ctx.sysid or "???") .. "/" .. tostring(ctx.client or "???") .. "/" .. tostring(ctx.user or "???"))
-  else
-    table.insert(results, warn(false) .. "contexto visible: no se pudo leer SID/mandante/usuario")
+  for _, line in ipairs(productive_readiness_lines()) do
+    table.insert(results, line)
   end
 
   if vim.fn.executable("sapcli") ~= 1 then
@@ -219,6 +294,9 @@ function M.run()
     end
   end)
 end
+
+M._productive_readiness_lines = productive_readiness_lines
+M._legacy_password_present = legacy_password_present
 
 function M.setup()
   vim.api.nvim_create_user_command("SapDoctor", M.run,

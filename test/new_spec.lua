@@ -33,8 +33,24 @@ end
 print("new.lua builders:")
 
 truthy(T.type_by_key("table_type"), "table type is exposed in SapNew")
+truthy(T.type_by_key("search_help"), "search help is exposed in SapNew")
+truthy(T.type_by_key("number_range"), "number range object is exposed in SapNew")
 truthy(T.type_by_key("behavior_definition"), "RAP behavior definition is exposed in SapNew")
 truthy(T.type_by_key("report_variant"), "report variant is exposed in SapNew")
+
+local ok_name, err_name = T.validate_object_name(T.type_by_key("table"), "zt_demo")
+same(ok_name, true, "customer table name validates and normalizes")
+ok_name, err_name = T.validate_object_name(T.type_by_key("table"), "MARA")
+same(ok_name, false, "safe mode blocks non-customer table creation")
+contains(err_name, "namespace cliente", "non-customer validation explains namespace rule")
+ok_name, err_name = T.validate_object_name(T.type_by_key("class"), "/ACME/ZCL_DEMO")
+same(ok_name, true, "customer namespace object validates")
+ok_name, err_name = T.validate_object_name(T.type_by_key("class"), "/ACME")
+same(ok_name, false, "malformed namespace is rejected")
+ok_name, err_name = T.validate_object_name(T.type_by_key("number_range"), "ZNR_TOO_LONG")
+same(ok_name, false, "number range object max length is enforced")
+ok_name, err_name = T.validate_object_name(T.type_by_key("program"), "SAPMZSTD", { customer_required = false })
+same(ok_name, true, "existing target program can be standard when not being created")
 
 local class_spec = T.type_by_key("class")
 local class_xml = T.adt_create.class.build("ZCL_DEMO", "Demo & Test", "ES", "DEVELOPER", "ZPKG")
@@ -75,9 +91,33 @@ local struct_xml = T.ddic_create.structure.build("ZS_DEMO", "Structure", "ES", "
 contains(struct_xml, 'adtcore:type="TABL/DS"', "structure DDIC XML has TABL/DS type")
 contains(struct_xml, 'ddic:name="FIELD1"', "structure DDIC XML carries field")
 
+local shlp_xml = T.ddic_create.search_help.build("ZSH_DEMO", "Search Help", "ES", "DEVELOPER", "ZPKG", {
+  selection_method = "ZT_DEMO",
+  parameter = "ID",
+  element = "ZDE_ID",
+})
+contains(shlp_xml, 'adtcore:type="SHLP/SH"', "search help DDIC XML has SHLP type")
+contains(shlp_xml, 'adtcore:name="ZT_DEMO"', "search help DDIC XML carries selection method")
+truthy(T.valid_adt_create_path(T.adt_create_paths.search_help), "search help ADT create path is validated")
+
+local nrob_xml = T.ddic_create.number_range.build("ZNR_DEMO", "Number Range", "ES", "DEVELOPER", "ZPKG", {
+  length = 8,
+})
+contains(nrob_xml, 'adtcore:type="NROB/O"', "number range ADT XML has NROB type")
+contains(nrob_xml, 'nrob:objectLength="8"', "number range ADT XML carries object length")
+truthy(T.valid_adt_create_path(T.adt_create_paths.number_range), "number range ADT create path is validated")
+
 local table_plan = T.build_adt_plan("table", "ZT_DEMO", "Table Demo", "ZPKG")
 same(table_plan.path, "/sap/bc/adt/ddic/tables", "table plan uses DDIC table route")
 same(table_plan.default_path, false, "DDIC plan is not default creation path")
+
+local shlp_plan = T.build_adt_plan("search_help", "ZSH_DEMO", "Search Help", "ZPKG")
+same(shlp_plan.path, "/sap/bc/adt/ddic/searchhelps", "search help plan uses DDIC route")
+same(shlp_plan.default_path, false, "search help plan is offline-only")
+
+local nrob_plan = T.build_adt_plan("number_range", "ZNR_DEMO", "Number Range", "ZPKG")
+same(nrob_plan.path, "/sap/bc/adt/numberranges/objects", "number range plan uses ADT route")
+same(nrob_plan.default_path, false, "number range plan is offline-only")
 
 local srvd_plan = T.build_adt_plan("service_definition", "ZUI_DEMO", "Service Demo", "ZPKG")
 same(srvd_plan.default_path, true, "RAP source plan is default ADT creation path")
@@ -88,6 +128,9 @@ same(joined(tabletype_args), "sapcli tabletype create ZTT_DEMO Table type ZPKG -
 
 local fm_args = T.build_create_args(T.type_by_key("function_module"), "Z_FM_DEMO", "FM Demo", nil, nil, "ZFG_DEMO")
 same(joined(fm_args), "sapcli functionmodule create ZFG_DEMO Z_FM_DEMO FM Demo", "function module create command")
+
+local msg_args = T.build_create_args(T.type_by_key("message_class"), "ZMSG_DEMO", "Messages", "ZPKG", "S4HK900004")
+same(joined(msg_args), "sapcli messageclass create ZMSG_DEMO Messages ZPKG --corrnr S4HK900004", "message class create command")
 
 local tx_args = T.build_transaction_args("ZTX_DEMO", "Tx Demo", "ZPKG", "S4HK900002", "report", "ZREP_DEMO")
 contains(joined(tx_args), "sapcli transaction create ZTX_DEMO Tx Demo ZPKG -t report --report-name ZREP_DEMO", "transaction report command")
@@ -110,6 +153,13 @@ local bdef = T.initial_source(T.type_by_key("behavior_definition"), "ZI_DEMO", "
 contains(bdef, "define behavior for ZI_ENTITY", "BDEF initial source")
 local srvd = T.initial_source(T.type_by_key("service_definition"), "ZUI_DEMO", "Service Demo")
 contains(srvd, "define service ZUI_DEMO", "SRVD initial source")
+
+new.setup()
+vim.cmd("SapNewAdtPlan cds_view ZI_DEMO ZPKG")
+local plan_lines = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+contains(plan_lines, "sap-nvim ADT create plan", "SapNewAdtPlan opens plan buffer")
+contains(plan_lines, '<ddl:ddlSource', "SapNewAdtPlan renders multiline XML safely")
+contains(plan_lines, 'adtcore:name="ZI_DEMO"', "SapNewAdtPlan keeps object metadata")
 
 config.setup({ profile = "prod" })
 same(T.creation_block_reason(), "modo solo lectura activo", "prod profile blocks object creation by default")

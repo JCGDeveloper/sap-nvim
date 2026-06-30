@@ -6,6 +6,7 @@ con quickfix, runner de tests, gestión de transportes, explorador de objetos, s
 
 > 📖 **[Manual de usuario completo → `docs/MANUAL.md`](docs/MANUAL.md)** — instalación, todas las
 > funciones, atajos y la capa de IA (agentes que programan en SAP).
+> Checklist operativo para validar mañana: [`docs/VALIDACION-MANANA.md`](docs/VALIDACION-MANANA.md).
 
 ## Ayuda SAP oficial
 
@@ -439,7 +440,14 @@ transportes ni activa objetos.
 
 `:SapAtcWorklist` / `<leader>aqw` abre una worklist ATC navegable desde quickfix o historial.
 Incluye filtros por severidad (`:SapAtcFilter errors|warnings|info|all`) y ayuda contextual del
-check con `:SapAtcHelp` cuando el hallazgo trae identificador o enlace.
+check con `:SapAtcHelp` cuando el hallazgo trae identificador o enlace. El filtro queda persistido
+en estado local. `:SapAtcRoutes` valida las rutas ADT de reporters/checkruns y
+`:SapAtcRemoteWorklist [id=<ID>] [timestamp=<TS>]` refresca una worklist ATC remota si el run
+devuelve `worklistId`. `:SapAtcDoc` hace solo `GET` de documentación ADT cuando el hallazgo trae
+URI; URLs externas se muestran como referencia.
+
+`:SapAtcRequestExemption` es un panel informativo/gated: no envía exenciones ni ejecuta endpoints
+destructivos mientras no haya una ruta verificada y confirmaciones explícitas.
 
 `:SapDumps` abre un visor de dumps del sistema de solo lectura. Prueba rutas ADT conocidas y, si el
 backend no las expone, permite saltar a ST22 con `s` o `:SapST22`. Usa `:SapDumpsRoutes` para ver
@@ -481,13 +489,14 @@ una revisión o comparar la versión activa contra esa revisión si el backend d
 
 `<leader>an` (`:SapNew`) te guía para crear un objeto ABAP nuevo:
 
-1. Elegí el tipo: Program, Class, Interface, Function Group, Include, Test Class
+1. Elegí el tipo: programa/include, clase/interface, FUGR/FM, DDIC clásico, CDS/RAP, transacción, variante, message class, search help, number range o paquete
 2. Ingresá el nombre
-3. Elegí el paquete desde el sistema (picker en vivo vía `sapcli package list`) — o tipealo a mano
-4. Elegí la orden de transporte de tus órdenes abiertas (picker en vivo vía `sapcli cts list transport`)
+3. Elegí el paquete desde el sistema (picker en vivo ADT) — o tipealo a mano
+4. Elegí la orden de transporte de tus órdenes abiertas
    — se omite automáticamente para paquetes `$TMP`
 
-Crea el archivo local con el template de cabecera correcto y lo abre para editar.
+Crea el objeto en SAP por ADT/sapcli según el tipo, abre el editor cuando hay fuente y muestra
+planes offline seguros para tipos clásicos no verificados como search help/number range.
 
 ---
 
@@ -529,7 +538,20 @@ recursivo. Abre oil.nvim (si está disponible) o el directorio al terminar.
 |-------|---------|-------------|
 | `<leader>atl` | `:SapTransports` | Listar órdenes de transporte abiertas — Enter copia el ID al portapapeles |
 | `<leader>atc` | `:SapTransportCreate` | Crear una nueva orden de transporte |
+| `<leader>atR` | `:SapReleaseAssistant [ORDEN]` | Checklist profesional de solo lectura antes de liberar: owner, tareas, objetos, inactivos, ATC si hay datos y consistency ADT si esta disponible |
 | `<leader>atr` | `:SapTransportRelease` | Liberar una orden de transporte (con confirmación) |
+| `<leader>atb` | `:SapTransportObjects [ORDEN] [filtro]` | Listar/filtrar objetos de una orden — Enter abre el objeto |
+| `<leader>atD` | `:SapTransportObjectDiff [ORDEN] [filtro]` | Comparar objeto de la orden contra activo o buffer local |
+| `<leader>atg` | `:SapTransportGui [ORDEN]` | Copiar la orden y abrir SE09 en SAP GUI |
+| `<leader>atK` | `:SapTransportConsistency [ORDEN]` | Consultar consistencychecks/readiness remoto ADT; no libera ni borra |
+| `<leader>atj` | `:SapTransportReleaseJobs [ORDEN]` | Ver releasejobs/newreleasejobs por GET; no ejecuta release |
+| `<leader>ata` | `:SapTransportActions [ORDEN]` | Panel de acciones CTS seguras/gated |
+| — | `:SapTransportAddUser <TRKORR> <USUARIO>` | Guía segura para añadir usuario/tarea; usa `:SapTransportNewTask` solo con opt-in |
+| — | `:SapTransportNewTask <TRKORR> <USUARIO>` | POST ADT `/tasks` solo si `productive.allow_transport_task_post=true` y confirmas el TRKORR exacto |
+
+`:SapReleaseAssistant [TRKORR]` no libera nada. Abre un checklist de release con orden tecnica,
+owner, estado, target, tareas abiertas, objetos, inactivos, senales de locks/estado inferibles,
+resumen ATC/quality local si existe y consistency ADT mediante GET si el backend lo expone.
 
 ---
 
@@ -707,10 +729,12 @@ Después autenticá una sola vez: `:Copilot auth` (usa tu login de GitHub de la 
 | `<leader>alr` | `:SapHelpRoutes` | Validar la búsqueda ADT usada por la ayuda |
 | `<leader>cc` | `:SapSearchCds` | Búsqueda en vivo de CDS / RAP |
 | `<leader>afs` | `:SapSearch` | Buscar objetos en SAP |
+| `<leader>afr` | `:SapRepository` | Explorer de paquetes/favoritos con filtro, SAP GUI, copiar datos y transporte asociado |
 | `<leader>afb` | `:SapBrowse` | Explorar contenido de un paquete |
 | `<leader>ack` | `:SapCheckout` | Checkout de un paquete completo al sistema de archivos local |
 | `<leader>atl` | `:SapTransports` | Listar órdenes de transporte abiertas |
 | `<leader>atc` | `:SapTransportCreate` | Crear orden de transporte |
+| `<leader>atR` | `:SapReleaseAssistant` | Checklist read-only antes de liberar |
 | `<leader>atr` | `:SapTransportRelease` | Liberar orden de transporte |
 | `<leader>asi` | `:SapStatus` | Mostrar info de la conexión SAP activa |
 | `<leader>asc` | `:SapSetup` | Asistente de configuración de conexión (kubeconfig de sapcli) |
@@ -793,6 +817,7 @@ sap-nvim/
 │   │   ├── lsp.lua           Diagnósticos abaplint en tiempo real vía vim.diagnostic
 │   │   ├── new.lua           Asistente de objeto nuevo con pickers del sistema
 │   │   ├── objtype.lua       Extensión de archivo → grupo de objeto sapcli (fuente única)
+│   │   ├── release.lua       :SapReleaseAssistant checklist read-only de release
 │   │   ├── setup.lua         :SapSetup — asistente de conexión kubeconfig de sapcli
 │   │   ├── statusline.lua    Componente de lualine + statusline nativa
 │   │   ├── transport.lua     Gestión de órdenes de transporte

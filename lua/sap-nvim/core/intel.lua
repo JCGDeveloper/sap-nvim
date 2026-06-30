@@ -1095,6 +1095,7 @@ function M.check_syntax(bufnr, cb)
 		method = "POST",
 		path = "/sap/bc/adt/checkruns",
 		query = { reporters = "abapCheckRun" },
+		accept = "application/vnd.sap.adt.checkmessages+xml, application/xml",
 		content_type = "application/vnd.sap.adt.checkobjects+xml",
 		body = xml,
 	}, function(body)
@@ -1206,6 +1207,9 @@ function M.setup()
 		{ desc = "sap-nvim: Fijar programa principal" }
 	)
 	vim.api.nvim_create_user_command("SapComplete", M.complete, { desc = "sap-nvim: Completado ADT" })
+	vim.api.nvim_create_user_command("SapCompleteDebug", M.complete_debug, {
+		desc = "sap-nvim: Diagnóstico del completado ADT",
+	})
 	vim.api.nvim_create_user_command("SapCheck", function()
 		M.check_list() -- check de SAP + lista de errores navegable (estilo VSCode)
 	end, { desc = "sap-nvim: Syntax check de SAP + lista de errores" })

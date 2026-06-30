@@ -14,11 +14,11 @@
 | Listar transportes del usuario | `userTransports` GET `/sap/bc/adt/cts/transportrequests?user=&targets=` | `transport.list_transports` (`sapcli cts list`, `:SapTransports`/`<leader>atl`) | ok (sapcli) |
 | Crear orden | `createTransport` POST `/sap/bc/adt/cts/transports` (XML CreateCorrectionRequest) | `transport.create_transport` (`sapcli cts create transport DESC`, `<leader>atc`) | ok |
 | Liberar | `transportRelease` POST `/sap/bc/adt/cts/transportrequests/{n}/{action}` | `transport.release_transport` (`sapcli cts release`, `<leader>atr`) | ok |
-| **Borrar** orden | `transportDelete` DELETE `/sap/bc/adt/cts/transportrequests/{n}` | — | **AÑADIR** (`sapcli cts delete`) |
-| **Reasignar** dueño | `transportSetOwner` PUT `/sap/bc/adt/cts/transportrequests/{n}` | — | **AÑADIR** (`sapcli cts reassign`) |
+| **Borrar** orden | `transportDelete` DELETE `/sap/bc/adt/cts/transportrequests/{n}` | `:SapTransportDelete` / `core.cts.delete_transport` | ok, opt-in productivo |
+| **Reasignar** dueño | `transportSetOwner` PUT `/sap/bc/adt/cts/transportrequests/{n}` | `:SapTransportReassign` (`sapcli cts reassign`) | ok, opt-in productivo |
 | Qué orden usar para un objeto | `transportInfo` POST `/sap/bc/adt/cts/transportchecks` | `source.resolve_transport` (selector + recordado por sesión) | ok (equivalente) |
-| Detalles de una orden | `transportDetails` GET `.../transportrequests/{n}` | — | opcional |
-| Añadir usuario/tarea | `transportAddUser` POST `.../{n}/tasks` | — | opcional |
+| Detalles/objetos de una orden | `transportDetails` GET `.../transportrequests/{n}` | `:SapTransportContents`, `:SapTransportObjects`, abrir objeto/diff/GUI | ok best-effort |
+| Añadir usuario/tarea | `transportAddUser` POST `.../{n}/tasks` | `:SapTransportAddUser` informativo: copia orden y abre SE09 si no hay wrapper seguro | safe fallback |
 | Usuarios del sistema | `systemUsers` GET `/sap/bc/adt/system/users` | — | opcional (para reassign) |
 
 `sapcli cts` soporta: **create / release / delete / reassign / list**. → exponer delete y reassign.

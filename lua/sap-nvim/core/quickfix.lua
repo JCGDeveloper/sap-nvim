@@ -2,8 +2,8 @@
 -- Quick fixes / code actions (los 💡 de VSCode). Replica abap-adt-api:
 --   1) fixProposals: POST /sap/bc/adt/quickfixes/evaluation (uri#start, body=source) -> propuestas.
 --   2) fixEdits: POST a la `adtcore:uri` de la propuesta elegida -> deltas (rango + contenido).
---   3) Aplica los deltas al buffer (en orden inverso para no desplazar posiciones).
--- Seguro: si algo no encaja (sin propuestas / sin deltas), NO toca el buffer.
+--   3) Preview de los deltas. Solo aplica al buffer tras confirmacion explicita.
+-- Seguro: si algo no encaja (sin propuestas / sin deltas claros), NO toca el buffer.
 
 local M = {}
 local adt_http = require("sap-nvim.core.adt_http")
@@ -16,11 +16,31 @@ local function enc(s)
   return (s or ""):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"):gsub("'", "&apos;")
 end
 local function dec(s)
-  return (s or ""):gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"'):gsub("&apos;", "'"):gsub("&amp;", "&")
+  return (s or "")
+    :gsub("&#x([%da-fA-F]+);", function(n) return vim.fn.nr2char(tonumber(n, 16) or 0) end)
+    :gsub("&#(%d+);", function(n) return vim.fn.nr2char(tonumber(n) or 0) end)
+    :gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"'):gsub("&apos;", "'"):gsub("&amp;", "&")
+end
+
+local function xml_attrs(tag)
+  local out = {}
+  for k, v in tostring(tag or ""):gmatch("([%w_:%-]+)%s*=%s*\"([^\"]*)\"") do
+    out[k] = dec(v)
+  end
+  for k, v in tostring(tag or ""):gmatch("([%w_:%-]+)%s*=%s*'([^']*)'") do
+    out[k] = dec(v)
+  end
+  return out
 end
 
 local function trim(s)
   return (s or ""):gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+local function adt_path(uri)
+  uri = trim(dec(uri or ""))
+  if uri == "" then return "" end
+  return uri:match("^adt://[^/]+(/.*)$") or uri:match("^https?://[^/]+(/.*)$") or uri
 end
 
 local function lower(s)
@@ -194,6 +214,73 @@ local function local_context_from_buffer(bufnr, opts)
     lnum = opts.lnum or lnum,
     col = opts.col or col,
     message = message or opts.text or "",
+  }
+end
+
+local function qf_position(bufnr)
+  local ok, qf = pcall(vim.fn.getqflist, { idx = 0, items = 0 })
+  if not ok or not qf or not qf.idx or qf.idx <= 0 or not qf.items or not qf.items[qf.idx] then
+    return nil
+  end
+  local item = qf.items[qf.idx]
+  if item.bufnr and item.bufnr ~= 0 and item.bufnr ~= bufnr then
+    return nil
+  end
+  if item.lnum and item.lnum > 0 then
+    return item.lnum, math.max(0, tonumber(item.col or 1) - 1), item.text
+  end
+  return nil
+end
+
+local function diagnostic_position(bufnr)
+  if not vim.diagnostic then return nil end
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local row0, col0 = cursor[1] - 1, cursor[2]
+  local diags = vim.diagnostic.get(bufnr, { lnum = row0 }) or {}
+  if #diags == 0 then return nil end
+  table.sort(diags, function(a, b)
+    local ac = tonumber(a.col or 0)
+    local bc = tonumber(b.col or 0)
+    local ahit = col0 >= ac and col0 <= tonumber(a.end_col or ac)
+    local bhit = col0 >= bc and col0 <= tonumber(b.end_col or bc)
+    if ahit ~= bhit then return ahit end
+    return ac < bc
+  end)
+  local d = diags[1]
+  return (d.lnum or row0) + 1, tonumber(d.col or col0) or col0, d.message
+end
+
+local function remote_context_from_buffer(opts)
+  opts = opts or {}
+  local bufnr = opts.bufnr or vim.api.nvim_get_current_buf()
+  if not vim.api.nvim_buf_is_valid(bufnr) then return nil end
+  local ok, intel = pcall(require, "sap-nvim.core.intel")
+  if not ok then return nil end
+  local uri = intel.object_uri(bufnr)
+  if not uri then return nil end
+
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  local row, col, message = cursor[1], cursor[2], nil
+  local qrow, qcol, qmsg = qf_position(bufnr)
+  if qrow then
+    row, col, message = qrow, qcol, qmsg
+  else
+    local drow, dcol, dmsg = diagnostic_position(bufnr)
+    if drow then row, col, message = drow, dcol, dmsg end
+  end
+  if opts.lnum then row = tonumber(opts.lnum) or row end
+  if opts.col then col = math.max(0, (tonumber(opts.col) or 1) - 1) end
+  if opts.adt_col then col = math.max(0, tonumber(opts.adt_col) or col) end
+
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  return {
+    bufnr = bufnr,
+    uri = uri,
+    row = math.max(1, tonumber(row or 1)),
+    col = math.max(0, tonumber(col or 0)),
+    message = message or opts.message or "",
+    lines = lines,
+    source = table.concat(lines, "\n"),
   }
 end
 
@@ -419,39 +506,136 @@ local function show_preview(ctx, action)
   vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = pbuf, silent = true, desc = "Cerrar preview" })
 end
 
--- Parsea las propuestas: bloques <adtcore:objectReference .../> con adtcore:uri/name/description
--- y (si está) userContent. Devuelve { {adt_uri, name, desc, user} ... }.
+local function show_lines_preview(title, before, after, focus)
+  local out = {
+    "Accion: " .. (title or "quickfix ADT"),
+    "Origen: ADT remoto",
+    "Aplicacion: solo buffer local; guarda/sube despues con :SapPush si procede",
+    "",
+    "--- antes",
+  }
+  for i, line in ipairs(before or {}) do
+    out[#out + 1] = string.format("%4d  %s", i, line)
+  end
+  out[#out + 1] = ""
+  out[#out + 1] = "--- despues"
+  for i, line in ipairs(after or {}) do
+    out[#out + 1] = string.format("%4d  %s", i, line)
+  end
+  vim.cmd("botright new")
+  local pbuf = vim.api.nvim_get_current_buf()
+  vim.bo[pbuf].buftype = "nofile"
+  vim.bo[pbuf].bufhidden = "wipe"
+  vim.bo[pbuf].swapfile = false
+  vim.bo[pbuf].filetype = "diff"
+  pcall(vim.api.nvim_buf_set_name, pbuf, "sap-quickfix-adt-preview")
+  vim.api.nvim_buf_set_lines(pbuf, 0, -1, false, out)
+  vim.bo[pbuf].modifiable = false
+  vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = pbuf, silent = true, desc = "Cerrar preview" })
+  if focus == false then pcall(vim.cmd, "wincmd p") end
+end
+
 local function parse_proposals(body)
   local out = {}
   if not body then return out end
-  for tag in body:gmatch("<adtcore:objectReference[^>]->") do
-    local adt_uri = tag:match('adtcore:uri="([^"]*)"')
-    local name = tag:match('adtcore:name="([^"]*)"')
-    local desc = tag:match('adtcore:description="([^"]*)"')
-    if adt_uri and adt_uri ~= "" then
-      out[#out + 1] = { adt_uri = dec(adt_uri), name = name or "", desc = dec(desc or (name or "fix")) }
+  local seen = {}
+
+  local function add_from_tag(tag, block)
+    local attrs = xml_attrs(tag)
+    local adt_uri = attrs["adtcore:uri"] or attrs.uri
+    if not adt_uri or adt_uri == "" or seen[adt_uri] then return end
+    seen[adt_uri] = true
+    local name = attrs["adtcore:name"] or attrs.name or ""
+    local desc = attrs["adtcore:description"] or attrs.description
+      or (block and block:match("<[%w_:%-]-description[^>]*>(.-)</[%w_:%-]-description>"))
+      or name
+      or "Quick fix ADT"
+    local user = attrs["quickfixes:userContent"] or attrs.userContent
+      or (block and (
+        block:match("<[%w_:%-]-userContent[^>]*>(.-)</[%w_:%-]-userContent>")
+        or block:match("<userContent[^>]*>(.-)</userContent>")
+      ))
+      or ""
+    out[#out + 1] = {
+      id = "adt:" .. tostring(#out + 1),
+      adt_uri = adt_path(adt_uri),
+      name = dec(name),
+      desc = dec(desc),
+      user = dec(user),
+      source = "adt",
+      raw = block or tag,
+    }
+  end
+
+  for block in body:gmatch("<[%w_:%-]-proposal[%w_:%-]*[^>]*>(.-)</[%w_:%-]-proposal[%w_:%-]*>") do
+    for tag in block:gmatch("<[%w_:%-]-objectReference%s+[^>]->") do
+      add_from_tag(tag, block)
     end
+  end
+  for tag in body:gmatch("<[%w_:%-]-objectReference%s+[^>]->") do
+    add_from_tag(tag, tag)
   end
   return out
 end
 
--- Parsea los deltas de fixEdits: <unit> con <adtcore:objectReference adtcore:uri="..#start=l,c;end=l,c">
--- y <content>. Devuelve { {srow,scol,erow,ecol, content} ... }.
-local function parse_deltas(body)
-  local out = {}
-  if not body then return out end
-  for unit in body:gmatch("<unit>(.-)</unit>") do
-    local ref = unit:match('adtcore:uri="([^"]*)"') or ""
-    local sl, sc, el, ec = ref:match("start=(%d+),(%d+);end=(%d+),(%d+)")
-    local content = unit:match("<content>(.-)</content>")
-    if sl and content then
-      out[#out + 1] = {
-        srow = tonumber(sl), scol = tonumber(sc), erow = tonumber(el), ecol = tonumber(ec),
-        content = dec(content),
-      }
-    end
+local function content_from_block(block)
+  return block:match("<[%w_:%-]-content[^>]*><!%[CDATA%[(.-)%]%]></[%w_:%-]-content>")
+    or block:match("<[%w_:%-]-content[^>]*>(.-)</[%w_:%-]-content>")
+end
+
+local function range_from_uri(uri)
+  local sl, sc, el, ec = tostring(uri or ""):match("start=(%d+),(%d+);end=(%d+),(%d+)")
+  if sl then return tonumber(sl), tonumber(sc), tonumber(el), tonumber(ec) end
+  sl, sc = tostring(uri or ""):match("start=(%d+),(%d+)")
+  if sl then return tonumber(sl), tonumber(sc), tonumber(sl), tonumber(sc) end
+  return nil
+end
+
+local function add_delta(out, unsupported, block, attrs)
+  attrs = attrs or {}
+  local uri = attrs["adtcore:uri"] or attrs.uri
+    or block:match('[%w_:%-]-uri="([^"]*)"')
+    or block:match("[%w_:%-]-uri='([^']*)'")
+  local sl = tonumber(attrs.startLine or attrs["quickfixes:startLine"] or attrs.line)
+  local sc = tonumber(attrs.startColumn or attrs["quickfixes:startColumn"] or attrs.column)
+  local el = tonumber(attrs.endLine or attrs["quickfixes:endLine"] or attrs.line)
+  local ec = tonumber(attrs.endColumn or attrs["quickfixes:endColumn"] or attrs.column)
+  if uri then
+    local rsl, rsc, rel, rec = range_from_uri(dec(uri))
+    sl, sc, el, ec = sl or rsl, sc or rsc, el or rel, ec or rec
   end
-  return out
+  local content = content_from_block(block)
+  if sl and sc and el and ec and content ~= nil then
+    out[#out + 1] = {
+      srow = sl, scol = sc, erow = el, ecol = ec,
+      content = dec(content),
+      uri = uri and dec(uri) or nil,
+    }
+  else
+    unsupported[#unsupported + 1] = trim(block:gsub("%s+", " ")):sub(1, 500)
+  end
+end
+
+local function parse_deltas(body)
+  local out, unsupported = {}, {}
+  if not body then return out, unsupported end
+  local matched = false
+  for unit in body:gmatch("<[%w_:%-]-unit[^>]*>(.-)</[%w_:%-]-unit>") do
+    matched = true
+    add_delta(out, unsupported, unit, {})
+  end
+  for tag, block in body:gmatch("(<[%w_:%-]-edit[^>]*>)(.-)</[%w_:%-]-edit>") do
+    matched = true
+    add_delta(out, unsupported, block, xml_attrs(tag))
+  end
+  if not matched and body:find("<", 1, true) then
+    unsupported[#unsupported + 1] = trim(body:gsub("%s+", " ")):sub(1, 500)
+  end
+  table.sort(out, function(a, b)
+    if a.srow ~= b.srow then return a.srow < b.srow end
+    return a.scol < b.scol
+  end)
+  return out, unsupported
 end
 
 -- Aplica los deltas al buffer (orden inverso: de abajo a arriba, para no invalidar rangos).
@@ -467,6 +651,119 @@ local function apply_deltas(bufnr, deltas)
       vim.split(d.content, "\n", { plain = true }))
     if not ok then notify("No se pudo aplicar un delta (rango fuera de sitio).", vim.log.levels.WARN) end
   end
+end
+
+local function apply_deltas_to_lines(lines, deltas)
+  lines = lines or {}
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  for _, d in ipairs(deltas or {}) do
+    if not (d.srow and d.scol and d.erow and d.ecol and d.content ~= nil) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      return nil, "delta incompleto"
+    end
+    local start_line = lines[d.srow]
+    local end_line = lines[d.erow]
+    if not start_line or not end_line
+      or d.scol < 0 or d.ecol < 0
+      or d.scol > #start_line or d.ecol > #end_line
+      or d.erow < d.srow
+      or (d.erow == d.srow and d.ecol < d.scol) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      return nil, "rango fuera del buffer"
+    end
+  end
+  local edits = vim.deepcopy(deltas or {})
+  table.sort(edits, function(a, b)
+    if a.srow ~= b.srow then return a.srow > b.srow end
+    return a.scol > b.scol
+  end)
+  for _, d in ipairs(edits) do
+    local ok = pcall(vim.api.nvim_buf_set_text, buf,
+      math.max(0, d.srow - 1), d.scol, math.max(0, d.erow - 1), d.ecol,
+      vim.split(d.content, "\n", { plain = true }))
+    if not ok then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      return nil, "rango fuera del buffer"
+    end
+  end
+  local out = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  return out
+end
+
+local function remote_preview_lines(ctx, action, deltas, unsupported)
+  local before = ctx.lines or {}
+  local after, err = apply_deltas_to_lines(before, deltas or {})
+  local blocked = err
+  if #(deltas or {}) == 0 then blocked = blocked or "sin deltas ADT convertibles" end
+  if unsupported and #unsupported > 0 then blocked = blocked or "respuesta ADT con bloques no soportados" end
+  after = after or before
+
+  local min_line, max_line = #before, 1
+  for _, d in ipairs(deltas or {}) do
+    min_line = math.min(min_line, d.srow or 1)
+    max_line = math.max(max_line, d.erow or d.srow or 1)
+  end
+  if min_line > max_line then
+    local row = tonumber(ctx.row or 1) or 1
+    min_line, max_line = math.max(1, row - 3), math.min(#before, row + 3)
+  else
+    min_line = math.max(1, min_line - 3)
+    max_line = math.min(math.max(#before, #after), max_line + 3)
+  end
+
+  local out = {
+    "Accion ADT: " .. ((action.desc and action.desc ~= "" and action.desc) or action.name or "quickfix"),
+    "URI propuesta: " .. tostring(action.adt_uri or ""),
+    "URI objeto: " .. tostring(ctx.uri or ""),
+    "Posicion: " .. tostring(ctx.row or "?") .. "," .. tostring(ctx.col or "?"),
+    "Estado: preview; no aplicado",
+  }
+  if blocked then out[#out + 1] = "Aplicacion bloqueada: " .. blocked end
+  out[#out + 1] = ""
+
+  if #(deltas or {}) > 0 then
+    out[#out + 1] = "Deltas ADT:"
+    for _, d in ipairs(deltas or {}) do
+      out[#out + 1] = string.format("  %s:%s-%s:%s -> %d byte(s)",
+        tostring(d.srow), tostring(d.scol), tostring(d.erow), tostring(d.ecol), #(d.content or ""))
+    end
+    out[#out + 1] = ""
+    out[#out + 1] = "--- antes"
+    for i = min_line, math.min(max_line, #before) do
+      out[#out + 1] = string.format("%4d  %s", i, before[i] or "")
+    end
+    out[#out + 1] = ""
+    out[#out + 1] = "--- despues"
+    for i = min_line, math.min(max_line, #after) do
+      out[#out + 1] = string.format("%4d  %s", i, after[i] or "")
+    end
+  end
+
+  if unsupported and #unsupported > 0 then
+    out[#out + 1] = ""
+    out[#out + 1] = "Bloques ADT no convertidos:"
+    for _, block in ipairs(unsupported) do
+      out[#out + 1] = "  " .. block
+    end
+  end
+  return out, blocked
+end
+
+local function show_remote_preview(ctx, action, deltas, unsupported, focus)
+  local lines = remote_preview_lines(ctx, action, deltas, unsupported)
+  vim.cmd("botright new")
+  local pbuf = vim.api.nvim_get_current_buf()
+  vim.bo[pbuf].buftype = "nofile"
+  vim.bo[pbuf].bufhidden = "wipe"
+  vim.bo[pbuf].swapfile = false
+  vim.bo[pbuf].filetype = "diff"
+  pcall(vim.api.nvim_buf_set_name, pbuf, "sap-quickfix-adt-preview")
+  vim.api.nvim_buf_set_lines(pbuf, 0, -1, false, lines)
+  vim.bo[pbuf].modifiable = false
+  vim.keymap.set("n", "q", "<cmd>close<cr>", { buffer = pbuf, silent = true, desc = "Cerrar preview ADT" })
+  if focus == false then pcall(vim.cmd, "wincmd p") end
 end
 
 local function local_quickfix(opts)
@@ -522,23 +819,44 @@ local function local_quickfix(opts)
   return true
 end
 
-local function remote_quickfix()
+local function proposal_request_xml(ctx, choice)
+  return '<?xml version="1.0" encoding="UTF-8"?>'
+    .. '<quickfixes:proposalRequest xmlns:quickfixes="http://www.sap.com/adt/quickfixes" '
+    .. 'xmlns:adtcore="http://www.sap.com/adt/core"><input><content>' .. enc(ctx.source) .. '</content>'
+    .. '<adtcore:objectReference adtcore:uri="' .. enc(ctx.uri .. "#start=" .. ctx.row .. "," .. ctx.col) .. '"/>'
+    .. '</input><userContent>' .. enc(choice.user or "") .. '</userContent></quickfixes:proposalRequest>'
+end
+
+function M._parse_proposals(body)
+  return parse_proposals(body)
+end
+
+function M._parse_deltas(body)
+  return parse_deltas(body)
+end
+
+function M._remote_preview_lines(ctx, action, deltas, unsupported)
+  return remote_preview_lines(ctx, action, deltas, unsupported)
+end
+
+function M._apply_deltas_to_lines(lines, deltas)
+  return apply_deltas_to_lines(lines, deltas)
+end
+
+function M.remote_actions(opts)
+  opts = opts or {}
   if not adt_http.is_available() then return false end
-  local intel = require("sap-nvim.core.intel")
-  local bufnr = vim.api.nvim_get_current_buf()
-  local uri = intel.object_uri(bufnr)
-  if not uri then return false end
-  local row, col = unpack(vim.api.nvim_win_get_cursor(0))
-  local src = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+  local ctx = remote_context_from_buffer(opts)
+  if not ctx then return false end
   notify("Buscando quick fixes...")
 
   local ok, body = pcall(adt_http.request, {
     method = "POST",
     path = "/sap/bc/adt/quickfixes/evaluation",
-    query = { uri = uri .. "#start=" .. row .. "," .. col },
+    query = { uri = ctx.uri .. "#start=" .. ctx.row .. "," .. ctx.col },
     content_type = "application/*",
     accept = "application/*",
-    body = src,
+    body = ctx.source,
   })
   if not ok then
     notify("ADT quickfix falló; probando quickfix local.", vim.log.levels.WARN)
@@ -546,27 +864,46 @@ local function remote_quickfix()
   end
   local proposals = parse_proposals(body)
   if #proposals == 0 then return false end
+  return proposals, ctx
+end
+
+local function remote_quickfix(opts)
+  opts = opts or {}
+  local proposals, ctx = M.remote_actions(opts)
+  if not proposals then return false end
 
   vim.ui.select(proposals, {
     prompt = "Quick fixes (" .. #proposals .. "):",
     format_item = function(p) return p.desc ~= "" and p.desc or p.name end,
   }, function(choice)
     if not choice then return end
-    -- fixEdits: POST a la uri de la propuesta, body proposalRequest (igual que abap-adt-api).
-    local req = '<?xml version="1.0" encoding="UTF-8"?>'
-      .. '<quickfixes:proposalRequest xmlns:quickfixes="http://www.sap.com/adt/quickfixes" '
-      .. 'xmlns:adtcore="http://www.sap.com/adt/core"><input><content>' .. enc(src) .. '</content>'
-      .. '<adtcore:objectReference adtcore:uri="' .. uri .. '#start=' .. row .. ',' .. col .. '"/>'
-      .. '</input><userContent>' .. enc(choice.user or "") .. '</userContent></quickfixes:proposalRequest>'
-    -- adt_http.request añade sap-client; la path es la adtcore:uri de la propuesta (puede traer ?query).
-    local res = adt_http.request({
+    local edit_ok, res = pcall(adt_http.request, {
       method = "POST", path = choice.adt_uri,
-      content_type = "application/*", accept = "application/*", body = req,
+      content_type = "application/*", accept = "application/*", body = proposal_request_xml(ctx, choice),
     })
-    local deltas = parse_deltas(res)
-    if #deltas == 0 then notify("El quick fix no devolvió cambios aplicables.", vim.log.levels.WARN); return end
-    apply_deltas(bufnr, deltas)
-    notify("Quick fix aplicado (" .. #deltas .. " cambio(s)). Revisa y guarda con :SapPush. (u para deshacer)")
+    if not edit_ok then
+      notify("ADT devolvió error al pedir edits; no se aplicó nada.", vim.log.levels.WARN)
+      return
+    end
+    local deltas, unsupported = parse_deltas(res)
+    local _, blocked = remote_preview_lines(ctx, choice, deltas, unsupported)
+    show_remote_preview(ctx, choice, deltas, unsupported, opts.preview_focus)
+    if blocked then
+      notify("Quick fix ADT en preview; aplicación bloqueada: " .. blocked .. ".", vim.log.levels.WARN)
+      return
+    end
+    if opts.preview_only then
+      notify("Preview ADT generado. No se aplicó nada.", vim.log.levels.INFO)
+      return
+    end
+    local title = choice.desc ~= "" and choice.desc or choice.name
+    vim.ui.select({ "No aplicar", "Aplicar al buffer local" }, {
+      prompt = "Aplicar quickfix ADT: " .. title .. "? Revisa el preview antes.",
+    }, function(apply)
+      if apply ~= "Aplicar al buffer local" then return end
+      apply_deltas(ctx.bufnr, deltas)
+      notify("Quick fix ADT aplicado al buffer (" .. #deltas .. " cambio(s)). Revisa y sube con :SapPush si procede. (u para deshacer)")
+    end)
   end)
   return true
 end
@@ -579,6 +916,8 @@ end
 function M.preview(opts)
   opts = opts or {}
   opts.preview = true
+  opts.preview_only = true
+  if not opts.local_only and remote_quickfix(opts) then return true end
   return local_quickfix(opts)
 end
 
@@ -592,7 +931,7 @@ function M.quickfix(opts)
   if opts.local_only then
     return local_quickfix(opts)
   end
-  if remote_quickfix() then return true end
+  if remote_quickfix(opts) then return true end
   return local_quickfix(opts)
 end
 
@@ -600,7 +939,7 @@ function M.setup()
   vim.api.nvim_create_user_command("SapQuickfix", function() M.quickfix() end,
     { desc = "sap-nvim: Quick fixes / code actions bajo el cursor o quickfix actual" })
   vim.api.nvim_create_user_command("SapQuickfixPreview", function() M.preview() end,
-    { desc = "sap-nvim: Preview de quick fixes locales sin tocar el buffer" })
+    { desc = "sap-nvim: Preview de quick fixes ADT/locales sin tocar el buffer" })
   vim.api.nvim_create_autocmd("FileType", {
     pattern = "abap",
     group = vim.api.nvim_create_augroup("sap_nvim_quickfix", { clear = true }),
@@ -612,5 +951,9 @@ function M.setup()
     end,
   })
 end
+
+M._parse_remote_proposals = parse_proposals
+M._parse_remote_deltas = parse_deltas
+M._apply_remote_deltas_to_lines = apply_deltas_to_lines
 
 return M

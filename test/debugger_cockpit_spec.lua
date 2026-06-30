@@ -209,6 +209,23 @@ same(set_ok, false, "set_variable fails closed when ADT rejects the request")
 contains(set_err, "HTTP 404", "set_variable reports unsupported ADT response")
 config.productive_values.allow_debug_set_variable = false
 
+local clear_no_session
+dbg.session = nil
+before_jobs = #jobs
+dbg.clear_breakpoints_for_sources({ "/sap/bc/adt/programs/programs/zfoo/source/main" }, function(result)
+	clear_no_session = result
+end)
+same(clear_no_session and clear_no_session.reason, "no-session", "clear_breakpoints_for_sources is safe without a debug session")
+same(#jobs, before_jobs, "clear_breakpoints_for_sources does not start curl without a session")
+
+dbg.session = {
+	jar = tmp .. "/debug.cookies",
+	csrf = "csrf-token",
+	terminalId = "TERM-1",
+	ideId = "IDE-1",
+	user = "DEVELOPER",
+	breakpoints = {},
+}
 enqueue({
 	headers = "HTTP/1.1 200 OK\n",
 	stdout = '<dbg:breakpoints><breakpoint id="BP-1"/></dbg:breakpoints>',
@@ -226,6 +243,28 @@ same(#dbg.session.breakpoints, 1, "set_breakpoint records breakpoint in session"
 contains(jobs[#jobs].body, 'scope="external"', "breakpoint payload uses external scope")
 contains(jobs[#jobs].body, '<syncScope mode="partial">', "breakpoint payload uses partial sync scope when provided")
 contains(jobs[#jobs].body, '#start=42', "breakpoint payload targets the requested line")
+
+enqueue({
+	headers = "HTTP/1.1 204 No Content\n",
+	stdout = "",
+})
+local cleared
+dbg.clear_breakpoints_for_sources({ "/sap/bc/adt/programs/programs/zfoo/source/main" }, function(result)
+	cleared = result
+end)
+vim.wait(1000, function()
+	return cleared ~= nil
+end, 10)
+same(cleared and cleared.deleted, 1, "clear_breakpoints_for_sources deletes matching breakpoint")
+same(cleared and cleared.failed, 0, "clear_breakpoints_for_sources has no failed deletes")
+same(#dbg.session.breakpoints, 0, "clear_breakpoints_for_sources removes deleted breakpoint from session")
+local delete_url = jobs[#jobs].args[#jobs[#jobs].args]
+contains(delete_url, "/sap/bc/adt/debugger/breakpoints/BP-1?", "clear breakpoint targets breakpoint id")
+contains(delete_url, "scope=external", "clear breakpoint sends external scope")
+contains(delete_url, "debuggingMode=user", "clear breakpoint sends debugging mode")
+contains(delete_url, "requestUser=DEVELOPER", "clear breakpoint sends request user")
+contains(delete_url, "terminalId=TERM-1", "clear breakpoint sends terminal id")
+contains(delete_url, "ideId=IDE-1", "clear breakpoint sends ide id")
 
 enqueue({
 	headers = "HTTP/1.1 400 Bad Request\n",
@@ -324,11 +363,48 @@ vim.wait(1000, function()
 end, 10)
 same(listened, false, "listen does not attach when SAP reports a listener conflict")
 
+print("debugger - empty listener response cleans up session:")
+dbg.session = {
+	jar = tmp .. "/debug-empty.cookies",
+	csrf = "csrf-token",
+	terminalId = "TERM-1",
+	ideId = "IDE-1",
+	user = "DEVELOPER",
+	breakpoints = {},
+	listener_retries = 0,
+}
+local old_empty_retries = dbg.MAX_EMPTY_LISTENER_RETRIES
+dbg.MAX_EMPTY_LISTENER_RETRIES = 1
+enqueue({
+	headers = "HTTP/1.1 204 No Content\n",
+	stdout = "",
+})
+enqueue({
+	headers = "HTTP/1.1 200 OK\n",
+	stdout = "",
+})
+local empty_info
+dbg.listen(function(debuggee, info)
+	empty_info = { debuggee = debuggee, info = info }
+end)
+vim.wait(1000, function()
+	return empty_info ~= nil and dbg.session == nil
+end, 10)
+same(empty_info and empty_info.debuggee, nil, "empty listener cleanup does not report a debuggee")
+same(empty_info and empty_info.info and empty_info.info.reason, "empty-listener", "empty listener reports cleanup reason")
+same(dbg.session, nil, "empty listener cleanup clears debug session")
+dbg.MAX_EMPTY_LISTENER_RETRIES = old_empty_retries
+
 print("cockpit - headless UI without SAP:")
 dbg.session = nil
+local fake_dap = { listeners = { after = {} } }
+package.loaded["dap"] = fake_dap
 local preview = require("sap-nvim.core.preview")
 preview.setup()
 same(vim.fn.exists(":SapDebugCockpit"), 2, "preview.setup registers :SapDebugCockpit")
+same(vim.fn.exists(":SapDebugCode"), 2, "preview.setup registers :SapDebugCode")
+same(vim.fn.exists(":SapDebugClose"), 2, "preview.setup registers :SapDebugClose")
+same(vim.fn.exists(":SapDebugHelp"), 2, "preview.setup registers :SapDebugHelp")
 same(vim.fn.exists(":SapDapWatch"), 2, "preview.setup registers :SapDapWatch")
 same(vim.fn.exists(":SapDebugDataExplorer"), 2, "preview.setup registers :SapDebugDataExplorer")
 same(vim.fn.exists(":SapDebugDataFilter"), 2, "preview.setup registers :SapDebugDataFilter")
@@ -347,6 +423,10 @@ contains(lines, "Tablas", "cockpit renders SAP GUI Tablas tab")
 contains(lines, "Objetos", "cockpit renders SAP GUI Objetos tab")
 contains(lines, "Vis.detallada", "cockpit renders SAP GUI detailed-view tab")
 contains(lines, "Data Explorer", "cockpit renders SAP GUI Data Explorer tab")
+preview.open_help({ focus = false })
+lines = table.concat(vim.api.nvim_buf_get_lines(cockpit_buf, 0, -1, false), "\n")
+contains(lines, ":SapDebugWatchTab", "debug help lists watch-tab command")
+contains(lines, "F5/F6/F7/F8", "debug help lists SAP GUI step keys")
 
 local state = preview._debug_state()
 ok(state.wins.stack and vim.api.nvim_win_is_valid(state.wins.stack), "cockpit has a right-top stack window")
@@ -607,6 +687,42 @@ same(captured_set and captured_set.name, "@LOCALS\\LV_01", "set_selected_variabl
 same(captured_set and captured_set.value, "999", "set_selected_variable forwards requested value")
 dbg.set_variable = original_set_variable
 config.productive_values.allow_debug_set_variable = false
+
+local close_state = preview._debug_state()
+local code_buf_before_close = close_state.bufs.code
+local preview_tab_before_close = close_state.tabs.preview
+preview.close_cockpit()
+vim.wait(1000, function()
+	return preview._debug_state().bufs.preview == nil
+end, 10)
+same(preview._debug_state().bufs.preview, nil, "close_cockpit clears preview buffer handle")
+if code_buf_before_close and vim.api.nvim_buf_is_valid(code_buf_before_close) then
+	same(vim.api.nvim_get_current_buf(), code_buf_before_close, "close_cockpit returns focus to code buffer")
+end
+local preview_tab_alive = false
+for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+	if tab == preview_tab_before_close then
+		preview_tab_alive = true
+	end
+end
+same(preview_tab_alive, false, "close_cockpit closes debugger tab")
+
+preview.open_cockpit()
+local event_state = preview._debug_state()
+local code_buf_before_event_close = event_state.bufs.code
+local on_terminated = fake_dap.listeners.after.event_terminated
+	and fake_dap.listeners.after.event_terminated["sap_nvim_preview_focus"]
+ok(type(on_terminated) == "function", "DAP terminated listener is installed")
+if on_terminated then
+	on_terminated()
+end
+vim.wait(1000, function()
+	return preview._debug_state().bufs.preview == nil
+end, 10)
+same(preview._debug_state().bufs.preview, nil, "DAP terminated closes debugger cockpit")
+if code_buf_before_event_close and vim.api.nvim_buf_is_valid(code_buf_before_event_close) then
+	same(vim.api.nvim_get_current_buf(), code_buf_before_event_close, "DAP terminated returns focus to code buffer")
+end
 
 dbg.get_variables = saved_get_variables
 dbg.get_vars_by_id = saved_get_vars_by_id

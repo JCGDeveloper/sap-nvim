@@ -67,6 +67,7 @@ function M.setup(opts)
     "sap-nvim.core.checkout",
     "sap-nvim.core.aunit",
     "sap-nvim.core.quality",
+    "sap-nvim.core.release",
     "sap-nvim.core.inactive",
     "sap-nvim.integrations.completion",
     "sap-nvim.integrations.blink",
